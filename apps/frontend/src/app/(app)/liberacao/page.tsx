@@ -9,6 +9,14 @@ import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
+import {
+  exigeJornada,
+  jornadaImpedeSalvar,
+  jornadaParaNumero,
+  maskJornada,
+  OPCOES_SALARIO_UNIDADE,
+  problemaDaJornada,
+} from "@/lib/salario-unidade";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
@@ -418,6 +426,15 @@ export default function LiberacaoPage() {
   const [cargoId, setCargoId] = useState("");
   // Campos obrigatórios (régua unificada §A.19), todos opcionais na liberação — só cliente+cargo travam.
   const [salario, setSalario] = useState("");
+  /**
+   * UNIDADE DO SALÁRIO (OST do salário horista). Nasce VAZIA e é COBRADA no gate da liberação (decisão
+   * do diretor): o valor sozinho é ambíguo, e o campo correspondente do GI tem default "Mês", então
+   * "9,34" sem unidade entra na folha como salário mensal de nove reais, em silêncio.
+   */
+  const [salarioUnidade, setSalarioUnidade] = useState("");
+  /** Jornada em horas, pedida SÓ quando a unidade é HORA. As duas ou nenhuma (`problemaDaJornada`). */
+  const [jornadaHorasMes, setJornadaHorasMes] = useState("");
+  const [jornadaHorasSem, setJornadaHorasSem] = useState("");
   const [tipoContrato, setTipoContrato] = useState("");
   const [dataAdmissao, setDataAdmissao] = useState("");
   const [escala, setEscala] = useState("");
@@ -747,6 +764,11 @@ export default function LiberacaoPage() {
     // então seguem vazios (e vermelhos, se forem pendência obrigatória do par).
     const salarioPre = salarioParaInput(r.salario);
     setSalario(salarioPre);
+    // A UNIDADE NÃO É PRÉ-PREENCHIDA, e isso é a régua, não lacuna: o payload do A&S não traz unidade,
+    // e herdar "mensal" de algum lugar seria exatamente o chute que esta frente existe para impedir.
+    setSalarioUnidade("");
+    setJornadaHorasMes("");
+    setJornadaHorasSem("");
     setTipoContrato("");
     setDataAdmissao("");
     setEscala(r.escala ?? "");
@@ -867,6 +889,15 @@ export default function LiberacaoPage() {
             dataAdmissao: dataAdmissao || undefined,
             vagaFolha: {
               salario: salarioParaNumero(salario),
+              // A UNIDADE VIAJA COLADA NO VALOR, e vazia vira OMISSÃO (nunca `""`, que o `@IsIn` recusaria).
+              salarioUnidade: salarioUnidade || undefined,
+              // AS DUAS OU NENHUMA, e só sob a unidade HORA. `jornadaTrava` barra o inválido antes daqui.
+              jornadaHorasMes: exigeJornada(salarioUnidade)
+                ? jornadaParaNumero(jornadaHorasMes)
+                : undefined,
+              jornadaHorasSem: exigeJornada(salarioUnidade)
+                ? jornadaParaNumero(jornadaHorasSem)
+                : undefined,
               escala: escala || undefined,
               centroCusto: centroCusto || undefined,
               setor: setor || undefined,
@@ -1082,6 +1113,24 @@ export default function LiberacaoPage() {
   const obrigatoriosLiberar: { rotulo: string; preenchido: boolean }[] = [
     { rotulo: "Cargo", preenchido: Boolean(cargoId) },
     { rotulo: "Sexo", preenchido: Boolean(sexo) },
+    /*
+     * A UNIDADE DO SALÁRIO ENTRA NO GATE (decisão do diretor, OST do salário horista), e entra por ser
+     * o único campo da liberação em que o VAZIO não é "faltando": é "Mês", porque é esse o default do
+     * campo correspondente no GI. Salário de hora liberado sem unidade não fica pendente, fica ERRADO
+     * e com cara de certo, que foi como 7 admissões vivas chegaram a R$ 9,34 por mês.
+     *
+     * ESTA É A METADE DE TELA DO GATE, e a metade AUTORITATIVA **JÁ FECHOU**: desde 01/10/2026
+     * `domain/liberacao-obrigatorios.ts` cobra `SALARIO_UNIDADE` (a lista fechada passou de SEIS para
+     * SETE), quem chama a rota na mão é barrado, e o rastro do aceite do Master **nomeia** a unidade,
+     * com teste. O rótulo aqui e o do servidor são o MESMO texto de propósito: se divergirem, o time
+     * vê duas pendências que são a mesma.
+     *
+     * (Esta nota já esteve errada: enquanto o servidor não cobrava, ela avisava que só a tela barrava.
+     * Ficou falsa no mesmo dia em que o servidor passou a cobrar, e o agente que fez a metade do
+     * servidor a apontou em vez de deixar passar. Comentário de gate é o que a próxima sessão lê como
+     * verdade, então ele se corrige no mesmo dia, não depois.)
+     */
+    { rotulo: "Unidade do salário", preenchido: Boolean(salarioUnidade) },
     { rotulo: "Tipo de contrato", preenchido: Boolean(tipoContrato) },
     { rotulo: "Data de admissão", preenchido: Boolean(dataAdmissao) },
     { rotulo: "Pacote de benefícios", preenchido: beneficiosSel.length > 0 },
@@ -1094,8 +1143,18 @@ export default function LiberacaoPage() {
    * porque o botão de aceite do Master reusa a base e só relaxa os 6 (nunca cliente, cargo, uniforme,
    * CPF, vínculo ou Alto Volume, que continuam travas duras para todos).
    */
+  /**
+   * A JORNADA, nos dois graus. `jornadaProblema` é a frase (pendência OU dado inválido); `jornadaTrava`
+   * é só o inválido, e é ele que entra na BASE do gate, junto do CPF e do uniforme: jornada
+   * contraditória não é pendência a registrar, é dado que não pode ser gravado. Jornada VAZIA sob HORA
+   * segue salvável (regra 5, não-bloqueio), porque a trava ali já é a unidade, que está declarada.
+   */
+  const jornadaProblema = problemaDaJornada(salarioUnidade, jornadaHorasMes, jornadaHorasSem);
+  const jornadaTrava = jornadaImpedeSalvar(salarioUnidade, jornadaHorasMes, jornadaHorasSem);
+
   const baseLiberar =
     Boolean(codCliente && cargoId) &&
+    !jornadaTrava &&
     !cpfAlvoInvalido &&
     possuiUniforme !== null &&
     !epiOutrosFaltando &&
@@ -1903,6 +1962,68 @@ export default function LiberacaoPage() {
                   onChange={(e) => setSalario(maskMoedaBR(e.target.value))}
                 />
               </label>
+              {/*
+                UNIDADE DO SALÁRIO, colada no valor: o número sozinho é ambíguo, e "9,34" só quer dizer
+                alguma coisa junto de "por hora". §A.35: o `Select` do design system.
+              */}
+              <label className="grid gap-1.5">
+                <span className="ds-label">Unidade do salário</span>
+                <Select
+                  value={salarioUnidade}
+                  onChange={(v) => {
+                    setSalarioUnidade(v);
+                    // Sair de HORA LIMPA a jornada: jornada guardada sob "mensal" é contradição
+                    // dormente, que reapareceria no envio para a folha.
+                    if (!exigeJornada(v)) {
+                      setJornadaHorasMes("");
+                      setJornadaHorasSem("");
+                    }
+                  }}
+                  placeholder="Selecione a unidade…"
+                  ariaLabel="Unidade do salário"
+                  options={OPCOES_SALARIO_UNIDADE}
+                />
+                <span className="text-[11.5px] text-dim">
+                  Declare se o valor é por hora, por dia ou por mês. O sistema não deduz, e sem a
+                  unidade a folha assume mensal.
+                </span>
+              </label>
+              {exigeJornada(salarioUnidade) && (
+                <>
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">Jornada, horas por mês</span>
+                    <input
+                      className="ds-input"
+                      inputMode="decimal"
+                      placeholder="Ex.: 220"
+                      value={jornadaHorasMes}
+                      onChange={(e) => setJornadaHorasMes(maskJornada(e.target.value))}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">Jornada, horas por semana</span>
+                    <input
+                      className="ds-input"
+                      inputMode="decimal"
+                      placeholder="Ex.: 44"
+                      value={jornadaHorasSem}
+                      onChange={(e) => setJornadaHorasSem(maskJornada(e.target.value))}
+                    />
+                  </label>
+                </>
+              )}
+              {jornadaProblema && (
+                <p
+                  className={cn(
+                    "rounded-xl border px-3 py-2 text-[12.5px]",
+                    jornadaTrava
+                      ? "border-danger/40 bg-danger/10 text-danger"
+                      : "border-warn/40 bg-warn/10 text-text",
+                  )}
+                >
+                  {jornadaProblema}
+                </p>
+              )}
               <label className="grid gap-1.5">
                 <span className={cn("ds-label", corDataAdmissao && COR_LABEL[corDataAdmissao])}>
                   Data de admissão

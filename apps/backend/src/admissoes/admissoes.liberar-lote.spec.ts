@@ -26,7 +26,7 @@ const USER: AuthUser = {
 const GATE_LOTE = {
   tipoContrato: "Temporário",
   dataAdmissao: "2026-08-01",
-  vagaFolha: { escala: "12x36", beneficios: "VR" },
+  vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36", beneficios: "VR" },
 };
 
 type Row = Record<string, unknown>;
@@ -171,7 +171,7 @@ describe("AdmissoesService.liberarEmLote", () => {
       cargoId: "11111111-1111-4111-8111-111111111111",
       tipoContrato: "Temporário",
       dataAdmissao: "2026-08-01",
-      vagaFolha: { salario: "2500.00", escala: "12x36", beneficios: "VR" },
+      vagaFolha: { salario: "2500.00", salarioUnidade: "MENSAL", escala: "12x36", beneficios: "VR" },
     });
     expect(r.liberadas).toHaveLength(2);
     expect(r.falhas).toHaveLength(0);
@@ -191,6 +191,13 @@ describe("AdmissoesService.liberarEmLote", () => {
       expect(v.salario).toBe("2500.00");
       expect(v.escala).toBe("12x36");
       expect(v.centroCusto).toBeNull(); // em branco no lote, segue pendência individual
+      // A UNIDADE DO SALÁRIO NO LOTE: o gate passou a COBRÁ-LA, e cobrar sem gravar seria o pior dos
+      // dois mundos (N folhas barradas por um campo que o sistema depois joga fora). O lote escreve
+      // pelo MESMO miolo do individual (`aplicarLiberacao`), então grava a unidade E carimba o selo
+      // de auditoria (autor + data), para as N.
+      expect(v.salarioUnidade).toBe("MENSAL");
+      expect(v.salarioAuditadoPor).toBe("user-1");
+      expect(v.salarioAuditadoEm).toBeInstanceOf(Date);
     }
   });
 
@@ -206,10 +213,10 @@ describe("AdmissoesService.liberarEmLote", () => {
       admissaoIds: ids,
       codCliente: "100",
       cargoId: "44444444-4444-4444-8444-444444444444",
-      // GATE (item 6): os 5 do lote preenchidos, senão o COMUM não libera. O foco do teste é o salário.
+      // GATE (item 6): os 6 do lote preenchidos, senão o COMUM não libera. O foco do teste é o salário.
       tipoContrato: "Temporário",
       dataAdmissao: "2026-08-01",
-      vagaFolha: { salario: "R$ 2.500,00", escala: "12x36", beneficios: "VR" },
+      vagaFolha: { salario: "R$ 2.500,00", salarioUnidade: "MENSAL", escala: "12x36", beneficios: "VR" },
     });
     // Validação real (o que o ValidationPipe roda): não deve haver erro e o salário vem canônico.
     expect(validateSync(dto, { whitelist: true })).toHaveLength(0);

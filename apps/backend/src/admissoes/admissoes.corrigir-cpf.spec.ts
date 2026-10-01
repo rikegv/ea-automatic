@@ -191,7 +191,7 @@ describe("liberar (item 9, Frente A)", () => {
     sexo: "MASCULINO" as const,
     tipoContrato: "Interno",
     dataAdmissao: "2026-10-01",
-    vagaFolha: { escala: "12x36", beneficios: "VR" },
+    vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36", beneficios: "VR" },
   };
 
   it("BLOQUEIA a liberação individual quando o dígito verificador não fecha", async () => {

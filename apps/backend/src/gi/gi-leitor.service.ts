@@ -22,7 +22,7 @@ import {
  * DUAS PORTAS DE LEITURA, SEPARADAS DE PROPÓSITO (01/10/2026), e a separação é §A.6 aplicada:
  *   - `lerPessoa`      lê `candidatos` + `admissao_dados_gi`. **Não enxerga salário**, porque a consulta
  *                      não seleciona a coluna. Segue exatamente como era, sem uma linha de mudança.
- *   - `lerContratacao` lê `admissoes` + `dados_vaga_folha` + `cliente_vinculos`, os seis campos de
+ *   - `lerContratacao` lê `admissoes` + `dados_vaga_folha` + `cliente_vinculos`, os sete campos de
  *                      contratação autorizados pelo diretor, **coluna por coluna**.
  *
  * POR QUE DUAS PORTAS E NÃO UMA CONSULTA MAIS LARGA: a porta da pessoa fica PROVADAMENTE sem salário (a
@@ -103,8 +103,8 @@ export class GiLeitorService {
   }
 
   /**
-   * Os SEIS campos de CONTRATAÇÃO da admissão, já traduzidos para o vocabulário do GI. `null` quando a
-   * admissão não existe.
+   * Os NOVE campos de CONTRATAÇÃO da admissão, já traduzidos para o vocabulário do GI. `null` quando a
+   * admissão não existe. (Eram sete; a JORNADA entrou com a 0140, ver abaixo.)
    *
    * SÃO DUAS CONSULTAS, e a segunda depende da primeira: empresa e filial moram no VÍNCULO do cliente
    * (`cliente_vinculos`), resolvido por (`cod_cliente` + `tipo_servico`), e o tipo de serviço só se sabe
@@ -112,8 +112,24 @@ export class GiLeitorService {
    * total da base), então a segunda consulta traz os do cliente e a ESCOLHA é da função pura
    * `resolverEmpresaFilialGi`, onde ela fica testável.
    *
-   * RECORTE EXPLÍCITO: de `dados_vaga_folha` sai **só o `salario`**. De `cliente_vinculos` saem só tipo,
-   * empresa, filial e o `ativo`. `left join` na folha porque admissão sem folha existe.
+   * RECORTE EXPLÍCITO: de `dados_vaga_folha` saem **só o `salario`, a UNIDADE dele e a JORNADA em
+   * horas**. De `cliente_vinculos` saem só tipo, empresa, filial e o `ativo`. `left join` na folha porque
+   * admissão sem folha existe.
+   *
+   * A UNIDADE (`salario_unidade`, 0140) NÃO É UM CAMPO A MAIS DE FOLHA: é o que torna o `salario`
+   * LEGÍVEL. Sem ela o valor é ambíguo, e o `tipoSalario` do GI (`default 'M'`) desfaz a ambiguidade
+   * pelo lado errado nas 7 admissões horistas medidas. Quem recusa é `recusaDaContratacaoGi`.
+   *
+   * A JORNADA (`jornada_horas_mes` / `jornada_horas_sem`, 0140) entra pelo mesmo motivo que a unidade: o
+   * `tipoSalario = 'H'` do GI exige `qtdeHorasMes` e `qtdeHorasSem` do outro lado, os dois com
+   * **`default 0`**, e sem elas o horista entraria na folha como "valor por hora vezes ZERO horas". É
+   * jornada, não remuneração, e é o que transforma a recusa do horista em pendência PREENCHÍVEL em vez de
+   * recusa perpétua (`GI_SALARIO_HORISTA_SEM_JORNADA`).
+   *
+   * OS CARIMBOS DA AUDITORIA (`salario_auditado_em` / `salario_auditado_por`) **não são lidos aqui, de
+   * propósito**: são trilha INTERNA do EA e não têm campo correspondente no GI, então trazê-los seria
+   * alargar a leitura sem nada do outro lado para recebê-los (minimização, §A.6). O que o envio precisa
+   * saber é a UNIDADE; quem auditou é pergunta da tela e da trilha, não do fornecedor.
    *
    * §A.6: o salário sai daqui dentro do objeto e NUNCA passa por log, nem aqui nem no chamador.
    */
@@ -124,6 +140,9 @@ export class GiLeitorService {
         tipoContrato: admissoes.tipoContrato,
         codCliente: admissoes.codCliente,
         salario: dadosVagaFolha.salario,
+        salarioUnidade: dadosVagaFolha.salarioUnidade,
+        jornadaHorasMes: dadosVagaFolha.jornadaHorasMes,
+        jornadaHorasSem: dadosVagaFolha.jornadaHorasSem,
       })
       .from(admissoes)
       .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
@@ -148,6 +167,9 @@ export class GiLeitorService {
 
     return montarContratacaoGi({
       salario: base.salario,
+      salarioUnidade: base.salarioUnidade,
+      jornadaHorasMes: base.jornadaHorasMes,
+      jornadaHorasSem: base.jornadaHorasSem,
       dataAdmissao: base.dataAdmissao,
       tipoContrato: base.tipoContrato,
       vinculos,

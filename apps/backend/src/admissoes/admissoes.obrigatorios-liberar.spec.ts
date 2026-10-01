@@ -8,12 +8,14 @@ import type { AuthUser } from "../auth/auth.types";
 /**
  * ITEM 6 DO DIRETOR — obrigatórios-para-liberar na Liberação Admissional.
  *
- * A liberação exige 6 campos próprios deste gate (Cargo, Sexo, Tipo de contrato, Data de admissão,
- * Pacote de benefícios, Escala). Comum NÃO libera com faltante; só MASTER/SUPER_ADMIN, e só com
- * aceite explícito, e cada aceite deixa um rastro (quem, papel, quais campos faltavam). O conjunto é
- * PRÓPRIO deste gate, distinto da régua unificada (§A.19) — Sexo não vira pendência de esteira.
+ * A liberação exige 7 campos próprios deste gate (Cargo, Sexo, Unidade do salário, Tipo de contrato,
+ * Data de admissão, Pacote de benefícios, Escala). Comum NÃO libera com faltante; só MASTER/SUPER_ADMIN,
+ * e só com aceite explícito, e cada aceite deixa um rastro (quem, papel, quais campos faltavam). O
+ * conjunto é PRÓPRIO deste gate, distinto da régua unificada (§A.19): Sexo não vira pendência de esteira.
  *
- * Sexo é individual-only: no LOTE o gate checa os outros 5 (o `LiberarEmLoteDto` nem carrega Sexo).
+ * Sexo é individual-only: no LOTE o gate checa os outros 6 (o `LiberarEmLoteDto` nem carrega Sexo). A
+ * UNIDADE DO SALÁRIO, ao contrário, vale nos dois, e é cobrada SEM CONDIÇÃO, inclusive com o salário
+ * em branco: declarar a unidade É o ato de auditoria da folha, não um complemento do valor.
  */
 
 const CARGO = "11111111-1111-4111-8111-111111111111";
@@ -22,19 +24,19 @@ const CPF_OK = "52998224725";
 const COMUM: AuthUser = { id: "u-comum", email: "c@ea.local", papel: "COMUM", senhaTemporaria: false };
 const MASTER: AuthUser = { id: "u-master", email: "m@ea.local", papel: "MASTER", senhaTemporaria: false };
 
-/** DTO que preenche TODOS os 6: liberação sem faltante. Uniforme respondido (trava da Onda 3). */
+/** DTO que preenche TODOS os 7: liberação sem faltante. Uniforme respondido (trava da Onda 3). */
 const DTO_COMPLETO = {
   codCliente: "100",
   cargoId: CARGO,
   tipoContrato: "Interno",
   dataAdmissao: "2026-10-01",
-  vagaFolha: { escala: "12x36" },
+  vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36" },
   pacoteBeneficios: [{ beneficioId: "b-1" }],
   sexo: "MASCULINO" as const,
   uniforme: { possui: false },
 };
 
-/** DTO cru: só cliente + cargo + uniforme. Sexo, tipo, data, benefícios e escala faltam. */
+/** DTO cru: só cliente + cargo + uniforme. Sexo, unidade, tipo, data, benefícios e escala faltam. */
 const DTO_CRU = { codCliente: "100", cargoId: CARGO, uniforme: { possui: false } };
 
 interface Cenario {
@@ -131,8 +133,13 @@ describe("item 6: gate dos obrigatórios-para-liberar (INDIVIDUAL)", () => {
     expect(rastros).toHaveLength(1);
     expect(rastros[0]).toMatchObject({ admissaoId: "a1", autorId: "u-master", papelAutor: "MASTER" });
     const campos = String(rastros[0].camposFaltantes);
-    // Os 5 que faltam no DTO cru (Cargo vem preenchido). Sexo entra no INDIVIDUAL.
+    // Os 6 que faltam no DTO cru (Cargo vem preenchido). Sexo entra no INDIVIDUAL.
     expect(campos).toContain("Sexo");
+    // O RASTRO TEM DE NOMEAR A UNIDADE: é o aceite do Master que carrega a responsabilidade de ter
+    // liberado uma folha sem a unidade declarada, e rastro que não nomeia o campo não responsabiliza
+    // ninguém. O texto é o MESMO do espelho da tela ("Unidade do salário"), senão o time lê duas
+    // pendências que são a mesma.
+    expect(campos).toContain("Unidade do salário");
     expect(campos).toContain("Tipo de contrato");
     expect(campos).toContain("Data de admissão");
     expect(campos).toContain("Pacote de benefícios");
@@ -159,7 +166,7 @@ describe("item 6: gate dos obrigatórios-para-liberar (INDIVIDUAL)", () => {
       cargoId: CARGO,
       tipoContrato: "Interno",
       dataAdmissao: "2026-10-01",
-      vagaFolha: { escala: "12x36" },
+      vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36" },
       pacoteBeneficios: [{ beneficioId: "b-1" }],
       uniforme: { possui: false },
     };
@@ -181,7 +188,7 @@ describe("item 6: gate no LOTE exclui Sexo (individual-only)", () => {
     expect(r.falhas).toHaveLength(1);
   });
 
-  it("MASTER em lote com aceite libera e grava rastro SEM Sexo (os 5, não os 6)", async () => {
+  it("MASTER em lote com aceite libera e grava rastro SEM Sexo (os 6, não os 7)", async () => {
     const ctx = montar();
     const r = await ctx.service.liberarEmLote(
       idsUm,
@@ -198,15 +205,15 @@ describe("item 6: gate no LOTE exclui Sexo (individual-only)", () => {
     expect(campos).toContain("Tipo de contrato");
   });
 
-  it("lote com os 5 preenchidos (sem Sexo no corpo) LIBERA sem rastro, mesmo COMUM", async () => {
+  it("lote com os 6 preenchidos (sem Sexo no corpo) LIBERA sem rastro, mesmo COMUM", async () => {
     const ctx = montar();
-    // O lote não usa Sexo nem uniforme; mantém os 5 do gate do lote.
+    // O lote não usa Sexo nem uniforme; mantém os 6 do gate do lote.
     const dtoLote = {
       codCliente: "100",
       cargoId: CARGO,
       tipoContrato: "Interno",
       dataAdmissao: "2026-10-01",
-      vagaFolha: { escala: "12x36" },
+      vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36" },
       pacoteBeneficios: [{ beneficioId: "b-1" }],
     };
     const r = await ctx.service.liberarEmLote(idsUm, dtoLote, COMUM);

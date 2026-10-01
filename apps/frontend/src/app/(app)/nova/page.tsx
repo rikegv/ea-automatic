@@ -20,6 +20,14 @@ import {
   type BeneficioPacote,
 } from "@/lib/beneficios";
 import { Select } from "@/components/ui/Select";
+import {
+  exigeJornada,
+  jornadaImpedeSalvar,
+  jornadaParaNumero,
+  maskJornada,
+  OPCOES_SALARIO_UNIDADE,
+  problemaDaJornada,
+} from "@/lib/salario-unidade";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
@@ -103,6 +111,15 @@ function prefixoBeneficio(nome: string): string | null {
 
 const VAGA_EMPTY = {
   salario: "",
+  /**
+   * UNIDADE do salário (OST do salário horista). Nasce VAZIA de propósito: o default do GI é "Mês", e
+   * salário de hora caindo nesse default foi exatamente o que gerou as 7 admissões de R$ 9,34 por mês.
+   * Quem declara é o time, na tela, e o não declarado é recusado no envio em vez de adivinhado.
+   */
+  salarioUnidade: "",
+  /** Jornada em horas, pedida SÓ quando a unidade é HORA. As duas ou nenhuma (ver `problemaDaJornada`). */
+  jornadaHorasMes: "",
+  jornadaHorasSem: "",
   tipoContrato: "",
   tempoContrato: "",
   motivo: "",
@@ -528,7 +545,25 @@ export default function NovaAdmissaoPage() {
   const nObrig = docsExigidos.filter((r) => r.exigencia === "OBRIGATORIO").length;
   const nFacult = docsExigidos.length - nObrig;
 
-  const canConfirm = Boolean(cliente && cargoId && cand.nome.trim() && cpfValid && cand.sexo);
+  /**
+   * A JORNADA, nos dois graus. `jornadaProblema` é a frase (pendência OU inválido); `jornadaTrava` é
+   * só o inválido, e é ele que entra no `canConfirm`. Ver `jornadaImpedeSalvar`: a regra 5 do domínio
+   * (não-bloqueio) continua valendo, então jornada VAZIA não impede criar a admissão.
+   */
+  const jornadaProblema = problemaDaJornada(
+    vaga.salarioUnidade,
+    vaga.jornadaHorasMes,
+    vaga.jornadaHorasSem,
+  );
+  const jornadaTrava = jornadaImpedeSalvar(
+    vaga.salarioUnidade,
+    vaga.jornadaHorasMes,
+    vaga.jornadaHorasSem,
+  );
+
+  const canConfirm = Boolean(
+    cliente && cargoId && cand.nome.trim() && cpfValid && cand.sexo && !jornadaTrava,
+  );
 
   async function confirmar(aceitePendencias = false) {
     if (!cliente || !cargoId) return;
@@ -546,6 +581,16 @@ export default function NovaAdmissaoPage() {
     });
     const vagaFolha = {
       salario: vaga.salario || undefined,
+      // A UNIDADE VIAJA COLADA NO VALOR. Omitida quando não declarada: o servidor recusa o envio para a
+      // folha (`GI_SALARIO_SEM_UNIDADE`) em vez de deixar o default "Mês" do fornecedor decidir.
+      salarioUnidade: vaga.salarioUnidade || undefined,
+      // AS DUAS OU NENHUMA, e só quando a unidade é HORA (`problemaDaJornada` barra antes daqui).
+      jornadaHorasMes: exigeJornada(vaga.salarioUnidade)
+        ? jornadaParaNumero(vaga.jornadaHorasMes)
+        : undefined,
+      jornadaHorasSem: exigeJornada(vaga.salarioUnidade)
+        ? jornadaParaNumero(vaga.jornadaHorasSem)
+        : undefined,
       escala: vaga.escala || undefined,
       endereco: vaga.endereco || undefined,
       centroCusto: vaga.centroCusto || undefined,
@@ -872,6 +917,75 @@ export default function NovaAdmissaoPage() {
                     onChange={(e) => setVaga({ ...vaga, salario: e.target.value })}
                   />
                 </Field>
+                {/*
+                  UNIDADE DO SALÁRIO, ao lado do valor e nunca longe dele: o número sozinho é
+                  ambíguo, e "9,34" só quer dizer alguma coisa junto de "por hora". §A.35: o `Select`
+                  do design system, nunca o `<select>` nativo.
+                */}
+                <Field label="Unidade do salário *">
+                  <Select
+                    value={vaga.salarioUnidade}
+                    onChange={(v) =>
+                      setVaga({
+                        ...vaga,
+                        salarioUnidade: v,
+                        // Trocar para uma unidade que não é HORA LIMPA a jornada: jornada gravada sob
+                        // "mensal" é contradição guardada, e ela voltaria a sair no envio para a folha.
+                        jornadaHorasMes: exigeJornada(v) ? vaga.jornadaHorasMes : "",
+                        jornadaHorasSem: exigeJornada(v) ? vaga.jornadaHorasSem : "",
+                      })
+                    }
+                    placeholder="Selecione a unidade…"
+                    ariaLabel="Unidade do salário"
+                    options={OPCOES_SALARIO_UNIDADE}
+                  />
+                  <p className="mt-1.5 text-[11.5px] text-faint">
+                    Declare se o valor é por hora, por dia ou por mês. O sistema não deduz.
+                  </p>
+                </Field>
+                {exigeJornada(vaga.salarioUnidade) && (
+                  <>
+                    <Field label="Jornada, horas por mês *">
+                      <input
+                        className="ds-input"
+                        inputMode="decimal"
+                        placeholder="220"
+                        value={vaga.jornadaHorasMes}
+                        onChange={(e) =>
+                          setVaga({ ...vaga, jornadaHorasMes: maskJornada(e.target.value) })
+                        }
+                      />
+                    </Field>
+                    <Field label="Jornada, horas por semana *">
+                      <input
+                        className="ds-input"
+                        inputMode="decimal"
+                        placeholder="44"
+                        value={vaga.jornadaHorasSem}
+                        onChange={(e) =>
+                          setVaga({ ...vaga, jornadaHorasSem: maskJornada(e.target.value) })
+                        }
+                      />
+                    </Field>
+                  </>
+                )}
+                {/*
+                  A MESMA FRASE, EM DOIS TONS, e isso não é enfeite: jornada vazia é PENDÊNCIA (regra 5,
+                  o wizard salva e o sinalizador marca), jornada digitada errada é dado INVÁLIDO que
+                  trava o salvamento. Pintar as duas de vermelho ensinaria o time a ignorar o vermelho.
+                */}
+                {jornadaProblema && (
+                  <p
+                    className={cn(
+                      "rounded-xl border px-3 py-2 text-[13px] sm:col-span-2 lg:col-span-3",
+                      jornadaTrava
+                        ? "border-[var(--border)] bg-[rgba(214,69,69,0.1)] text-danger"
+                        : "border-[var(--warn-border,#e6c200)] bg-[rgba(230,194,0,0.12)] text-text",
+                    )}
+                  >
+                    {jornadaProblema}
+                  </p>
+                )}
                 <Field label="Tipo de contrato *">
                   <Select
                     value={vaga.tipoContrato}

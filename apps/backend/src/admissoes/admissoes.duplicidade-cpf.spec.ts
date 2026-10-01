@@ -35,7 +35,7 @@ const DTO = {
   sexo: "MASCULINO" as const,
   tipoContrato: "Interno",
   dataAdmissao: "2026-10-01",
-  vagaFolha: { escala: "12x36", beneficios: "VR" },
+  vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36", beneficios: "VR" },
 };
 
 /**

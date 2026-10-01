@@ -18,6 +18,15 @@ import { FAROL_PAUSADA, FAROL_SELECT_OPTIONS, valorSeletorFarol } from "@/lib/fa
 import { caixaAlta } from "@/lib/nome";
 import { salarioParaCampo } from "@/lib/salario";
 import {
+  exigeJornada,
+  jornadaImpedeSalvar,
+  jornadaParaCampo,
+  jornadaParaNumero,
+  maskJornada,
+  OPCOES_SALARIO_UNIDADE,
+  problemaDaJornada,
+} from "@/lib/salario-unidade";
+import {
   criarPrecisaValor,
   fmtValorBeneficio,
   foraDoPadraoPacote,
@@ -27,6 +36,18 @@ import {
 
 interface VagaFolha {
   salario: string | null;
+  /**
+   * UNIDADE do salário (OST do salário horista). Vazio = ninguém declarou, e isso NÃO é "mensal": o
+   * default "Mês" do GI sobre um valor de hora foi o que gerou as 7 admissões de R$ 9,34 por mês.
+   *
+   * ESTE É O CAMINHO DE CORREÇÃO DO PASSADO, e é por isso que ele vive no lápis: 55 admissões já
+   * CONCLUÍDAS têm salário abaixo de 30, ou seja, horistas que já foram para a folha. Campo editável só
+   * em admissão viva tiraria justamente a tela onde se conserta o que já está errado.
+   */
+  salarioUnidade: string | null;
+  /** Jornada em horas. Pedida SÓ quando a unidade é HORA, e as DUAS ou nenhuma (`problemaDaJornada`). */
+  jornadaHorasMes: string | null;
+  jornadaHorasSem: string | null;
   beneficios: string | null;
   escala: string | null;
   centroCusto: string | null;
@@ -200,6 +221,7 @@ export function EditAdmissaoModal({
   const verCandidato = ["nome", "email", "telefone", "dataNascimento", "sexo"].some(mostra);
   const verFolha = [
     "salario",
+    "salarioUnidade",
     "escala",
     "centroCusto",
     "departamento",
@@ -251,6 +273,9 @@ export function EditAdmissaoModal({
   const [isBanco, setIsBanco] = useState(false);
   const [vf, setVf] = useState<VagaFolha>({
     salario: "",
+    salarioUnidade: "",
+    jornadaHorasMes: "",
+    jornadaHorasSem: "",
     beneficios: "",
     escala: "",
     centroCusto: "",
@@ -359,6 +384,9 @@ export function EditAdmissaoModal({
         }
         setVf({
           salario: salarioParaCampo(r.vagaFolha.salario),
+          salarioUnidade: s(r.vagaFolha.salarioUnidade),
+          jornadaHorasMes: jornadaParaCampo(r.vagaFolha.jornadaHorasMes),
+          jornadaHorasSem: jornadaParaCampo(r.vagaFolha.jornadaHorasSem),
           beneficios: s(r.vagaFolha.beneficios),
           escala: s(r.vagaFolha.escala),
           centroCusto: s(r.vagaFolha.centroCusto),
@@ -375,6 +403,22 @@ export function EditAdmissaoModal({
   }, [admissaoId, token]);
 
   const setVfField = (k: keyof VagaFolha) => (v: string) => setVf((f) => ({ ...f, [k]: v }));
+
+  /**
+   * A JORNADA, nos dois graus: `jornadaProblema` é a frase (pendência OU dado inválido) e
+   * `jornadaTrava` é só o inválido, que é o único que desabilita o "Salvar alterações". Jornada VAZIA
+   * sob unidade HORA é pendência e continua salvável (regra 5 do domínio, não-bloqueio).
+   */
+  const jornadaProblema = problemaDaJornada(
+    vf.salarioUnidade,
+    vf.jornadaHorasMes ?? "",
+    vf.jornadaHorasSem ?? "",
+  );
+  const jornadaTrava = jornadaImpedeSalvar(
+    vf.salarioUnidade,
+    vf.jornadaHorasMes ?? "",
+    vf.jornadaHorasSem ?? "",
+  );
 
   const termoTipoId = tiposDoc.find((t) => t.codigo === "TERMO_BANCO")?.id;
 
@@ -441,7 +485,19 @@ export function EditAdmissaoModal({
           motivoDeclinioId:
             farol === "DECLINOU" || farol === "RESCISAO" ? motivoDeclinioId || null : null,
           isBanco,
-          vagaFolha: vf,
+          // A FOLHA VAI COMO ESTÁ, com as três colunas da unidade NORMALIZADAS por cima: campo vazio
+          // precisa virar OMISSÃO e não string vazia (`@IsIn` recusaria `""` e o salvamento inteiro
+          // falharia por um campo que ninguém tocou), e a jornada precisa sair na forma canônica.
+          vagaFolha: {
+            ...vf,
+            salarioUnidade: vf.salarioUnidade || undefined,
+            jornadaHorasMes: exigeJornada(vf.salarioUnidade)
+              ? jornadaParaNumero(vf.jornadaHorasMes ?? "")
+              : undefined,
+            jornadaHorasSem: exigeJornada(vf.salarioUnidade)
+              ? jornadaParaNumero(vf.jornadaHorasSem ?? "")
+              : undefined,
+          },
           // Só no modo estruturado: no legado o pacote continua indo dentro de vagaFolha.beneficios.
           pacoteBeneficios: temLegado
             ? undefined
@@ -674,6 +730,60 @@ export function EditAdmissaoModal({
                       placeholder="0,00"
                     />
                   </Campo>
+                )}
+                {mostra("salario") && (
+                  <Campo rotulo="Unidade do salário">
+                    <Select
+                      value={vf.salarioUnidade ?? ""}
+                      onChange={(v) =>
+                        setVf((f) => ({
+                          ...f,
+                          salarioUnidade: v,
+                          // Sair de HORA LIMPA a jornada: jornada guardada sob "mensal" é contradição
+                          // dormente, e ela reapareceria no envio para a folha meses depois.
+                          jornadaHorasMes: exigeJornada(v) ? f.jornadaHorasMes : "",
+                          jornadaHorasSem: exigeJornada(v) ? f.jornadaHorasSem : "",
+                        }))
+                      }
+                      placeholder="Selecione a unidade…"
+                      ariaLabel="Unidade do salário"
+                      options={OPCOES_SALARIO_UNIDADE}
+                    />
+                  </Campo>
+                )}
+                {mostra("salario") && exigeJornada(vf.salarioUnidade) && (
+                  <>
+                    <Campo rotulo="Jornada, horas por mês">
+                      <input
+                        className="ds-input"
+                        inputMode="decimal"
+                        value={vf.jornadaHorasMes ?? ""}
+                        onChange={(e) => setVfField("jornadaHorasMes")(maskJornada(e.target.value))}
+                        placeholder="220"
+                      />
+                    </Campo>
+                    <Campo rotulo="Jornada, horas por semana">
+                      <input
+                        className="ds-input"
+                        inputMode="decimal"
+                        value={vf.jornadaHorasSem ?? ""}
+                        onChange={(e) => setVfField("jornadaHorasSem")(maskJornada(e.target.value))}
+                        placeholder="44"
+                      />
+                    </Campo>
+                  </>
+                )}
+                {mostra("salario") && jornadaProblema && (
+                  <p
+                    className={cn(
+                      "rounded-md border px-3 py-2 text-[12.5px] sm:col-span-2",
+                      jornadaTrava
+                        ? "border-danger/40 bg-danger/10 text-danger"
+                        : "border-warn/40 bg-warn/10 text-text",
+                    )}
+                  >
+                    {jornadaProblema}
+                  </p>
                 )}
                 {mostra("tipoContrato") && (
                   <Campo rotulo="Tipo de contrato">
@@ -1035,7 +1145,7 @@ export function EditAdmissaoModal({
             <Button variant="secondary" className="px-4 py-2.5" onClick={onClose} disabled={busy}>
               Cancelar
             </Button>
-            <Button className="px-4 py-2.5" onClick={salvar} disabled={busy}>
+            <Button className="px-4 py-2.5" onClick={salvar} disabled={busy || jornadaTrava}>
               {busy ? "Salvando…" : "Salvar alterações"}
             </Button>
           </div>

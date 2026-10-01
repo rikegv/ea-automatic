@@ -92,10 +92,22 @@ export async function inserirDeclinioProvisorio(
               ${nn(r.dataAdmissao)}::date, ${sinalizador}, 'MANUAL', ${r.farol}, ${nn(r.matricula)})
       RETURNING id`;
 
+    // ── O SELO DO SALÁRIO (0140) NASCE ZERADO AQUI, E ISSO É EXPLÍCITO DE PROPÓSITO ───────────────
+    // Toda escrita em `dados_vaga_folha.salario` invalida `salario_unidade`, `salario_auditado_em` e
+    // `salario_auditado_por`: a carga traz salário de PLANILHA, sem ninguém do time olhar o valor, então
+    // o selo não pode nascer preenchido nem herdado de lugar nenhum. Em TS isso passa por `comSalario`
+    // (`domain/portal-dados-gi.ts`); aqui é SQL cru, então as três colunas vão como NULL na lista, que é
+    // a mesma afirmação escrita à mão.
+    //
+    // ⚠️ E É **INSERT DE LINHA NOVA, NUNCA UPDATE**, que é o ponto que importa para o risco de lote: esta
+    // rotina não reescreve as 2.595 linhas que já têm salário na base. Nenhuma admissão existente perde
+    // selo porque a carga rodou, e invalidar aqui não toca uma linha que ninguém pediu para mexer.
     await tx`
-      INSERT INTO dados_vaga_folha (admissao_id, salario, beneficios, escala, centro_custo,
+      INSERT INTO dados_vaga_folha (admissao_id, salario, salario_unidade, salario_auditado_em,
+                                    salario_auditado_por, beneficios, escala, centro_custo,
                                     departamento, gestor_bp, motivo, tempo_contrato, endereco)
-      VALUES (${adm.id}, ${nn(r.salario)}::numeric, ${nn(r.beneficios)}, ${nn(r.escala)},
+      VALUES (${adm.id}, ${nn(r.salario)}::numeric, NULL, NULL,
+              NULL, ${nn(r.beneficios)}, ${nn(r.escala)},
               ${nn(r.centroCusto)}, ${nn(r.departamento)}, ${nn(r.gestorBp)}, ${nn(r.motivo)},
               ${nn(r.tempoContrato)}, ${nn(r.endereco)})`;
 

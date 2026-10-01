@@ -35,12 +35,22 @@ const PESSOA: PessoaParaGi = { nome: "Fulano De Tal", cpf: CPF_SINTETICO };
  *
  * Empresa 1 / filial 4 é o par REAL mais comum da base (165 clientes), e existe no fornecedor. O salário
  * é sintético e redondo de propósito: nenhum valor de remuneração real entra em teste.
+ *
+ * A UNIDADE entrou no fixture como `M` (MENSAL), e isso é obrigatório para que os cenários de
+ * ORQUESTRAÇÃO continuem exercitando o que exercitavam: sem ela, TODO caso cairia em
+ * `GI_SALARIO_SEM_UNIDADE` e os testes da trava, da idempotência e do fail-closed de pessoa passariam a
+ * provar outra coisa. `M` envia sem jornada; `H` exige a jornada da 0140 (ver o bloco da unidade).
  */
 const CONTRATACAO_OK: ContratacaoGi = {
   salario: 2000,
+  tipoSalario: "M",
+  // `M` nao exige jornada, entao o fixture a deixa nula: e o caso comum, e o que os cenarios exercitam.
+  qtdeHorasMes: null,
+  qtdeHorasSem: null,
   dataAdmissao: "2026-11-03",
   vinculo: "4",
-  tipoContrato: null,
+  // `4` (Temporário) passou a sair com prazo `D` (decisão do diretor, 01/10/2026).
+  tipoContrato: "D",
   codigoEmpresa: 1,
   codigoFilial: 4,
 };
@@ -291,6 +301,90 @@ describe("EnviarParaGiService: salario ausente, zero ou negativo RECUSA o envio"
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
     expect(r.motivo).toBe("GI_SEM_EMPRESA_FILIAL");
+  });
+});
+
+describe("EnviarParaGiService: a UNIDADE do salario nao declarada RECUSA o envio", () => {
+  /**
+   * O BLOQUEIO, medido na produção em 01/10/2026: **7 admissões VIVAS com salário `9,34` e `10,90`**
+   * (horistas) e o `tipoSalario` do GI com **`default 'M'` (Mês)**. Sem a declaração do time, as 7 entram
+   * na folha como salário MENSAL de R$ 9,34, e **nada falha**: valor positivo, empresa e filial
+   * resolvidas, par conhecido, o fornecedor responde sucesso e o EA carimba o envio (§A.33).
+   *
+   * Regra permanente do diretor: nenhum salário é gravado na folha sem auditoria do time, e DECLARAR a
+   * unidade é esse ato de auditoria.
+   */
+  const env = { GI_DISPARO_ARMADO: "true" };
+
+  it("unidade ausente: GI_SALARIO_SEM_UNIDADE, sem tocar o cliente do GI", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: null } });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_SEM_UNIDADE" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("NAO cai no default `M` do fornecedor: nulo RECUSA, nunca vira mensal", async () => {
+    // Se a ausência virasse `M`, este teste passaria com `GI_ENVIADO` e o defeito estaria em produção.
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: null } });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r.enviado).toBe(false);
+    expect(f.marcarEnviado).not.toHaveBeenCalled();
+  });
+
+  it("declarada HORA sem jornada: GI_SALARIO_HORISTA_SEM_JORNADA, e o GI nao e tocado", async () => {
+    /**
+     * `tipoSalario = 'H'` exige `qtdeHorasMes`/`qtdeHorasSem` do outro lado, **ambos com default `0`**, e
+     * o EA emite só os campos nomeados da allowlist: o envio gravaria "valor por hora vezes 0 horas".
+     *
+     * ⚠️ DESDE A 0140 ISTO É PENDÊNCIA PREENCHÍVEL, não recusa perpétua, e o nome do motivo passou a dizer
+     * O QUE FALTA. Antes, a admissão auditada ficava recusada para sempre, indistinguível de uma admissão
+     * quebrada: não havia o que preencher.
+     */
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: "H" } });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_HORISTA_SEM_JORNADA" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("declarada HORA COM jornada: ENVIA, e e o destravamento que a 0140 trouxe", async () => {
+    const f = fakes({
+      configurado: true,
+      contratacao: { ...CONTRATACAO_OK, tipoSalario: "H", qtdeHorasMes: 220, qtdeHorasSem: 44 },
+    });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+  });
+
+  it("declarada DIA: ENVIA sem jornada, porque a jornada e exigida SO do horista", async () => {
+    // Antes a lista tinha dois valores e o diarista não tinha onde se declarar: marcava `MENSAL`, e o
+    // valor errado passava a carregar um selo dizendo que alguém conferiu.
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: "D" } });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+  });
+
+  it("declarada MENSAL: ENVIA", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: "M" } });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+  });
+
+  it("recusado por unidade, a idempotencia NAO e carimbada: segue enviavel quando o time declarar", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: null } });
+    await build(env, f).enviarManual("adm-1", "user-1");
+    expect(f.marcarEnviado).not.toHaveBeenCalled();
+  });
+
+  it("o motivo e codigo FECHADO e nao carrega o valor do salario (§A.6)", async () => {
+    const f = fakes({
+      configurado: true,
+      contratacao: { ...CONTRATACAO_OK, salario: 9.34, tipoSalario: null },
+    });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r.motivo).toBe("GI_SALARIO_SEM_UNIDADE");
+    expect(JSON.stringify(r)).not.toContain("9.34");
   });
 });
 

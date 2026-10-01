@@ -118,6 +118,14 @@ import {
   type ChaveObrigatorioLiberar,
 } from "../domain/liberacao-obrigatorios";
 import { avisoDivergenciaBancaria, divergenciasReconhecidas } from "../domain/cadastro-bancario";
+// A INVALIDAÇÃO DO SELO DO SALÁRIO (0140). Mora num lugar só de propósito: ver o comentário em
+// `domain/portal-dados-gi.ts`. Todo escritor de `dados_vaga_folha.salario` deste arquivo passa por aqui,
+// e um teste varre o fonte para o próximo escritor nascer coberto.
+import {
+  comDeclaracaoDaUnidadeDoSalario,
+  comSalarioInvalidandoSelo,
+  declaracaoDaUnidadeDoSalario,
+} from "../domain/portal-dados-gi";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import { carimboDoGrupo } from "./grupo-da-admissao";
@@ -664,9 +672,21 @@ export class AdmissoesService {
       // dispara na assinatura do contrato (futuro); por ora marca expurgo em now+48h (placeholder
       // documentado), e o job de expurgo nula o CPF ao vencer (§A.6 — minimização/descarte).
       const ehSubstituicao = vf.motivo === "Substituição" && Boolean(substituidoCpf);
+      // `comSalarioInvalidandoSelo` grava o salário E zera o selo da auditoria (0140). Aqui o selo nasceria nulo de
+      // todo jeito (linha nova), e declarar é deliberado: o escritor fica correto sem depender de quem
+      // o lê saber que a coluna não tem default.
+      //
+      // E A DECLARAÇÃO DA UNIDADE VEM POR CIMA, nesta ordem de propósito (ver o helper): o wizard é um
+      // gesto HUMANO, então escolher a unidade ali É a auditoria do valor, e carimba autor e data. Sem
+      // unidade enviada, `declaracaoDaUnidadeDoSalario` devolve `undefined` e o selo fica zerado, que é
+      // o estado honesto de "ninguém declarou". `anterior` é nulo porque a linha está nascendo agora.
+      const declaracaoDaUnidade = declaracaoDaUnidadeDoSalario(vf, null, user?.id);
       await tx.insert(dadosVagaFolha).values({
+        ...comDeclaracaoDaUnidadeDoSalario(
+          comSalarioInvalidandoSelo({}, vf.salario ?? null),
+          declaracaoDaUnidade,
+        ),
         admissaoId,
-        salario: vf.salario ?? null,
         beneficios: vf.beneficios ?? null,
         escala: vf.escala ?? null,
         centroCusto: vf.centroCusto ?? null,
@@ -925,9 +945,13 @@ export class AdmissoesService {
 
         // dados_vaga_folha (1:1) PRÉ-PREENCHIDO com o snapshot da vaga. Na liberação, o consultor
         // confirma/ajusta e o `aplicarLiberacao` reescreve estes mesmos campos.
+        // ⚠️ AQUI NÃO HÁ HUMANO NENHUM: o salário é COPIADO do snapshot da vaga, sem ninguém olhar o
+        // valor. Então a unidade NASCE NULA por construção e a auditoria acontece DEPOIS, na tela, e é
+        // por isso que esta ponte nunca poderia herdar selo de lugar algum. `comSalarioInvalidandoSelo` deixa isso
+        // explícito em vez de depender de a coluna estar ausente.
         await tx.insert(dadosVagaFolha).values({
+          ...comSalarioInvalidandoSelo({}, vf.salario ?? null),
           admissaoId: adm.id,
-          salario: vf.salario ?? null,
           escala: vf.escala ?? null,
           centroCusto: vf.centroCusto ?? null,
           setor: vf.setor ?? null,
@@ -1052,6 +1076,14 @@ export class AdmissoesService {
         motivo?: string;
         tempoContrato?: string;
         endereco?: string;
+        /**
+         * A UNIDADE DO SALÁRIO e a JORNADA (migration 0140). A unidade é o ATO DE AUDITORIA: declará-la
+         * carimba `salario_auditado_em`/`_por` junto (ver `declaracaoDaUnidadeDoSalario`). Jornada chega
+         * como NÚMERO (o DTO normaliza o pt-BR) e vira string na escrita, que é o que o `numeric` quer.
+         */
+        salarioUnidade?: string;
+        jornadaHorasMes?: number;
+        jornadaHorasSem?: number;
       };
       pacoteBeneficios?: { beneficioId: string; valor?: number }[];
       observacaoLiberacao?: string;
@@ -1146,6 +1178,10 @@ export class AdmissoesService {
         {
           cargoId: dto.cargoId,
           sexo: dto.sexo ?? candidato?.sexo ?? null,
+          // A UNIDADE DO SALÁRIO no gate (decisão do diretor): só o que o consultor DECLAROU nesta
+          // liberação conta, sem fallback para o gravado, porque a pré-admissão do funil nasce sem
+          // unidade (o salário é copiado do snapshot da vaga, sem humano nenhum olhando a folha).
+          salarioUnidade: dto.vagaFolha?.salarioUnidade,
           tipoContrato: dto.tipoContrato ?? adm.tipoContrato,
           dataAdmissao: dto.dataAdmissao ?? adm.dataAdmissao,
           temBeneficios: Boolean(dto.pacoteBeneficios?.length) || Boolean(dto.vagaFolha?.beneficios?.trim()),
@@ -1459,6 +1495,14 @@ export class AdmissoesService {
           motivo?: string;
           tempoContrato?: string;
           endereco?: string;
+          /**
+           * A UNIDADE DO SALÁRIO e a JORNADA (migration 0140). A unidade é o ATO DE AUDITORIA: declará-la
+           * carimba `salario_auditado_em`/`_por` junto (ver `declaracaoDaUnidadeDoSalario`). Jornada chega
+           * como NÚMERO (o DTO normaliza o pt-BR) e vira string na escrita, que é o que o `numeric` quer.
+           */
+          salarioUnidade?: string;
+          jornadaHorasMes?: number;
+          jornadaHorasSem?: number;
         };
         pacoteBeneficios?: { beneficioId: string; valor?: number }[];
         observacaoLiberacao?: string;
@@ -1557,10 +1601,21 @@ export class AdmissoesService {
       .where(eq(admissoes.id, admissaoId));
 
     // Vaga/folha: a pré-admissão já tem a linha 1:1 (vazia, da criação) — ATUALIZA com o preenchido.
+    // ESCRITA DE VERDADE num valor que pode já ter selo: a pré-admissão do funil nasceu com o salário do
+    // snapshot, e a liberação reescreve. `comSalarioInvalidandoSelo` derruba o selo, senão a auditoria do valor antigo
+    // passaria a certificar o novo.
+    // A UNIDADE DECLARADA NA LIBERAÇÃO (0140). `anterior` é nulo de propósito: a pré-admissão do funil
+    // nasce SEM unidade (lá não há humano nenhum, o salário é copiado do snapshot da vaga), então a
+    // liberação é a primeira vez que alguém olha a folha, e o gesto do consultor é a própria auditoria.
+    // Sem unidade enviada, o selo segue zerado pela invalidação da linha acima.
+    const declaracaoDaUnidade = declaracaoDaUnidadeDoSalario(vf, null, user.id);
     await tx
       .update(dadosVagaFolha)
       .set({
-        salario: vf.salario ?? null,
+        ...comDeclaracaoDaUnidadeDoSalario(
+          comSalarioInvalidandoSelo({}, vf.salario ?? null),
+          declaracaoDaUnidade,
+        ),
         escala: vf.escala ?? null,
         centroCusto: vf.centroCusto ?? null,
         setor: vf.setor ?? null,
@@ -1667,6 +1722,14 @@ export class AdmissoesService {
         motivo?: string;
         tempoContrato?: string;
         endereco?: string;
+        /**
+         * A UNIDADE DO SALÁRIO e a JORNADA (migration 0140). A unidade é o ATO DE AUDITORIA: declará-la
+         * carimba `salario_auditado_em`/`_por` junto (ver `declaracaoDaUnidadeDoSalario`). Jornada chega
+         * como NÚMERO (o DTO normaliza o pt-BR) e vira string na escrita, que é o que o `numeric` quer.
+         */
+        salarioUnidade?: string;
+        jornadaHorasMes?: number;
+        jornadaHorasSem?: number;
       };
       pacoteBeneficios?: { beneficioId: string; valor?: number }[];
       observacaoLiberacao?: string;
@@ -1771,6 +1834,9 @@ export class AdmissoesService {
           obrigatoriosFaltantesParaLiberar(
             {
               cargoId: dto.cargoId,
+              // A UNIDADE DO SALÁRIO no gate, TAMBÉM no lote: o salário é um valor só para as N, então
+              // unidade em branco não erra uma folha, erra N de uma vez. É o mesmo furo por outra porta.
+              salarioUnidade: dto.vagaFolha?.salarioUnidade,
               tipoContrato: dto.tipoContrato ?? adm.tipoContrato,
               dataAdmissao: dto.dataAdmissao ?? adm.dataAdmissao,
               temBeneficios: Boolean(dto.pacoteBeneficios?.length) || Boolean(dto.vagaFolha?.beneficios?.trim()),
@@ -2686,6 +2752,12 @@ export class AdmissoesService {
       ),
       vagaFolha: {
         salario: vaga?.salario ?? null,
+        // A UNIDADE e a JORNADA (0140), para o lápis PRÉ-PREENCHER o que já foi declarado em vez de
+        // abrir o seletor vazio e induzir uma declaração nova a cada edição. Só leitura: o carimbo
+        // (`salario_auditado_em`/`_por`) não é devolvido porque nenhuma tela o consome hoje.
+        salarioUnidade: vaga?.salarioUnidade ?? null,
+        jornadaHorasMes: vaga?.jornadaHorasMes ?? null,
+        jornadaHorasSem: vaga?.jornadaHorasSem ?? null,
         beneficios: vaga?.beneficios ?? null,
         escala: vaga?.escala ?? null,
         centroCusto: vaga?.centroCusto ?? null,
@@ -3618,6 +3690,23 @@ export class AdmissoesService {
         const novoSalarioVf =
           vf.salario === undefined ? (vaga?.salario ?? null) : vf.salario || null;
         registrar("salario", vaga?.salario ?? null, novoSalarioVf);
+        /*
+         * A UNIDADE no HISTÓRICO DO OLHO. As colunas de carimbo (`salario_auditado_em`/`_por`) já
+         * respondem "quem e quando", então isto é redundância, e é redundância ÚTIL: o histórico é o
+         * que o time LÊ, e trocar a unidade de um salário (R$ 9,34 por hora vira por mês, ou o
+         * contrário) é exatamente a mudança que alguém vai querer rastrear sem abrir o banco.
+         *
+         * O valor EFETIVO espelha a escrita, que é `declaracaoDaUnidadeDoSalario`: unidade vazia ou
+         * ausente NÃO toca a coluna (mantém o gravado); unidade enviada vale em maiúscula, que é a
+         * forma canônica da lista fechada. Só o que MUDA vira linha, então salvar o lápis sem mexer na
+         * unidade não polui o histórico, do mesmo jeito que não move o carimbo.
+         */
+        const unidadeEnviada = (vf.salarioUnidade ?? "").trim().toUpperCase();
+        registrar(
+          "salarioUnidade",
+          vaga?.salarioUnidade ?? null,
+          unidadeEnviada === "" ? (vaga?.salarioUnidade ?? null) : unidadeEnviada,
+        );
         registrar(
           "beneficios",
           vaga?.beneficios ?? null,
@@ -3644,10 +3733,24 @@ export class AdmissoesService {
         );
         registrar("endereco", vaga?.endereco ?? null, efetivo(vf.endereco, vaga?.endereco ?? null));
 
+        // ⚠️ O CASO QUE O SELO LAVARIA: o lápis (Gerenciador e Esteira) troca R$ 9,34 por R$ 2.000 e, sem
+        // esta invalidação, o carimbo de ontem continuaria lá certificando o valor novo. `comSalarioInvalidandoSelo`
+        // PRESERVA o `undefined` (edição que não mexeu no salário não toca a coluna e **não** derruba o
+        // selo de quem só trocou o centro de custo): a distinção é "o valor mudou", não "o formulário
+        // passou por aqui".
+        // ⚠️ AQUI O `anterior` IMPORTA, e é o que separa "a unidade foi declarada" de "o formulário
+        // passou por aqui": o lápis PRÉ-PREENCHE a unidade e a devolve em TODO salvamento. Comparando
+        // com o que já está gravado, trocar só o centro de custo NÃO carimba nada (o selo de quem
+        // auditou ontem permanece), e mudar a unidade ou a jornada carimba autor e data de agora. É a
+        // mesma distinção que o `undefined` do salário já faz na linha de baixo.
+        const declaracaoDaUnidade = declaracaoDaUnidadeDoSalario(vf, vaga, user?.id);
         await tx
           .update(dadosVagaFolha)
           .set({
-            salario: vf.salario === undefined ? undefined : vf.salario || null,
+            ...comDeclaracaoDaUnidadeDoSalario(
+              comSalarioInvalidandoSelo({}, vf.salario === undefined ? undefined : vf.salario || null),
+              declaracaoDaUnidade,
+            ),
             beneficios: orNull(vf.beneficios),
             escala: orNull(vf.escala),
             centroCusto: orNull(vf.centroCusto),

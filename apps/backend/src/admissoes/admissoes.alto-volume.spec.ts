@@ -145,15 +145,15 @@ function montar(cen: Cenario = {}) {
   };
 }
 
-// GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6): a liberação passou a exigir 6 campos próprios (Cargo,
-// Sexo, Tipo de contrato, Data de admissão, Pacote de benefícios, Escala). Estes DTOs os preenchem
+// GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6): a liberação passou a exigir 7 campos próprios (Cargo,
+// Sexo, Unidade do salário, Tipo de contrato, Data de admissão, Pacote de benefícios, Escala). Estes DTOs os preenchem
 // para exercitar o Alto Volume SEM esbarrar no novo gate (o USER aqui é COMUM, que não tem override).
 // No lote, Sexo é individual-only e nem entra.
 const OBRIGATORIOS_LIBERAR = {
   sexo: "MASCULINO" as const,
   tipoContrato: "Interno",
   dataAdmissao: "2026-10-01",
-  vagaFolha: { escala: "12x36", beneficios: "VR" },
+  vagaFolha: { salarioUnidade: "MENSAL", escala: "12x36", beneficios: "VR" },
 };
 const DTO_INDIVIDUAL = {
   codCliente: "100",

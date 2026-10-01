@@ -1,0 +1,145 @@
+-- A UNIDADE DO SALARIO, E A AUDITORIA DELE PELO TIME (decisao do diretor, 01/10/2026).
+--
+-- ┌─ O QUE ESTA MIGRATION EXISTE PARA IMPEDIR, medido na producao em 01/10/2026 ───────────────────┐
+-- │ `dados_vaga_folha.salario` guarda um `numeric(12,2)` e NAO guarda a UNIDADE. Ha **7 admissoes  │
+-- │ VIVAS com salario `9,34` (2) e `10,90` (5)**, que sao valores de HORA, e **72 linhas na base    │
+-- │ inteira com salario abaixo de 100**.                                                           │
+-- │                                                                                               │
+-- │ No contrato do G.I o campo `tipoSalario` tem **`default: 'M'` (Mes)**. Entao mandar o salario   │
+-- │ sem declarar a unidade faz aquelas 7 entrarem na folha como **salario MENSAL de R$ 9,34 e      │
+-- │ R$ 10,90**, passando por TODAS as guardas que ja existem (o valor e positivo, a empresa e a     │
+-- │ filial resolvem, o par e conhecido). E a familia da §A.33: o fornecedor responde sucesso, o EA  │
+-- │ carimba o envio, nenhum alarme toca, e o erro aparece no holerite da pessoa.                   │
+-- │                                                                                               │
+-- │ A SAIDA NAO E DEDUZIR. Heuristica por faixa de valor ("abaixo de 100 e hora") foi VETADA: e    │
+-- │ casamento aproximado sobre remuneracao, e erra calado nos dois sentidos (horista de R$ 120 e   │
+-- │ mensalista de R$ 90 existem). **O time DECLARA a unidade**, e enquanto nao declarar o envio e   │
+-- │ RECUSADO (`GI_SALARIO_SEM_UNIDADE`, encostado no POST).                                        │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ AS TRES COLUNAS SAO UMA COISA SO: A DECLARACAO **E** O ATO DE AUDITORIA ──────────────────────┐
+-- │ Regra permanente do diretor: **nenhum salario e gravado na folha sem auditoria do time.** Quem  │
+-- │ escolhe "por hora" ou "mensal" esta, naquele gesto, afirmando que OLHOU o valor. Por isso nao   │
+-- │ ha dois mecanismos (um seletor e um "conferi"): ha um gesto e tres colunas carimbadas juntas,   │
+-- │ a unidade mais QUEM e QUANDO. Sem autor e data, "foi auditado?" nao tem resposta consultavel no │
+-- │ dia em que um salario estiver errado, que e o unico dia em que a pergunta importa.              │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ TODAS NULLABLE, E NENHUM `NOT NULL ... DEFAULT` ──────────────────────────────────────────────┐
+-- │ `dados_vaga_folha` tem **2.595 linhas com salario** (84 vivas, 1.690 concluidas, 821            │
+-- │ encerradas). Um `NOT NULL DEFAULT 'MENSAL'` reescreveria as 2.595 e, pior que o custo, FALSEARIA │
+-- │ auditoria que ninguem fez: as 7 horistas ficariam marcadas como MENSAL, declaradas, auditadas   │
+-- │ por ninguem, e o envio passaria. Nulo e o unico valor honesto para "ninguem declarou ainda", e  │
+-- │ e ele que a guarda do envio le. Mesmo padrao do `setor` (Onda 2) e do `possui_uniforme`         │
+-- │ (Onda 3), e §A.16 preserva o historico da carga.                                               │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- §A.6: nenhuma destas colunas e dado pessoal. A unidade e uma classificacao de 2 valores, o carimbo
+-- e uma data, e o autor e um id de usuario INTERNO. O VALOR do salario nao e tocado aqui, e nenhum
+-- valor de remuneracao entra em log em caminho nenhum desta frente (o motivo da recusa e codigo
+-- fechado, sem o valor).
+
+-- ══ 1. A UNIDADE ═══════════════════════════════════════════════════════════════════════════════
+--
+-- ┌─ POR QUE `varchar` + `CHECK`, E NAO UM ENUM DO POSTGRES ───────────────────────────────────────┐
+-- │ 1. E O PADRAO DA CASA para lista fechada curta, e e recente: `ck_as_depara_cliente_vaga_fonte`  │
+-- │    e `ck_as_depara_cliente_vaga_casamento` (0139), `ck_vagas_cliente_proposto_origem` e         │
+-- │    `ck_vagas_cliente_proposto_estado` (0139), `ck_...` da 0137. Enum novo aqui seria a segunda  │
+-- │    convencao para o mesmo problema, e duas convencoes divergem no primeiro ajuste.              │
+-- │ 2. VALOR NOVO E UM `ALTER TABLE ... DROP/ADD CONSTRAINT`, reversivel e visivel na migration.    │
+-- │    Em enum, `ALTER TYPE ... ADD VALUE` **nao se desfaz** (nao ha `DROP VALUE`) e, em versao de   │
+-- │    Postgres anterior a 12, nem roda dentro de transacao. E a lista JA mudou uma vez antes de    │
+-- │    existir: nasceu com DOIS valores no rascunho e entrou com os SETE do fornecedor.            │
+-- │ 3. O Drizzle le `varchar` como `string` sem gerar tipo de banco a parte, e a lista fechada do    │
+-- │    lado do codigo ja existe e e testada (`tipoSalarioGi`, `domain/portal-dados-gi.ts`), que e    │
+-- │    onde ela protege o envio de verdade. O CHECK e a segunda linha de defesa, no banco.          │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- OS VALORES SAO O VOCABULARIO DO EA (`HORA`/`MENSAL`), nao a letra do fornecedor (`H`/`M`). A
+-- traducao mora no de/para do codigo, no mesmo lugar e pelo mesmo motivo que `tipo_contrato` (texto
+-- do EA) nao guarda o `vinculo` do G.I: guardar a letra do fornecedor no nosso banco amarraria a
+-- coluna ao contrato dele, e o dia em que o `tipoSalario` mudar de alfabeto a coluna vira lixo.
+--
+-- ┌─ SAO AS **SETE** DO FORNECEDOR, NAO DUAS, E ISSO E O CONSERTO DE UM DEFEITO DE DESENHO ────────┐
+-- │ O rascunho desta migration oferecia so `HORA` e `MENSAL`, e a auditoria mostrou que a escolha   │
+-- │ BINARIA OBRIGATORIA e PIOR que nao ter coluna: o `tipoSalario` do G.I aceita SETE valores       │
+-- │ (`description` de `TB_FuncionarioSelecaoAPI`, conferida no contrato em 01/10/2026: `A` Aula      │
+-- │ (Professor), `C` Comissao, `D` Dia, `H` Hora, `M` Mes, `Q` Quinzenal, `T` Tarefa), entao um     │
+-- │ diarista ou um quinzenalista NAO TEM onde se declarar. Diante de duas opcoes erradas o time     │
+-- │ marca `MENSAL`, e aí o valor errado passa a carregar **um selo dizendo que alguem conferiu**.   │
+-- │ Selo sobre dado errado e pior que a ausencia de selo: ele desliga a desconfianca. Com as sete,  │
+-- │ declarar a verdade e sempre possivel, e o selo volta a significar o que diz.                    │
+-- │                                                                                               │
+-- │ `varchar(10)` COMPORTA a maior (`QUINZENAL`, 9), com 1 de folga. Nenhum valor novo e esperado:  │
+-- │ a lista agora e a do fornecedor INTEIRA, e crescer exigiria o G.I crescer primeiro.             │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ALTER TABLE "dados_vaga_folha" ADD COLUMN IF NOT EXISTS "salario_unidade" varchar(10);--> statement-breakpoint
+ALTER TABLE "dados_vaga_folha" ADD CONSTRAINT "ck_dados_vaga_folha_salario_unidade" CHECK ("salario_unidade" IS NULL OR "salario_unidade" IN ('AULA','COMISSAO','DIA','HORA','MENSAL','QUINZENAL','TAREFA'));--> statement-breakpoint
+
+-- ══ 2. O CARIMBO DA AUDITORIA ══════════════════════════════════════════════════════════════════
+ALTER TABLE "dados_vaga_folha" ADD COLUMN IF NOT EXISTS "salario_auditado_em" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "dados_vaga_folha" ADD COLUMN IF NOT EXISTS "salario_auditado_por" uuid;--> statement-breakpoint
+-- ┌─ `SET NULL` NO AUTOR, no molde de `admissoes.troca_cliente_por` ───────────────────────────────┐
+-- │ Apagar (ou desativar e remover) um usuario NAO pode FALHAR por causa de uma auditoria de        │
+-- │ salario de meses atras, e o rastro NAO pode sumir junto com ele: sem o id, a linha ainda diz    │
+-- │ QUAL unidade foi declarada e QUANDO. E por isso a coluna tambem nao e `not null`: `not null`    │
+-- │ com `on delete set null` e uma contradicao que transforma a exclusao do usuario em erro de      │
+-- │ banco anos depois (o mesmo argumento esta escrito na 0137).                                    │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ALTER TABLE "dados_vaga_folha" ADD CONSTRAINT "dados_vaga_folha_salario_auditado_por_usuarios_id_fk" FOREIGN KEY ("salario_auditado_por") REFERENCES "public"."usuarios"("id") ON DELETE set null ON UPDATE no action;
+--> statement-breakpoint
+
+-- ══ 3. A JORNADA EM HORAS ══════════════════════════════════════════════════════════════════════
+--
+-- ┌─ POR QUE A COLUNA EXISTE: DECLARAR `HORA` SOZINHO GRAVA O SALARIO ERRADO DE **OUTRO** JEITO ───┐
+-- │ Medido no contrato do G.I em 01/10/2026: ao lado de `salario` e `tipoSalario` existem           │
+-- │ `salarioHora`, `qtdeHorasMes` e `qtdeHorasSem`, **os tres `double` anulaveis com `default 0`**.  │
+-- │ O EA emite SO os campos nomeados nas allowlists, e todo o resto assume o default do fornecedor.  │
+-- │ Entao `tipoSalario = 'H'` sem jornada troca "R$ 9,34 por mes" por "R$ 9,34 por hora vezes ZERO   │
+-- │ horas", que nao e melhor: e outro valor errado, pela MESMA falha de `default 0` em campo de      │
+-- │ folha que esta migration existe para fechar.                                                   │
+-- │                                                                                               │
+-- │ **E O DESTINO DA RECUSA E O QUE DECIDE A COLUNA, nao a conveniencia.** Sem jornada, o horista   │
+-- │ auditado era recusado PARA SEMPRE, e uma admissao que o time auditou e que o sistema recusa     │
+-- │ para sempre e **indistinguivel de uma admissao quebrada**: nao ha o que preencher, nao ha o que  │
+-- │ corrigir, e a linha so fica. Com a coluna, a recusa deixa de ser um beco e passa a ser          │
+-- │ PENDENCIA PREENCHIVEL: falta a jornada, o time informa a jornada, o envio destrava.             │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ **DUAS** COLUNAS, E A SEGUNDA NAO E LUXO: DERIVAR UMA DA OUTRA E REGRA DE FOLHA ──────────────┐
+-- │ `qtdeHorasMes` e `qtdeHorasSem` sao campos SEPARADOS no G.I, os dois com `default 0`. Calcular  │
+-- │ o mensal a partir do semanal (44 -> 220) usa o fator 30/7 e o DSR, que e **convencao de folha,  │
+-- │ nao aritmetica**, e varia por acordo coletivo. Derivar aqui seria exatamente o "casamento       │
+-- │ aproximado sobre remuneracao" que foi VETADO para a unidade. Entao as duas sao COLETADAS.        │
+-- │                                                                                               │
+-- │ E preencher so uma e tao ruim quanto nenhuma: 220 horas no mes ao lado de ZERO na semana e uma  │
+-- │ contradicao gravada na folha do fornecedor, pelo mesmo `default 0`. Ou vao as duas, ou nenhuma.  │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ `salarioHora` FICA **FORA** DA ALLOWLIST, E E DECISAO FAIL-CLOSED, NAO ESQUECIMENTO ──────────┐
+-- │ O contrato nao descreve `salarioHora` (sem `description`, so `double` default `0`), e no       │
+-- │ vocabulario de folha brasileira "valor hora" costuma ser campo DERIVADO (salario / horas do     │
+-- │ mes), usado para calcular hora extra, nao insumo de cadastro. O EA tem UM valor de salario e    │
+-- │ a unidade dele: o par `salario` + `tipoSalario` ja diz "9,34 por hora", completo e sem           │
+-- │ ambiguidade. Escrever o mesmo numero TAMBEM em `salarioHora` seria o EA afirmando algo sobre um  │
+-- │ campo cuja semantica nao mediu, e mandar os dois errado e tao ruim quanto mandar zero.          │
+-- │ Entao nao se escreve: o campo mantem o default do fornecedor e a conta e dele.                  │
+-- │ **PENDENCIA REGISTRADA, nao resolvida:** se o time de folha confirmar que o G.I LE               │
+-- │ `salarioHora` em vez de `salario` para o horista, isto muda, e muda com uma linha na allowlist.  │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- `numeric(6,2)`: jornada tem fracao real (7,33 h/dia, 36,40 h/sem) e nao e dinheiro. Nullable, sem
+-- default, pelo mesmo motivo das colunas acima: NULL e "ninguem informou", e e ele que a guarda do
+-- envio le. §A.6: jornada nao e dado pessoal, e nenhum valor entra em log.
+ALTER TABLE "dados_vaga_folha" ADD COLUMN IF NOT EXISTS "jornada_horas_mes" numeric(6,2);--> statement-breakpoint
+ALTER TABLE "dados_vaga_folha" ADD COLUMN IF NOT EXISTS "jornada_horas_sem" numeric(6,2);--> statement-breakpoint
+-- ┌─ OS LIMITES DO CHECK SAO FISICOS, NAO TRABALHISTAS, E A DISTINCAO E DELIBERADA ────────────────┐
+-- │ 744 = 31 x 24 e 168 = 7 x 24: o maximo de horas que EXISTE no periodo. O teto da CLT (220 no    │
+-- │ mes, 44 na semana) NAO entra aqui, porque jornada acima dele e legitima em regimes proprios e um │
+-- │ CHECK trabalhista transformaria regra de folha em erro de banco anos depois. O que o CHECK pega  │
+-- │ e o erro de digitacao que o `numeric` aceitaria calado (2200 no lugar de 220), e o ZERO, que     │
+-- │ nesta coluna nao e "informado como zero": e o default do fornecedor que a frente inteira existe  │
+-- │ para nao reproduzir.                                                                           │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ALTER TABLE "dados_vaga_folha" ADD CONSTRAINT "ck_dados_vaga_folha_jornada_horas_mes" CHECK ("jornada_horas_mes" IS NULL OR ("jornada_horas_mes" > 0 AND "jornada_horas_mes" <= 744));--> statement-breakpoint
+ALTER TABLE "dados_vaga_folha" ADD CONSTRAINT "ck_dados_vaga_folha_jornada_horas_sem" CHECK ("jornada_horas_sem" IS NULL OR ("jornada_horas_sem" > 0 AND "jornada_horas_sem" <= 168));

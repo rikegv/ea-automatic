@@ -24,6 +24,7 @@ import {
   CANDIDATURA_SITUACOES,
   DECISOES_DE_DIVERGENCIA,
   ESCOPOS_DE_DIVERGENCIA,
+  MOTIVOS_DA_TRAVA_DE_ACESSO,
 } from "@ea/shared-types";
 import type { CampoExtraidoPortal, VereditoDoDocumento } from "@ea/shared-types";
 import { FONTES_EXTERNAS } from "../../domain/as-etapa-externa";
@@ -1054,6 +1055,94 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
     .unique()
     .references(() => admissoes.id, { onDelete: "cascade" }),
   salario: numeric("salario", { precision: 12, scale: 2 }),
+  // ── UNIDADE DO SALÁRIO + AUDITORIA DO TIME (0140, decisão do diretor 01/10/2026) ──────────────
+  // O `salario` acima NÃO diz se o valor é por HORA ou por MÊS, e medido na produção há 7 admissões
+  // VIVAS com `9,34` e `10,90` (horistas) mais 72 linhas abaixo de 100 na base inteira. O campo
+  // `tipoSalario` do G.I tem `default 'M'` (Mês): sem declaração, aquelas 7 entrariam na folha como
+  // salário MENSAL, em silêncio, passando por todas as guardas (§A.33). Dedução por faixa de valor
+  // está VETADA (casamento aproximado sobre remuneração): o time DECLARA.
+  //
+  // SÃO AS **SETE** DO FORNECEDOR, NÃO DUAS, e isso é conserto de desenho, não crescimento: `AULA`,
+  // `COMISSAO`, `DIA`, `HORA`, `MENSAL`, `QUINZENAL`, `TAREFA`, espelhando os sete valores do
+  // `tipoSalario` do G.I (`A C D H M Q T`, conferidos na `description` do contrato em 01/10/2026).
+  // A versão de dois valores FORÇARIA declaração falsa: sem `DIA` e sem `QUINZENAL`, o diarista e o
+  // quinzenalista só têm opções erradas, o time marca `MENSAL`, e o valor errado passa a carregar um
+  // selo dizendo que alguém conferiu. **Selo sobre dado errado é pior que a ausência de selo**: ele
+  // desliga a desconfiança de quem lê depois.
+  //
+  // Validado por CHECK no banco (`ck_dados_vaga_folha_salario_unidade`) e pela lista fechada do
+  // código (`tipoSalarioGi`, `domain/portal-dados-gi.ts`), que é quem traduz para a letra do
+  // fornecedor. A coluna guarda o vocabulário do EA, nunca o alfabeto do G.I.
+  //
+  // NULL = ninguém declarou, e é o único valor honesto para as 2.595 linhas que já têm salário. É
+  // esse nulo que a guarda do envio lê para RECUSAR (`GI_SALARIO_SEM_UNIDADE`).
+  salarioUnidade: varchar("salario_unidade", { length: 10 }),
+  // A DECLARAÇÃO É O ATO DE AUDITORIA (regra permanente: nenhum salário vai para a folha sem
+  // auditoria do time). Quem escolhe a unidade afirma que olhou o valor, então os três carimbos
+  // nascem juntos. `set null` no autor, molde de `admissoes.troca_cliente_por`: apagar um usuário
+  // não pode falhar por causa de uma auditoria antiga, e o rastro (unidade + quando) sobrevive.
+  //
+  // ✅ A INVALIDAÇÃO DO SELO ESTÁ IMPLEMENTADA (autorização do diretor, 01/10/2026), e é o que faz o
+  // selo valer: **toda escrita em `salario` ZERA `salario_unidade`, `salario_auditado_em` e
+  // `salario_auditado_por`**, fail-closed. Sem ela o selo certificaria um valor que ninguém auditou:
+  // o lápis troca R$ 9,34 por R$ 2.000 e o carimbo de ontem continua lá, de modo que **a EDIÇÃO sai
+  // LAVADA pela auditoria anterior**, que é o oposto exato da regra do diretor.
+  //
+  // ONDE ELA MORA, E É UM LUGAR SÓ: `INVALIDACAO_DO_SELO_DO_SALARIO` / `comSalarioInvalidandoSelo()`, em
+  // `domain/portal-dados-gi.ts`. Nenhum escritor repete as três colunas à mão, de propósito:
+  // invalidação copiada em N lugares é invalidação que o escritor N+1 esquece, e o esquecimento é
+  // CALADO (o selo antigo simplesmente continua lá). A VARREDURA que cobre isso vive no `describe`
+  // "INVALIDACAO DO SELO DO SALARIO" de `domain/portal-dados-gi.montador.spec.ts`: ela ENUMERA os
+  // escritores por caminhada de diretório (não por lista à mão) e reprova qualquer escrita de
+  // `salario` em `dados_vaga_folha` que não passe pelo helper, então o SÉTIMO escritor nasce coberto
+  // sem ninguém lembrar.
+  //
+  // ⚠️ ESTE ENDEREÇO É O MECANISMO, NÃO UMA REFERÊNCIA DE CORTESIA. A guarda inteira depende de o
+  // próximo escritor DESCOBRIR o helper, e é AQUI que ele vem olhar. Endereço errado neste comentário
+  // derruba a única coisa que faz a invalidação sobreviver à próxima sessão: a auditoria de 01/10/2026
+  // achou os dois caminhos apontando para arquivos INEXISTENTES (`domain/salario-auditoria.ts` e
+  // `salario-auditoria.escritores.spec.ts`, nenhum dos dois jamais criado). Mover o helper ou a
+  // varredura obriga a corrigir esta linha no mesmo commit.
+  //
+  // OS ESCRITORES DE `salario` MEDIDOS POR VARREDURA PRÓPRIA (01/10/2026), e são QUATRO em TS mais
+  // DOIS em SQL cru, não as três telas:
+  //   1. `admissoes.service.ts` `create` (INSERT, o wizard de Nova Admissão);
+  //   2. `admissoes.service.ts` `criarPreAdmissaoDoFunil` (INSERT, a **ponte do funil de A&S, SEM
+  //      HUMANO NENHUM**: copia o salário do snapshot da vaga, então a unidade nasce NULA por
+  //      construção e a auditoria acontece DEPOIS, na tela);
+  //   3. `admissoes.service.ts` `aplicarLiberacao` (UPDATE);
+  //   4. `admissoes.service.ts` `editar` (UPDATE, o lápis compartilhado por Gerenciador e Esteira);
+  //   5. `db/carga-provisorio.ts` (INSERT de linha NOVA, nunca UPDATE: a carga não reescreve as
+  //      2.595 linhas que já existem);
+  //   6. `as/ingestao-pandape/arnes-seed-manual.ts` (INSERT do arnês de teste).
+  // Os INSERTs são seguros por construção (coluna omitida nasce NULL) e declaram a invalidação de
+  // todo jeito, para a leitura não depender de saber disso. NÃO são escritores de `salario`, e foram
+  // conferidos um a um: `criarPreAdmissao` do Pandapé (insere só `admissaoId`), o UPDATE de uniforme
+  // e o `expurgo.service.ts` (toca só o substituído).
+  salarioAuditadoEm: timestamp("salario_auditado_em", { withTimezone: true }),
+  salarioAuditadoPor: uuid("salario_auditado_por").references(() => usuarios.id, {
+    onDelete: "set null",
+  }),
+  // ── JORNADA EM HORAS (0140, autorizada pelo diretor 01/10/2026) ────────────────────────────────
+  // DECLARAR `HORA` SOZINHO GRAVARIA O SALÁRIO ERRADO DE **OUTRO** JEITO: no contrato do G.I,
+  // `salarioHora`, `qtdeHorasMes` e `qtdeHorasSem` são `double` anuláveis **com `default 0`**, e o EA
+  // emite só os campos nomeados da allowlist. Então `tipoSalario = 'H'` sem jornada troca "R$ 9,34 por
+  // mês" por "R$ 9,34 por hora vezes ZERO horas", pela MESMA falha de `default 0` em campo de folha.
+  //
+  // E O MOTIVO DE A COLUNA EXISTIR É O **DESTINO DA RECUSA**: sem ela, o horista auditado era recusado
+  // PARA SEMPRE, e uma admissão que o time auditou e que o sistema recusa para sempre é
+  // indistinguível de uma admissão quebrada. Com ela, a recusa passa a ser PENDÊNCIA PREENCHÍVEL.
+  //
+  // SÃO DUAS, e a segunda não é luxo: derivar o mensal do semanal (44 → 220) usa o fator 30/7 e o
+  // DSR, que é CONVENÇÃO DE FOLHA, não aritmética, e varia por acordo coletivo. Derivar seria o
+  // "casamento aproximado sobre remuneração" que foi vetado para a unidade. E preencher só uma grava
+  // 220 h/mês ao lado de ZERO h/semana no fornecedor, que é contradição, não campo vazio.
+  //
+  // `numeric(6,2)` porque jornada tem fração real (7,33 h/dia) e não é dinheiro. CHECK no banco com
+  // limites FÍSICOS (744 = 31×24, 168 = 7×24), nunca trabalhistas: o teto da CLT viraria erro de banco
+  // em regime próprio legítimo, e o que o CHECK precisa pegar é o 2200 digitado no lugar de 220.
+  jornadaHorasMes: numeric("jornada_horas_mes", { precision: 6, scale: 2 }),
+  jornadaHorasSem: numeric("jornada_horas_sem", { precision: 6, scale: 2 }),
   beneficios: text("beneficios"),
   // texto livre (escala do catálogo pode ser uma descrição longa — W4).
   escala: text("escala"),
@@ -5836,5 +5925,153 @@ export const portalLinks = pgTable(
     // A pergunta de TODA emissão: "quais links vivos esta admissão tem?". Emitir um novo revoga os
     // anteriores, então esta consulta acontece antes de cada link gerado.
     idxAdmissao: index("idx_portal_links_admissao").on(t.admissaoId, t.criadoEm),
+  }),
+);
+
+/**
+ * ─ A PORTA DE E-MAIL DO PORTAL: O CÓDIGO DE VERIFICAÇÃO (migration 0134) ────────────────────────
+ *
+ * Contrato NORMATIVO: `docs/CONTRATO-PORTAL-ACESSO-EMAIL.md` (v2), seção 4. A régua pura (tamanho,
+ * prazo, tentativas, HMAC) vive em `domain/portal-acesso-email.ts`; aqui mora só o estado durável.
+ *
+ * UMA LINHA POR CÓDIGO EMITIDO, e a linha NÃO é apagada quando o código morre: `invalidado_em` e
+ * `confirmado_em` são carimbos, não exclusões. É isso que permite responder "quantas vezes esta
+ * pessoa pediu código na última hora" (o balde de 3/hora e 10/dia) sem uma segunda tabela de
+ * contagem, e é isso que faz a emissão nova invalidar a anterior de forma auditável.
+ *
+ * ┌─ O QUE NÃO ESTÁ AQUI, E A AUSÊNCIA É A DEFESA (§A.6) ───────────────────────────────────────┐
+ * │ NÃO HÁ O CÓDIGO (só o HMAC dele, com segredo PRÓPRIO que não mora no banco), NÃO HÁ O        │
+ * │ E-MAIL (só o HMAC, que serve de balde e nunca de identidade) e NÃO HÁ CPF, nome nem data de  │
+ * │ nascimento. O espaço do código é de UM MILHÃO de valores, então um `sha256` sem segredo seria │
+ * │ o código em claro com passos a mais; ver o bloco de `hashDoCodigo` no domínio.                │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O `id` É O BILHETE DE IDENTIFICAÇÃO, e é por isso que ele não precisou de coluna nova ─────┐
+ * │ Confirmado o código, o que a rota devolve é ESTE `id`, e o passo da identidade o troca por    │
+ * │ uma leitura por chave primária que exige `confirmado_em` preenchido e `invalidado_em` nulo.   │
+ * │ Bilhete OPACO E REVOGÁVEL, portanto, e não um token auto-suficiente: revogar um JWS exigiria  │
+ * │ uma lista de revogação, que é justamente esta linha. `gen_random_uuid()` do Postgres usa      │
+ * │ gerador criptográfico, então são 122 bits de aleatoriedade, e o valor só sai daqui DEPOIS de  │
+ * │ o código certo ter sido digitado.                                                             │
+ * │                                                                                               │
+ * │ ELE NÃO É SESSÃO DO PORTAL e não abre rota nenhuma do prontuário: a sessão continua nascendo  │
+ * │ só de `POST portal/identificar`, com link + CPF + nascimento (contrato, seção 1).              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * FK `restrict`, NUNCA `cascade`, no mesmo desvio que `as_retencao_eventos` documenta: apagar a
+ * pessoa não pode apagar o rastro das tentativas de acesso em nome dela.
+ */
+export const portalAcessoCodigos = pgTable(
+  "portal_acesso_codigos",
+  {
+    /** O `id` É o bilhete devolvido pela confirmação. Ver o bloco acima. */
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** `restrict`: o rastro sobrevive à linha da pessoa. */
+    asCandidatoId: uuid("as_candidato_id")
+      .notNull()
+      .references(() => asCandidatos.id, { onDelete: "restrict" }),
+    /** HMAC do e-mail normalizado. Serve de BALDE, e jamais de `candidato_hash` da trilha. */
+    emailHash: varchar("email_hash", { length: 64 }).notNull(),
+    /** HMAC-SHA256 do código, com o `PORTAL_CODIGO_PEPPER`. Nunca o código. */
+    codigoHash: varchar("codigo_hash", { length: 64 }).notNull(),
+    /** Dez minutos da emissão. Prazo da DIGITAÇÃO do código, não do bilhete. */
+    expiraEm: timestamp("expira_em", { withTimezone: true }).notNull(),
+    /** Na quinta o código é DESTRUÍDO (`invalidado_em`), não só bloqueado. */
+    tentativas: integer("tentativas").notNull().default(0),
+    confirmadoEm: timestamp("confirmado_em", { withTimezone: true }),
+    /** Emissão nova, tentativas esgotadas ou bilhete consumido: os três carimbam aqui. */
+    invalidadoEm: timestamp("invalidado_em", { withTimezone: true }),
+    criadoEm,
+  },
+  (t) => ({
+    /** O BALDE por e-mail: "quantos pedidos este endereço fez na janela?". */
+    idxEmail: index("idx_portal_acesso_codigos_email").on(t.emailHash, t.criadoEm),
+    /** O código VIVO de um candidato, e a invalidação do anterior quando um novo nasce. */
+    idxCandidato: index("idx_portal_acesso_codigos_candidato").on(t.asCandidatoId, t.criadoEm),
+    /** A varredura do vencido, quando a rotina de limpeza nascer. */
+    idxExpira: index("idx_portal_acesso_codigos_expira").on(t.expiraEm),
+  }),
+);
+
+/**
+ * ─ A PORTA DE E-MAIL DO PORTAL: A TRAVA DE DIVERGÊNCIA (migration 0134) ────────────────────────
+ *
+ * Contrato NORMATIVO: `docs/CONTRATO-PORTAL-ACESSO-EMAIL.md` (v2), seção 4. A precedência que
+ * decide qual motivo é gravado vive em `decisaoDaIdentidade` (`domain/portal-acesso-email.ts`).
+ *
+ * A TRAVA É POR CANDIDATO DO FUNIL (`as_candidatos.id`), E NÃO POR CPF, e a razão é literal: o CPF
+ * pode ser justamente o dado em disputa. Travar por CPF travaria a chave que ainda não se sabe de
+ * quem é, e num caso (`CPF_DE_OUTRO_CANDIDATO`) travaria a pessoa CERTA pelo gesto da errada.
+ *
+ * `unique` NO CANDIDATO: uma trava por pessoa, e destravar move o carimbo da MESMA linha em vez de
+ * empilhar. A contagem de tentativas fica em `tentativas`, que é o que a fila do time ordena.
+ *
+ * ┌─ AS COLUNAS PROIBIDAS, NOMINALMENTE, E A AUSÊNCIA DELAS É A DEFESA (§A.6) ──────────────────┐
+ * │ NÃO existe `valor_informado`, `valor_esperado`, `campo_divergente`, `cpf`, `cpf_informado`,   │
+ * │ `data_nascimento`, `nome`, `email`, `observacao`, `justificativa`, nem `jsonb` de payload.    │
+ * │                                                                                               │
+ * │ `observacao` É A MAIS PERIGOSA DE TODAS, e é por isso que ela é citada aqui pelo nome: quem   │
+ * │ opera escreve o nome da pessoa no campo livre, e é assim que a PII volta para um rastro que   │
+ * │ nasceu limpo. É o mesmo desvio 2 que `as_retencao_eventos` já documenta. Sem o campo, não há  │
+ * │ onde escrever, e a regra deixa de depender de alguém se lembrar dela.                          │
+ * │                                                                                               │
+ * │ E `campo_divergente` NÃO É DETALHE TÉCNICO INOFENSIVO: gravá-lo poria no banco, e depois na   │
+ * │ tela, a resposta "o CPF que ele digitou está errado e a data está certa", que é exatamente o  │
+ * │ oráculo que a recusa neutra existe para não ser.                                               │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * AS DUAS FKs SÃO `restrict`, pelo mesmo argumento de `as_retencao_eventos`: a pergunta "quem
+ * destravou esta pessoa" não pode ser apagada pelo gesto que apaga o candidato nem pelo que apaga
+ * o usuário. `set null` no autor faria a trilha responder "alguém".
+ */
+const TRAVA_ACESSO_MOTIVO_SQL = sql.raw(MOTIVOS_DA_TRAVA_DE_ACESSO.map((m) => `'${m}'`).join(", "));
+
+export const portalAcessoTravas = pgTable(
+  "portal_acesso_travas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** UMA trava por pessoa (`unique` abaixo). `restrict` pelo bloco acima. */
+    asCandidatoId: uuid("as_candidato_id")
+      .notNull()
+      .references(() => asCandidatos.id, { onDelete: "restrict" }),
+    travadoEm: timestamp("travado_em", { withTimezone: true }).notNull().defaultNow(),
+    /** Código de catálogo fechado, com CHECK derivado do contrato compartilhado. */
+    motivoCodigo: varchar("motivo_codigo", { length: 40 }).notNull(),
+    /** Quantas vezes esbarrou na trava. É por aqui que a fila enxerga insistência. */
+    tentativas: integer("tentativas").notNull().default(1),
+    destravadoEm: timestamp("destravado_em", { withTimezone: true }),
+    /** Autor do destrave, da SESSÃO e nunca do corpo. `restrict` pelo bloco acima. */
+    destravadoPorId: uuid("destravado_por_id").references(() => usuarios.id, {
+      onDelete: "restrict",
+    }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /** UMA trava por candidato: destravar move o carimbo desta linha, não empilha outra. */
+    uqCandidato: unique("uq_portal_acesso_travas_candidato").on(t.asCandidatoId),
+    /**
+     * O CHECK VEM DA CONSTANTE DO CONTRATO, e não de uma lista digitada no banco, pelo mesmo
+     * argumento de `as_retencao_eventos`: duas listas concordam por coincidência e param de
+     * concordar em silêncio. `sql.raw` porque isto é DDL, e nenhum valor vem de entrada de usuário.
+     */
+    ckMotivo: check(
+      "ck_portal_acesso_travas_motivo",
+      sql`${t.motivoCodigo} in (${TRAVA_ACESSO_MOTIVO_SQL})`,
+    ),
+    /** Tentativa negativa é dado quebrado, e dado quebrado não entra. */
+    ckTentativas: check("ck_portal_acesso_travas_tentativas", sql`${t.tentativas} >= 0`),
+    /**
+     * DESTRAVE É TUDO OU NADA: carimbo sem autor responderia "destravou sozinho", e autor sem
+     * carimbo diria que alguém destravou sem dizer quando. A fila lê `destravado_em` para saber se
+     * a linha ainda é trabalho; um dos dois nulo faria as duas leituras discordarem.
+     */
+    ckDestrave: check(
+      "ck_portal_acesso_travas_destrave",
+      sql`(${t.destravadoEm} is null and ${t.destravadoPorId} is null)
+          or (${t.destravadoEm} is not null and ${t.destravadoPorId} is not null)`,
+    ),
+    /** A FILA: as travas ainda abertas, mais recentes primeiro. */
+    idxAbertas: index("idx_portal_acesso_travas_abertas").on(t.destravadoEm, t.travadoEm),
   }),
 );

@@ -1,7 +1,55 @@
+import { applyDecorators } from "@nestjs/common";
 import { Transform, Type } from "class-transformer";
-import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, Matches, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
+import { SALARIO_UNIDADES_EA, TETO_FISICO_JORNADA } from "../../domain/portal-dados-gi";
 import { normalizarSalarioParaDto, parseValorBR } from "./valor-monetario-br";
 import { TipoContratoCanonicoDto } from "./tipo-contrato.decorator";
+
+/**
+ * JORNADA EM HORAS (`dados_vaga_folha.jornada_horas_mes` / `jornada_horas_sem`, migration 0140).
+ *
+ * ┌─ POR QUE AS TRÊS REGRAS, E NENHUMA É ENFEITE ──────────────────────────────────────────────────┐
+ * │ FORMATO: a coluna é `numeric(6,2)`; texto não numérico estoura `22P02` no banco, que não é      │
+ * │   HttpException e sai como erro genérico (o mesmo buraco que o salário já tapou).               │
+ * │ ZERO: zero NÃO é "informado como zero", é exatamente o `default 0` do campo correspondente no   │
+ * │   G.I. Aceitar zero torna "declarado zero" e "ninguém informou" indistinguíveis depois de       │
+ * │   gravados, que é a família de erro que esta frente existe para fechar.                        │
+ * │ TETO FÍSICO (744 = 31×24, 168 = 7×24): espelha o CHECK da 0140. É teto do que EXISTE, não régua │
+ * │   trabalhista, e serve para pegar o 2200 digitado no lugar de 220 ANTES do banco, onde a recusa │
+ * │   viria como mensagem de Postgres que ninguém entende.                                         │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NORMALIZA ANTES DE VALIDAR (mesma ordem do `TipoContratoCanonicoDto`), reusando a régua pt-BR do
+ * salário: "220", "220,00" e "220.00" chegam todos como o número 220. O serviço reconverte para string
+ * na escrita, porque é isso que o Drizzle quer num `numeric`.
+ *
+ * §A.11: sem travessão nas mensagens. §A.6: nenhuma mensagem ecoa o valor enviado.
+ */
+function JornadaEmHorasDto(teto: number, periodo: string): PropertyDecorator {
+  return applyDecorators(
+    IsOptional(),
+    Transform(({ value }) => {
+      const canonico = normalizarSalarioParaDto(value);
+      if (canonico === undefined) return undefined;
+      const n = Number(canonico);
+      // Irreconhecível SEGUE como texto para o @IsNumber recusar com mensagem de gente, em vez de
+      // sumir como undefined e passar pelo @IsOptional como se nada tivesse sido enviado.
+      return Number.isFinite(n) ? n : canonico;
+    }),
+    IsNumber(
+      { maxDecimalPlaces: 2 },
+      {
+        message: `Jornada em horas por ${periodo} inválida. Informe a quantidade de horas, como 220.`,
+      },
+    ),
+    Min(0.01, {
+      message: `A jornada em horas por ${periodo} não pode ser zero. Informe as horas reais ou deixe o campo vazio.`,
+    }),
+    Max(teto, {
+      message: `A jornada em horas por ${periodo} informada não existe. O máximo é ${teto} horas.`,
+    }),
+  );
+}
 
 /**
  * Mensagens de validação em LINGUAGEM DE GENTE (ajuste do diretor).
@@ -63,6 +111,46 @@ export class VagaFolhaInputDto {
       "Salário inválido. Informe um valor como 2500 ou 2.500,00 (ponto separa o milhar, vírgula os centavos).",
   })
   salario?: string;
+
+  /**
+   * A UNIDADE DO SALÁRIO, DECLARADA pelo time (`dados_vaga_folha.salario_unidade`, migration 0140).
+   *
+   * ┌─ POR QUE O CAMPO EXISTE, medido na produção em 01/10/2026 ───────────────────────────────────┐
+   * │ `salario` guarda um `numeric(12,2)` e NÃO guardava a unidade. Há 7 admissões vivas com        │
+   * │ salário 9,34 e 10,90, que são valores de HORA, e o campo correspondente do G.I tem            │
+   * │ `default 'M'` (Mês): mandar o valor sem a unidade faz essas 7 entrarem na folha como salário  │
+   * │ MENSAL de nove reais, passando por todas as guardas que já existem. Deduzir pela faixa do     │
+   * │ valor foi VETADO: o time DECLARA.                                                            │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `@IsOptional` na FORMA (regra 5, não-bloqueio: admissão é criável com obrigatório vazio, e quem
+   * recusa o ENVIO para a folha é a guarda `GI_SALARIO_SEM_UNIDADE`). Mas a lista é FECHADA:
+   * `SALARIO_UNIDADES_EA` é a mesma do CHECK do banco, então grafia criativa é recusada aqui com 400
+   * legível em vez de virar erro de constraint. Normaliza só a caixa, como o tipo de contrato.
+   *
+   * O VOCABULÁRIO É O DO EA (`HORA`/`MENSAL`), nunca a letra do fornecedor: quem traduz para o
+   * `tipoSalario` é `TIPO_SALARIO_GI_POR_UNIDADE` (`domain/portal-dados-gi.ts`).
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim().toUpperCase() : value))
+  @IsIn(SALARIO_UNIDADES_EA as unknown as string[], {
+    message: `Unidade do salário inválida. Use uma destas: ${SALARIO_UNIDADES_EA.join(", ")}.`,
+  })
+  salarioUnidade?: string;
+
+  /**
+   * JORNADA EM HORAS, pedida quando a unidade declarada é `HORA` (as duas ou nenhuma).
+   *
+   * UMA SÓ É PIOR DO QUE NENHUMA: 220 h/mês ao lado de ZERO h/semana não é campo vazio esperando
+   * preenchimento, é uma CONTRADIÇÃO declarada que o fornecedor aceita calado. A tela avisa antes do
+   * clique e o ENVIO recusa (`GI_SALARIO_HORISTA_SEM_JORNADA`); aqui o DTO cobra o que foi DIGITADO
+   * (formato, não-zero, teto físico), sem travar o salvamento de quem deixou os dois vazios.
+   */
+  @JornadaEmHorasDto(TETO_FISICO_JORNADA.mes, "mês")
+  jornadaHorasMes?: number;
+
+  @JornadaEmHorasDto(TETO_FISICO_JORNADA.sem, "semana")
+  jornadaHorasSem?: number;
 
   @IsOptional()
   @IsString()

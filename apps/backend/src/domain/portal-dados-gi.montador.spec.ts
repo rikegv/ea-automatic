@@ -1,6 +1,14 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CONTRATACAO_GI_VAZIA,
+  INVALIDACAO_DO_SELO_DO_SALARIO,
+  SALARIO_UNIDADES_EA,
+  TETO_FISICO_JORNADA,
+  comDeclaracaoDaUnidadeDoSalario,
+  comSalarioInvalidandoSelo,
+  declaracaoDaUnidadeDoSalario,
   mapearVinculoGi,
   montarContratacaoGi,
   montarFuncionarioSelecao,
@@ -8,6 +16,7 @@ import {
   prazoContratoGi,
   recusaDaContratacaoGi,
   resolverEmpresaFilialGi,
+  tipoSalarioGi,
   type ContratacaoGi,
   type DeParaGi,
   type PessoaParaGi,
@@ -306,6 +315,25 @@ describe("prazo do contrato no GI (`D`/`I`): DERIVADO do vinculo, nunca contradi
     expect(prazoContratoGi("7")).toBe("D");
   });
 
+  it("`D` TEM QUATRO ORIGENS (4, 7, J, H), e `I` so uma (1)", () => {
+    /**
+     * ⚠️ EXPECTATIVA REESCRITA EM 01/10/2026, por decisão do diretor. NÃO é teste afrouxado: a lista
+     * continua FECHADA, só está completa.
+     *
+     * ANTES, `4` (Temporário), `J` (Estagiário) e `H` (Menor Aprendiz) saíam NULOS, e a justificativa
+     * escrita era "nulo preserva o comportamento de hoje". Isso é verdade sobre o EA e **FALSO sobre a
+     * folha**: o campo tem `default 'I'` no GI, então nulo não deixa o campo vazio, **faz o fornecedor
+     * gravar `I` (Indeterminado)**. Os três são contratos COM PRAZO (Lei 6.019, Lei 11.788, Lei
+     * 10.097), logo o silêncio do EA produzia o prazo ERRADO para os três, calado. Não decidir não era
+     * neutro: era decidir pelo default do fornecedor.
+     */
+    expect(prazoContratoGi("4")).toBe("D");
+    expect(prazoContratoGi("7")).toBe("D");
+    expect(prazoContratoGi("J")).toBe("D");
+    expect(prazoContratoGi("H")).toBe("D");
+    expect(prazoContratoGi("1")).toBe("I");
+  });
+
   it("nunca emite o PRAZO CONTRARIO ao vinculo, em nenhum dos 18 codigos do contrato", () => {
     // É esta a contradição que o campo `tipoContrato` (default `I` no GI) criaria se fosse coletado em
     // separado em vez de derivado: vinculo 7 com prazo indeterminado ao lado, e nada falhando.
@@ -318,12 +346,25 @@ describe("prazo do contrato no GI (`D`/`I`): DERIVADO do vinculo, nunca contradi
     }
   });
 
-  it("4, J e H saem com prazo NULO: regra de folha pendente, e o GI aplica o default dele", () => {
-    // Nulo preserva EXATAMENTE o comportamento de hoje (o EA nunca emitiu este campo). A fábrica não
-    // inventa regra de folha: isso é pergunta ao diretor.
-    expect(prazoContratoGi("4")).toBeNull();
-    expect(prazoContratoGi("J")).toBeNull();
-    expect(prazoContratoGi("H")).toBeNull();
+  it("os vinculos FORA da tabela continuam saindo NULOS, e a lista segue FECHADA", () => {
+    // A trava que importa não é "quem sai nulo", é que ninguém MAIS sai com prazo. Os cinco vínculos
+    // da tabela (1, 4, 7, J, H) são os únicos que o diretor decidiu; os outros 13 do contrato do GI
+    // seguem nulos, porque não há regra de folha para eles.
+    for (const v of ["2", "3", "5", "6", "8", "9", "C", "D", "E", "F", "G", "I", "K"]) {
+      expect(prazoContratoGi(v), `vinculo ${v}`).toBeNull();
+    }
+    expect(prazoContratoGi(null)).toBeNull();
+    expect(prazoContratoGi(undefined)).toBeNull();
+    expect(prazoContratoGi("")).toBeNull();
+  });
+
+  it("o PRAZO sai do vinculo pelo caminho REAL, para os quatro regimes a prazo", () => {
+    // Pelo caminho da produção: texto livre do EA -> vínculo -> prazo. Prova que a decisão do diretor
+    // chega ao payload, e não só à função.
+    for (const tipo of ["Temporário", "Estágio", "Jovem Aprendiz"]) {
+      const c = montarContratacaoGi({ tipoContrato: tipo, vinculos: VINCULOS, salario: "1800.00" });
+      expect(c.tipoContrato, tipo).toBe("D");
+    }
   });
 
   it("o acoplamento vale no payload montado, nao so na funcao", () => {
@@ -409,9 +450,97 @@ describe("salario: ausente, zero e negativo nao passam (o default do campo no GI
   });
 });
 
-describe("recusaDaContratacaoGi: as duas guardas duras, e a ordem delas", () => {
+describe("tipoSalario: a UNIDADE do salario e DECLARADA, nunca deduzida do valor", () => {
+  /**
+   * O BLOQUEIO QUE ESTE BLOCO GUARDA, medido na produção em 01/10/2026: há **7 admissões VIVAS com
+   * salário `9,34` (2) e `10,90` (5)**, que são valores de HORA, e o `tipoSalario` do GI tem
+   * **`default 'M'` (Mês)**. Sem a unidade declarada, aquelas 7 entram na folha como salário MENSAL de
+   * R$ 9,34, passando por todas as outras guardas (§A.33). Os valores usados aqui são SINTÉTICOS.
+   */
+  it("as SETE unidades do fornecedor traduzem, e NAO so duas", () => {
+    /**
+     * A VERSÃO DE DOIS VALORES ERA PIOR QUE NÃO TER COLUNA, e é isso que este teste trava. Sem `DIA` e
+     * sem `QUINZENAL`, o diarista e o quinzenalista não tinham onde se declarar: diante de duas opções
+     * erradas o time marca `MENSAL`, e aí o valor errado passa a carregar **um selo dizendo que alguém
+     * conferiu**. Selo sobre dado errado desliga a desconfiança de quem lê depois, então é pior que selo
+     * nenhum. Os sete são os da `description` de `TB_FuncionarioSelecaoAPI`, conferida em 01/10/2026.
+     */
+    expect(tipoSalarioGi("AULA")).toBe("A");
+    expect(tipoSalarioGi("COMISSAO")).toBe("C");
+    expect(tipoSalarioGi("DIA")).toBe("D");
+    expect(tipoSalarioGi("HORA")).toBe("H");
+    expect(tipoSalarioGi("MENSAL")).toBe("M");
+    expect(tipoSalarioGi("QUINZENAL")).toBe("Q");
+    expect(tipoSalarioGi("TAREFA")).toBe("T");
+  });
+
+  it("a lista exportada e a do de/para batem, e sao SETE: a tela e o CHECK leem a mesma coisa", () => {
+    // `SALARIO_UNIDADES_EA` é o que a tela oferece e o que o CHECK da 0140 espelha. Divergir dela do
+    // de/para faria a tela ofertar unidade que sai NULA no envio, calada.
+    expect([...SALARIO_UNIDADES_EA]).toEqual([
+      "AULA",
+      "COMISSAO",
+      "DIA",
+      "HORA",
+      "MENSAL",
+      "QUINZENAL",
+      "TAREFA",
+    ]);
+    for (const u of SALARIO_UNIDADES_EA) expect(tipoSalarioGi(u), u).not.toBeNull();
+  });
+
+  it("tolera caixa e espaco de borda, e NADA MAIS", () => {
+    expect(tipoSalarioGi(" hora ")).toBe("H");
+    expect(tipoSalarioGi("Mensal")).toBe("M");
+  });
+
+  it("ausente, vazio e desconhecido saem NULOS: nunca o default do fornecedor", () => {
+    // ⚠️ O desfecho seguro NÃO é `M`. `M` é o default do GI, e é exatamente ele o dano: nulo aqui faz o
+    // envio ser RECUSADO, e o time declarar. Deduzir pela faixa do valor está VETADO.
+    for (const v of [null, undefined, "", "   ", "MES", "M", "H", "HORISTA", "por hora", "SEMANAL"]) {
+      expect(tipoSalarioGi(v as string | null), `entrada ${JSON.stringify(v)}`).toBeNull();
+    }
+  });
+
+  it("a letra do FORNECEDOR nao e aceita como entrada: a coluna guarda o vocabulario do EA", () => {
+    // Guardar `H`/`M` no nosso banco amarraria a coluna ao contrato do GI. A tradução é de saída, e
+    // aceitar a letra de volta aqui abriria a porta para ela ser persistida sem ninguém notar.
+    expect(tipoSalarioGi("H")).toBeNull();
+    expect(tipoSalarioGi("M")).toBeNull();
+  });
+
+  it("o montador traduz a coluna do banco, e a ausencia nao vira `M`", () => {
+    const base = { tipoContrato: "Temporário", vinculos: VINCULOS, salario: "1800.00" };
+    expect(montarContratacaoGi({ ...base, salarioUnidade: "MENSAL" }).tipoSalario).toBe("M");
+    expect(montarContratacaoGi({ ...base, salarioUnidade: "HORA" }).tipoSalario).toBe("H");
+    expect(montarContratacaoGi(base).tipoSalario).toBeNull();
+    expect(montarContratacaoGi({ ...base, salarioUnidade: null }).tipoSalario).toBeNull();
+  });
+
+  it("REDE DE RUNTIME: valor fora dos SETE no payload sai NULO, nunca repassado", () => {
+    // Mesmo padrão de `vinculoGiValido`/`prazoGiValido`: o campo do GI tem 1 caractere e lista fechada,
+    // e um `as` descuidado faria o vocabulário do EA ("MENSAL") atravessar para ele.
+    const f = (t: unknown) =>
+      montarFuncionarioSelecao({ cpf: CPF }, undefined, {
+        ...CONTRATACAO_GI_VAZIA,
+        tipoSalario: t as "H" | "M" | null,
+      }).tipoSalario;
+    expect(f("MENSAL")).toBeNull();
+    expect(f("HORA")).toBeNull();
+    expect(f("m")).toBeNull();
+    // Os SETE passam (a lista é DERIVADA do de/para, não recopiada); o resto cai para nulo.
+    for (const t of ["A", "C", "D", "H", "M", "Q", "T"]) expect(f(t), t).toBe(t);
+    for (const t of ["X", "m", "MENSAL", "HORA", "", " H ", 1, true]) expect(f(t), String(t)).toBeNull();
+  });
+});
+
+describe("recusaDaContratacaoGi: as guardas duras, e a ordem delas", () => {
   const OK: ContratacaoGi = {
     salario: 2000,
+    tipoSalario: "M",
+    // Jornada NULA no fixture de propósito: `M` não a exige, e é isso que o bloco do horista prova.
+    qtdeHorasMes: null,
+    qtdeHorasSem: null,
     dataAdmissao: "2026-11-03",
     vinculo: "4",
     tipoContrato: null,
@@ -459,6 +588,91 @@ describe("recusaDaContratacaoGi: as duas guardas duras, e a ordem delas", () => 
     expect(recusa({ ...OK, salario: -1 })).toBe("GI_SALARIO_INVALIDO");
   });
 
+  it("unidade NAO declarada: GI_SALARIO_SEM_UNIDADE, e NUNCA o default `M` do fornecedor", () => {
+    // É a guarda do bloqueio das 7 horistas. O valor é válido, a empresa e a filial resolvem, o par é
+    // conhecido: a ÚNICA coisa que impede R$ 9,34 de entrar como salário mensal é esta linha.
+    expect(recusa({ ...OK, tipoSalario: null })).toBe("GI_SALARIO_SEM_UNIDADE");
+    expect(recusa({ ...OK, tipoSalario: "MENSAL" as never })).toBe("GI_SALARIO_SEM_UNIDADE");
+  });
+
+  it("declarada HORA sem jornada: GI_SALARIO_HORISTA_SEM_JORNADA, e o motivo diz O QUE FALTA", () => {
+    /**
+     * Emitir `tipoSalario = 'H'` NÃO conserta o salário sozinho, erra de outro jeito: ao lado de
+     * `salario`/`tipoSalario` o GI tem `salarioHora`, `qtdeHorasMes` e `qtdeHorasSem`, **todos com
+     * default `0`**, e o EA emite só os campos nomeados da allowlist. Então `H` sem jornada gravaria
+     * "R$ 9,34 por hora vezes 0 horas", a MESMA falha de `default 0` que o `salarioGi` recusa no valor.
+     *
+     * ⚠️ O QUE MUDOU COM A 0140: isto deixou de ser recusa PERPÉTUA. Antes, o EA não tinha jornada em
+     * lugar nenhum, e **uma admissão que o time auditou e que o sistema recusa para sempre é
+     * indistinguível de uma admissão quebrada**. Agora o código NOMEIA a jornada, e informar a jornada
+     * destrava (ver o teste seguinte).
+     */
+    expect(recusa({ ...OK, tipoSalario: "H" })).toBe("GI_SALARIO_HORISTA_SEM_JORNADA");
+  });
+
+  it("HORA com jornada COMPLETA: ENVIA, e a pendencia deixou de ser beco", () => {
+    expect(recusa({ ...OK, tipoSalario: "H", qtdeHorasMes: 220, qtdeHorasSem: 44 })).toBeNull();
+  });
+
+  it("HORA com jornada PELA METADE recusa: 220h/mes com ZERO h/semana e contradicao, nao campo vazio", () => {
+    // Os dois campos têm `default 0` no fornecedor, então mandar um só grava a contradição lá dentro.
+    expect(recusa({ ...OK, tipoSalario: "H", qtdeHorasMes: 220, qtdeHorasSem: null })).toBe(
+      "GI_SALARIO_HORISTA_SEM_JORNADA",
+    );
+    expect(recusa({ ...OK, tipoSalario: "H", qtdeHorasMes: null, qtdeHorasSem: 44 })).toBe(
+      "GI_SALARIO_HORISTA_SEM_JORNADA",
+    );
+    // ZERO não é "informado como zero": é o default do fornecedor, que é o dano.
+    expect(recusa({ ...OK, tipoSalario: "H", qtdeHorasMes: 0, qtdeHorasSem: 0 })).toBe(
+      "GI_SALARIO_HORISTA_SEM_JORNADA",
+    );
+  });
+
+  it("a jornada e exigida SO do horista: as outras SEIS unidades enviam sem ela", () => {
+    // `M`, `D`, `Q`, `A`, `C` e `T` dizem o período inteiro no próprio par valor+unidade. Exigir jornada
+    // delas seria inventar obrigação que o contrato não pede, e viraria recusa sem saída de novo.
+    for (const t of ["A", "C", "D", "M", "Q", "T"] as const) {
+      expect(recusa({ ...OK, tipoSalario: t }), t).toBeNull();
+    }
+  });
+
+  it("o montador NAO deriva jornada, e zero/fora de faixa/texto caem para NULO", () => {
+    /**
+     * Derivar 220 h/mês de 44 h/semana usa o fator 30/7 e o DSR: é CONVENÇÃO DE FOLHA, varia por acordo
+     * coletivo, e é o mesmo "casamento aproximado sobre remuneração" vetado para a unidade. O teto é
+     * FÍSICO (744 = 31×24, 168 = 7×24), espelhando o CHECK da 0140, nunca trabalhista.
+     */
+    const base = { tipoContrato: "Temporário", vinculos: VINCULOS, salario: "1800.00" };
+    const j = (mes: unknown, sem: unknown) =>
+      montarContratacaoGi({
+        ...base,
+        jornadaHorasMes: mes as string | number | null,
+        jornadaHorasSem: sem as string | number | null,
+      });
+    // STRING do `numeric` do Drizzle, que é como a coluna chega.
+    expect(j("220.00", "44.00").qtdeHorasMes).toBe(220);
+    expect(j("220.00", "44.00").qtdeHorasSem).toBe(44);
+    // Informar só uma NÃO completa a outra: nada é derivado.
+    expect(j("220.00", null).qtdeHorasSem).toBeNull();
+    expect(j(null, "44.00").qtdeHorasMes).toBeNull();
+    // Zero, negativo, texto, vazio e acima do teto FÍSICO: nulos nos dois campos.
+    for (const v of [0, "0", "0.00", -1, "abc", "", "   ", null, undefined, 745, 2200]) {
+      expect(j(v, 44).qtdeHorasMes, `mes ${JSON.stringify(v)}`).toBeNull();
+    }
+    for (const v of [0, "0", -1, "abc", 169, 440]) {
+      expect(j(220, v).qtdeHorasSem, `sem ${JSON.stringify(v)}`).toBeNull();
+    }
+  });
+
+  it("a ORDEM: valor invalido vence a unidade, e a unidade declarada vence a falta de jornada", () => {
+    // Mandar o time declarar a unidade de um salário zero seria mandá-lo declarar antes de ter o que
+    // declarar; e distinguir "não declarou" de "declarou horista" é o que faz a tela dizer a coisa certa.
+    expect(recusa({ ...OK, salario: 0, tipoSalario: null })).toBe("GI_SALARIO_INVALIDO");
+    expect(recusa({ ...OK, salario: 0, tipoSalario: "H" })).toBe("GI_SALARIO_INVALIDO");
+    // E as duas recusas de empresa/filial continuam vencendo as três do salário.
+    expect(recusa({ ...OK, codigoEmpresa: null, tipoSalario: null })).toBe("GI_SEM_EMPRESA_FILIAL");
+  });
+
   it("a contratacao VAZIA (o default) recusa: tudo nulo nao vai para a folha", () => {
     expect(recusa(CONTRATACAO_GI_VAZIA)).toBe("GI_SEM_EMPRESA_FILIAL");
     expect(recusaDaContratacaoGi(montarFuncionarioSelecao({ cpf: CPF }), parConhecido)).toBe(
@@ -470,26 +684,32 @@ describe("recusaDaContratacaoGi: as duas guardas duras, e a ordem delas", () => 
 describe("montarFuncionarioSelecao: a contratacao entra SO pelo terceiro parametro nomeado", () => {
   const CONTRATACAO: ContratacaoGi = {
     salario: 2000,
+    tipoSalario: "M",
+    qtdeHorasMes: null,
+    qtdeHorasSem: null,
     dataAdmissao: "2026-11-03",
+    // `4` (Temporário) agora SAI com prazo `D`, por decisão do diretor de 01/10/2026.
     vinculo: "4",
-    tipoContrato: null,
+    tipoContrato: "D",
     codigoEmpresa: 1,
     codigoFilial: 4,
   };
 
-  it("os seis campos saem no payload", () => {
+  it("os sete campos saem no payload", () => {
     const f = montarFuncionarioSelecao({ cpf: CPF }, undefined, CONTRATACAO);
     expect(f.salario).toBe(2000);
+    expect(f.tipoSalario).toBe("M");
     expect(f.dataAdmissao).toBe("2026-11-03");
     expect(f.vinculo).toBe("4");
-    expect(f.tipoContrato).toBeNull();
+    expect(f.tipoContrato).toBe("D");
     expect(f.codigoEmpresa).toBe(1);
     expect(f.codigoFilial).toBe(4);
   });
 
-  it("sem o terceiro parametro os seis saem NULOS (o comportamento de antes desta rodada)", () => {
+  it("sem o terceiro parametro os sete saem NULOS (o comportamento de antes desta rodada)", () => {
     const f = montarFuncionarioSelecao({ cpf: CPF });
     expect(f.salario).toBeNull();
+    expect(f.tipoSalario).toBeNull();
     expect(f.dataAdmissao).toBeNull();
     expect(f.vinculo).toBeNull();
     expect(f.tipoContrato).toBeNull();
@@ -562,5 +782,688 @@ describe("redes de runtime: vinculo e prazo fora da lista fechada saem NULOS, nu
     expect(comContratacao({ tipoContrato: "d" as never }).tipoContrato).toBeNull();
     expect(comContratacao({ tipoContrato: "D" }).tipoContrato).toBe("D");
     expect(comContratacao({ tipoContrato: "I" }).tipoContrato).toBe("I");
+  });
+});
+
+describe("DECLARACAO DA UNIDADE DO SALARIO: o ATO DE AUDITORIA, e quando ele carimba", () => {
+  /**
+   * ═══ A REGRA ═══
+   *
+   * Regra permanente do diretor: **nenhum salário é gravado na folha sem auditoria do time.** Declarar a
+   * unidade É esse ato, então a unidade e os dois carimbos (`salario_auditado_em`, `salario_auditado_por`)
+   * são UMA COISA SÓ: um gesto, três colunas escritas juntas, mais a jornada quando houver.
+   *
+   * ═══ O DEFEITO QUE ESTE BLOCO EXISTE PARA PEGAR ═══
+   *
+   * O lápis do Gerenciador PRÉ-PREENCHE a unidade e a devolve em TODO salvamento. Carimbar a cada
+   * salvamento faria a data do selo avançar sozinha e o autor virar quem só trocou o centro de custo:
+   * uma auditoria que ninguém fez, assinada por quem não a fez. É a MESMA distinção que o `undefined` do
+   * `comSalarioInvalidandoSelo` faz do outro lado, e aqui ela depende do estado ANTERIOR.
+   *
+   * §A.6: nenhum caso abaixo carrega valor de remuneração, CPF ou nome.
+   */
+  const AUTOR = "11111111-1111-1111-1111-111111111111";
+  const AGORA = new Date("2026-10-01T12:00:00.000Z");
+
+  it("unidade AUSENTE ou vazia nao declara nada (o selo fica zerado pela escrita do valor)", () => {
+    expect(declaracaoDaUnidadeDoSalario({}, null, AUTOR, AGORA)).toBeUndefined();
+    expect(declaracaoDaUnidadeDoSalario({ salarioUnidade: "" }, null, AUTOR, AGORA)).toBeUndefined();
+    expect(declaracaoDaUnidadeDoSalario({ salarioUnidade: "   " }, null, AUTOR, AGORA)).toBeUndefined();
+    expect(declaracaoDaUnidadeDoSalario({ salarioUnidade: null }, null, AUTOR, AGORA)).toBeUndefined();
+    // Jornada SEM unidade é ignorada: jornada é parte da declaração, não campo solto.
+    expect(
+      declaracaoDaUnidadeDoSalario({ jornadaHorasMes: 220, jornadaHorasSem: 44 }, null, AUTOR, AGORA),
+    ).toBeUndefined();
+  });
+
+  it("unidade declarada carimba autor e data, e normaliza a caixa", () => {
+    expect(declaracaoDaUnidadeDoSalario({ salarioUnidade: "mensal" }, null, AUTOR, AGORA)).toEqual({
+      salarioUnidade: "MENSAL",
+      jornadaHorasMes: null,
+      jornadaHorasSem: null,
+      salarioAuditadoEm: AGORA,
+      salarioAuditadoPor: AUTOR,
+    });
+  });
+
+  it("HORA com jornada grava as horas na forma canonica do `numeric(6,2)`", () => {
+    /** O Drizzle quer STRING num `numeric`; a tela manda número depois do DTO normalizar o pt-BR. */
+    expect(
+      declaracaoDaUnidadeDoSalario(
+        { salarioUnidade: "HORA", jornadaHorasMes: 220, jornadaHorasSem: 44 },
+        null,
+        AUTOR,
+        AGORA,
+      ),
+    ).toEqual({
+      salarioUnidade: "HORA",
+      jornadaHorasMes: "220.00",
+      jornadaHorasSem: "44.00",
+      salarioAuditadoEm: AGORA,
+      salarioAuditadoPor: AUTOR,
+    });
+  });
+
+  it("ZERO vira null, e NAO vira zero gravado: zero e o default do fornecedor", () => {
+    const d = declaracaoDaUnidadeDoSalario(
+      { salarioUnidade: "HORA", jornadaHorasMes: 0, jornadaHorasSem: 0 },
+      null,
+      AUTOR,
+      AGORA,
+    );
+    expect(d?.jornadaHorasMes).toBeNull();
+    expect(d?.jornadaHorasSem).toBeNull();
+  });
+
+  it("⚠️ a MESMA unidade e a MESMA jornada NAO recarimbam: o selo de ontem permanece", () => {
+    /**
+     * O CASO DO LÁPIS, e o ponto inteiro do `anterior`. Quem salvou trocando só o centro de custo mandou
+     * a unidade de volta porque a tela a pré-preencheu, e isso NÃO é uma declaração nova.
+     */
+    const anterior = { salarioUnidade: "HORA", jornadaHorasMes: "220.00", jornadaHorasSem: "44.00" };
+    expect(
+      declaracaoDaUnidadeDoSalario(
+        { salarioUnidade: "HORA", jornadaHorasMes: 220, jornadaHorasSem: 44 },
+        anterior,
+        AUTOR,
+        AGORA,
+      ),
+    ).toBeUndefined();
+    // Caixa e forma do número diferentes continuam sendo a MESMA declaração: a comparação é canônica,
+    // e o `numeric(6,2)` volta do banco como "220.00" enquanto a tela manda 220.
+    expect(
+      declaracaoDaUnidadeDoSalario(
+        { salarioUnidade: "hora", jornadaHorasMes: "220", jornadaHorasSem: 44 },
+        anterior,
+        AUTOR,
+        AGORA,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("MUDAR a unidade ou a jornada carimba de novo, com o autor de AGORA", () => {
+    const anterior = { salarioUnidade: "HORA", jornadaHorasMes: "220.00", jornadaHorasSem: "44.00" };
+    const OUTRO = "22222222-2222-2222-2222-222222222222";
+
+    // Unidade trocada: a jornada de horista é LIMPA junto, senão fica pendurada numa unidade mensal.
+    expect(
+      declaracaoDaUnidadeDoSalario({ salarioUnidade: "MENSAL" }, anterior, OUTRO, AGORA),
+    ).toEqual({
+      salarioUnidade: "MENSAL",
+      jornadaHorasMes: null,
+      jornadaHorasSem: null,
+      salarioAuditadoEm: AGORA,
+      salarioAuditadoPor: OUTRO,
+    });
+
+    // Só a jornada mudou: segue sendo declaração nova (o que vai para a folha mudou).
+    expect(
+      declaracaoDaUnidadeDoSalario(
+        { salarioUnidade: "HORA", jornadaHorasMes: 180, jornadaHorasSem: 44 },
+        anterior,
+        OUTRO,
+        AGORA,
+      )?.jornadaHorasMes,
+    ).toBe("180.00");
+  });
+
+  it("sem autor (caminho automatico) a unidade ainda grava, com autor NULO e visivel", () => {
+    /** Ingestão automática nunca declara unidade; se um dia declarar, o nulo é a prova de que foi ela. */
+    expect(declaracaoDaUnidadeDoSalario({ salarioUnidade: "DIA" }, null, undefined, AGORA)).toEqual({
+      salarioUnidade: "DIA",
+      jornadaHorasMes: null,
+      jornadaHorasSem: null,
+      salarioAuditadoEm: AGORA,
+      salarioAuditadoPor: null,
+    });
+  });
+
+  it("A COMPOSICAO: a declaracao SOBRESCREVE a invalidacao, nesta ordem", () => {
+    /**
+     * A ordem documentada no helper. Escrever o valor zera o selo; declarar a unidade no MESMO gesto
+     * carimba por cima, porque ali houve declaração de verdade. O inverso lavaria a edição.
+     */
+    const declaracao = declaracaoDaUnidadeDoSalario({ salarioUnidade: "HORA", jornadaHorasMes: 220, jornadaHorasSem: 44 }, null, AUTOR, AGORA);
+    const patch = comDeclaracaoDaUnidadeDoSalario(
+      comSalarioInvalidandoSelo({ escala: "12x36" }, "9.34"),
+      declaracao,
+    );
+    expect(patch).toEqual({
+      escala: "12x36",
+      salario: "9.34",
+      salarioUnidade: "HORA",
+      jornadaHorasMes: "220.00",
+      jornadaHorasSem: "44.00",
+      salarioAuditadoEm: AGORA,
+      salarioAuditadoPor: AUTOR,
+    });
+  });
+
+  it("SEM declaracao, a composicao devolve o patch INTACTO (selo zerado pela invalidacao)", () => {
+    const patch = comDeclaracaoDaUnidadeDoSalario(
+      comSalarioInvalidandoSelo({ escala: "12x36" }, "2000.00"),
+      declaracaoDaUnidadeDoSalario({}, null, AUTOR, AGORA),
+    );
+    expect(patch).toEqual({
+      escala: "12x36",
+      salario: "2000.00",
+      salarioUnidade: null,
+      salarioAuditadoEm: null,
+      salarioAuditadoPor: null,
+    });
+  });
+
+  it("SEM declaracao e SEM escrita de salario, nada e tocado (as chaves ficam AUSENTES)", () => {
+    /** A edição que não mexeu em salário nem em unidade não pode apagar a auditoria de ninguém. */
+    const patch = comDeclaracaoDaUnidadeDoSalario(
+      comSalarioInvalidandoSelo({ escala: "12x36" }, undefined),
+      declaracaoDaUnidadeDoSalario({ salarioUnidade: "HORA" }, { salarioUnidade: "HORA" }, AUTOR, AGORA),
+    );
+    expect("salarioUnidade" in patch).toBe(false);
+    expect("salarioAuditadoEm" in patch).toBe(false);
+    expect("salarioAuditadoPor" in patch).toBe(false);
+    expect("jornadaHorasMes" in patch).toBe(false);
+  });
+
+  it("a unidade declarada e SEMPRE uma da lista fechada que o CHECK do banco espelha", () => {
+    // Canário de contrato: a lista do domínio é a autoridade, e o DTO valida contra ela.
+    for (const u of SALARIO_UNIDADES_EA) {
+      expect(declaracaoDaUnidadeDoSalario({ salarioUnidade: u }, null, AUTOR, AGORA)?.salarioUnidade).toBe(u);
+    }
+  });
+});
+
+describe("INVALIDACAO DO SELO DO SALARIO: o helper, e a VARREDURA dos escritores", () => {
+  /**
+   * ═══ A REGRA ═══
+   *
+   * **Toda escrita em `dados_vaga_folha.salario` zera `salario_unidade`, `salario_auditado_em` e
+   * `salario_auditado_por`.** Autorizado pelo diretor em 01/10/2026, inclusive em código já validado.
+   *
+   * O QUE ELA IMPEDE: sem a invalidação, o lápis troca R$ 9,34 por R$ 2.000 e o carimbo de ontem continua
+   * lá. O selo passa a certificar um valor que ninguém olhou, e **a EDIÇÃO sai LAVADA pela auditoria
+   * anterior**, que é o oposto exato da regra do diretor ("nenhum salário vai para a folha sem auditoria
+   * do time"). Pior que não ter selo: o selo desliga a desconfiança de quem lê depois, e a guarda do
+   * envio (`GI_SALARIO_SEM_UNIDADE`) deixa de morder justamente no caso em que deveria.
+   *
+   * ═══ POR QUE ESTE BLOCO VARRE O FONTE EM VEZ DE SÓ TESTAR O HELPER ═══
+   *
+   * Invalidação repetida à mão em N escritores é invalidação que o escritor **N+1 esquece**, e o
+   * esquecimento é **CALADO**: nada falha, nenhum teste fica vermelho, o selo antigo simplesmente
+   * permanece. Testar só o helper provaria que o helper funciona e não que alguém o chamou.
+   *
+   * O DESENHO MAIS FORTE SERIA UM TRIGGER DE BANCO, e ele foi considerado e RECUSADO: não existe UM
+   * trigger nas 140 migrations deste repositório, e não existe caminho de teste contra Postgres real
+   * (`docs/FRENTE-REGISTRADA-TESTE-POSTGRES-REAL.md`). O trigger seria a única guarda, em convenção nova,
+   * sem nenhum teste capaz de executá-la: é o padrão exato do incidente de 18/09/2026, em que 3.680
+   * testes verdes conviveram com a instrução central da frente sendo incapaz de rodar. Fica registrado
+   * como o desenho certo para quando a frente do Postgres real existir.
+   *
+   * ⚠️ A ARMADILHA DA VARREDURA DE FONTE (memória da fábrica): **comentário casa com a busca**. Três
+   * falsos vermelhos já saíram disso numa frente só. Por isso o texto é despido de comentário ANTES de
+   * qualquer asserção, abaixo.
+   *
+   * ═══ ⚠️ O QUE **NÃO** É PROVA DE QUE O SELO É INBURLÁVEL (registro do `seguranca`, 01/10/2026) ═══
+   *
+   * Os **5 mutantes que o `tester` matou** nesta frente exercitam o **MONTADOR e as GUARDAS do envio**
+   * (`tipoSalarioGi`, `GI_SALARIO_SEM_UNIDADE`, os tetos de jornada), e **NÃO** a cobertura ESTRUTURAL
+   * desta varredura. "Mutante morto" ali **não diz nada** sobre haver um caminho de escrita que passa por
+   * fora do helper, que é uma pergunta de COBERTURA DE ESCRITORES, não de comportamento de função pura.
+   *
+   * **NÃO SOMAR AS DUAS PROVAS COMO SE FOSSEM A MESMA.** Foi exatamente essa soma que deixou a primeira
+   * versão deste bloco parecer fechada enquanto CINCO formas de burla ficavam verdes. A prova de que a
+   * varredura morde é outra, e está no `describe` do fim deste bloco: cada burla escrita em BUFFER, com a
+   * régua REPROVANDO.
+   */
+
+  /**
+   * Lê o fonte com os COMENTÁRIOS FORA (bloco e linha). Despir o texto antes de asserir é obrigatório:
+   * comentário casa com a busca, e três falsos vermelhos de uma frente só nasceram exatamente disso.
+   */
+  function fonteSemComentario(rel: string): string {
+    // `__dirname` é o padrão da casa para spec que lê fonte (`portal-ritmo.spec.ts:509`,
+    // `portal-documentos.spec.ts:243`). `import.meta.url` NÃO serve: o tsconfig do backend é
+    // `module: commonjs`, e ali `import.meta` é TS1343, erro de typecheck.
+    const bruto = readFileSync(join(__dirname, "..", rel), "utf8");
+    return bruto.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  }
+
+  it("o helper zera as TRES colunas quando o salario e escrito", () => {
+    const patch = comSalarioInvalidandoSelo({ escala: "12x36" }, "2000.00");
+    expect(patch).toEqual({
+      escala: "12x36",
+      salario: "2000.00",
+      salarioUnidade: null,
+      salarioAuditadoEm: null,
+      salarioAuditadoPor: null,
+    });
+    // Apagar o salário também é escrever nele: o selo cai igual.
+    expect(comSalarioInvalidandoSelo({}, null)).toEqual({
+      salario: null,
+      ...INVALIDACAO_DO_SELO_DO_SALARIO,
+    });
+  });
+
+  it("`undefined` NAO derruba o selo: edicao que nao mexeu no salario preserva a auditoria", () => {
+    /**
+     * O CASO DO LÁPIS. No Drizzle, `undefined` em `.set()` é "não toque nesta coluna" e `null` é "grave
+     * NULL". Quando a edição não mexeu no salário não houve escrita, então não há selo a invalidar, e
+     * derrubá-lo apagaria a auditoria de quem só trocou o centro de custo. A distinção é "o valor
+     * mudou", não "o formulário passou por aqui".
+     *
+     * AS TRÊS CHAVES FICAM AUSENTES, não nulas: ausente é "não toque", nulo seria "apague".
+     */
+    const patch = comSalarioInvalidandoSelo({ escala: "12x36" }, undefined);
+    expect(patch).toEqual({ escala: "12x36", salario: undefined });
+    expect("salarioUnidade" in patch).toBe(false);
+    expect("salarioAuditadoEm" in patch).toBe(false);
+    expect("salarioAuditadoPor" in patch).toBe(false);
+  });
+
+  it("a constante tem EXATAMENTE as tres colunas do selo, e todas nulas", () => {
+    // Coluna de selo nova que não entre aqui nasceria fora da invalidação, calada.
+    expect(INVALIDACAO_DO_SELO_DO_SALARIO).toEqual({
+      salarioUnidade: null,
+      salarioAuditadoEm: null,
+      salarioAuditadoPor: null,
+    });
+  });
+
+  /**
+   * TODO `.ts` DE PRODUÇÃO DO BACKEND, POR CAMINHADA DE DIRETÓRIO (endurecimento 2, 01/10/2026).
+   *
+   * ⚠️ A VERSÃO ANTERIOR DESTA VARREDURA OLHAVA DOIS ARQUIVOS ESCOLHIDOS À MÃO, e esse era o furo maior
+   * do mecanismo: escritor novo em arquivo novo simplesmente **não existia** para o teste. Já havia
+   * precedente real, `as/ingestao-pandape/arnes-seed-manual.ts`, que escreve `salario` em
+   * `dados_vaga_folha` por `tx.unsafe` e não era coberto por varredura nenhuma. Enumerar por caminhada
+   * é o que faz o escritor N+1 nascer coberto **em qualquer arquivo**, que é a promessa inteira do selo.
+   *
+   * `.spec.ts` fica FORA: spec não roda em produção, e este próprio arquivo carrega os buffers de burla
+   * (abaixo), que fariam a varredura reprovar a si mesma.
+   */
+  function arquivosDeProducaoDoBackend(): string[] {
+    const raiz = join(__dirname, "..");
+    const achados: string[] = [];
+    const andar = (dir: string): void => {
+      for (const entrada of readdirSync(dir, { withFileTypes: true })) {
+        const caminho = join(dir, entrada.name);
+        if (entrada.isDirectory()) andar(caminho);
+        else if (entrada.name.endsWith(".ts") && !/\.(?:spec|d)\.ts$/.test(entrada.name)) {
+          achados.push(relative(raiz, caminho));
+        }
+      }
+    };
+    andar(raiz);
+    return achados.sort();
+  }
+
+  /**
+   * A STATEMENT INTEIRA de toda escrita Drizzle em `dados_vaga_folha`: do `.insert(dadosVagaFolha)` /
+   * `.update(dadosVagaFolha)` até o `;` de profundidade zero.
+   *
+   * ⚠️ POR QUE A STATEMENT INTEIRA E NÃO O PRIMEIRO BLOCO `{...}`: a versão anterior recortava só o
+   * objeto do primeiro `.values(`/`.set(`, e a auditoria de 01/10/2026 mostrou que isso deixava passar
+   * `salario` dentro do `set:` de um `onConflictDoUpdate()` encadeado DEPOIS, 100% verde. A statement
+   * inteira enxerga todos os objetos do encadeamento.
+   *
+   * ⚠️ E POR QUE NÃO UMA BUSCA SIMPLES POR `salario:` NO ARQUIVO: ela não distingue ESCRITA de LEITURA, e
+   * `admissoes.service.ts` tem OITO leituras legítimas (projeções de `select`, o objeto da régua de
+   * pendências, o `efetivoVf` do sinalizador). A primeira versão deste teste fez isso e ficou vermelha
+   * nas oito, **apontando leitura como se fosse escrita**. O recorte é ESTRUTURAL, e o endurecimento NÃO
+   * pode desfazer isso: nada aqui busca `salario` fora de uma statement de escrita delimitada.
+   */
+  function statementsDeEscritaEmVagaFolha(fonte: string): string[] {
+    const statements: string[] = [];
+    const re = /\.(?:insert|update)\(\s*dadosVagaFolha\s*\)/g;
+    for (let m = re.exec(fonte); m !== null; m = re.exec(fonte)) {
+      const resto = fonte.slice(m.index + m[0].length);
+      let prof = 0;
+      for (let i = 0; i < resto.length; i += 1) {
+        const c = resto[i];
+        if (c === "(" || c === "{" || c === "[") prof += 1;
+        else if (c === ")" || c === "}" || c === "]") prof -= 1;
+        else if (c === ";" && prof === 0) {
+          statements.push(resto.slice(0, i));
+          break;
+        }
+      }
+    }
+    return statements;
+  }
+
+  const ALVO = "comSalarioInvalidandoSelo(";
+
+  /** Remove a chamada do helper (parênteses balanceados) do texto, para ver o que SOBRA. */
+  function semAChamadaDoHelper(texto: string): string {
+    let r = texto;
+    for (let i = r.indexOf(ALVO); i >= 0; i = r.indexOf(ALVO)) {
+      let prof = 0;
+      let j = i + ALVO.length - 1;
+      for (; j < r.length; j += 1) {
+        if (r[j] === "(") prof += 1;
+        else if (r[j] === ")") {
+          prof -= 1;
+          if (prof === 0) {
+            j += 1;
+            break;
+          }
+        }
+      }
+      r = r.slice(0, i) + r.slice(j);
+    }
+    return r;
+  }
+
+  /**
+   * A RÉGUA, em função pura, para que os BUFFERS DE BURLA abaixo rodem exatamente o que os arquivos
+   * reais rodam. Devolve a lista de violações (vazia = conforme).
+   */
+  function violacoesDeEscritaTs(fonte: string, arquivo: string): string[] {
+    const violacoes: string[] = [];
+    for (const st of statementsDeEscritaEmVagaFolha(fonte)) {
+      const recorte = st.replace(/\s+/g, " ").slice(0, 160);
+
+      // (1) O ARGUMENTO DE `.values()`/`.set()` TEM DE SER OBJETO LITERAL. Patch montado fora do bloco
+      //     (`const patch = { salario: novo }; ... .set(patch)`) é invisível para qualquer varredura de
+      //     statement, então ele é recusado pela FORMA, não pelo conteúdo.
+      const reArg = /\.(?:values|set)\(\s*/g;
+      for (let m = reArg.exec(st); m !== null; m = reArg.exec(st)) {
+        const depois = st.slice(m.index + m[0].length);
+        if (!depois.startsWith("{") && !depois.startsWith("[") && !depois.startsWith(ALVO)) {
+          violacoes.push(
+            `${arquivo}: argumento de .values()/.set() não é objeto literal (patch montado fora do bloco não é auditável): ${recorte}`,
+          );
+        }
+      }
+
+      if (!/\bsalario\b/.test(st)) continue;
+
+      // (2) TOCOU SALÁRIO, PASSOU PELO HELPER.
+      if (!st.includes(ALVO)) {
+        violacoes.push(`${arquivo}: escrita de salario SEM comSalarioInvalidandoSelo(): ${recorte}`);
+        continue;
+      }
+
+      // (3) ⚠️ O ENDURECIMENTO QUE MATA A PIOR BURLA: depois de remover o texto da chamada do helper,
+      //     NÃO PODE SOBRAR `salario:` na statement. Sem isto,
+      //     `.set({ ...comSalarioInvalidandoSelo({}, undefined), salario: novo })` fica 100% VERDE e
+      //     grava salário com o selo INTACTO, que é o dano exato que a guarda existe para impedir: o
+      //     texto do helper está no bloco, então um `toContain()` passa.
+      const sobra = semAChamadaDoHelper(st);
+      if (/\bsalario\s*:/.test(sobra)) {
+        violacoes.push(
+          `${arquivo}: \`salario:\` escrito FORA do helper na mesma statement (override do selo): ${recorte}`,
+        );
+      }
+
+      // (4) Nenhum escritor declara as colunas do selo À MÃO: a invalidação mora num lugar só.
+      if (/salarioAuditadoEm\s*:/.test(sobra)) {
+        violacoes.push(`${arquivo}: selo declarado a mao em vez do helper: ${recorte}`);
+      }
+    }
+    return violacoes;
+  }
+
+  /**
+   * A régua do SQL CRU (endurecimento 3), também em função pura para os buffers de burla.
+   *
+   * SÓ O `UPDATE` É PROIBIDO, e a distinção não é descuido: `INSERT` de linha nova nasce com as três
+   * colunas do selo NULAS por construção (a 0140 não dá `default`), então insert cru não pode deixar
+   * selo velho certificando salário novo. `UPDATE ... set ... salario` em SQL cru, sim: ele reescreve
+   * uma linha que PODE ter selo, e passa por fora do helper e por fora do Drizzle.
+   */
+  function violacoesDeSqlCru(fonte: string, arquivo: string): string[] {
+    const re =
+      /\bupdate\s+(?:only\s+)?"?dados_vaga_folha"?[\s\S]{0,400}?\bset\b[\s\S]{0,400}?\bsalario\b/i;
+    const m = re.exec(fonte);
+    return m
+      ? [
+          `${arquivo}: UPDATE de salario em dados_vaga_folha por SQL CRU, por fora do helper: ${m[0]
+            .replace(/\s+/g, " ")
+            .slice(0, 160)}`,
+        ]
+      : [];
+  }
+
+  it("VARREDURA: nenhuma escrita TS de `dados_vaga_folha` grava `salario` fora do helper", () => {
+    /**
+     * É este o teste que faz o SÉTIMO escritor nascer coberto: statement nova que grave salário sem o
+     * helper, OU que escreva `salario:` por cima do helper no mesmo bloco, fica vermelha aqui.
+     *
+     * OS ESCRITORES MEDIDOS (01/10/2026, por caminhada): SETE statements Drizzle, em DOIS arquivos.
+     *  - `admissoes.service.ts`, SEIS, das quais QUATRO tocam salário: `create`,
+     *    `criarPreAdmissaoDoFunil` (a ponte do funil de A&S, **sem humano nenhum**, que copia o snapshot
+     *    da vaga), `aplicarLiberacao` e `editar` (o lápis de Gerenciador e Esteira). NÃO tocam: o
+     *    `criarPreAdmissao` do Pandapé (insere só `admissaoId`) e o UPDATE de uniforme;
+     *  - `expurgo.service.ts`, UMA, que só apaga o CPF/nome do substituído por TTL.
+     * SQL cru fica no teste seguinte.
+     */
+    const violacoes: string[] = [];
+    let statements = 0;
+    let comSalario = 0;
+    for (const arquivo of arquivosDeProducaoDoBackend()) {
+      const fonte = fonteSemComentario(arquivo);
+      const sts = statementsDeEscritaEmVagaFolha(fonte);
+      statements += sts.length;
+      comSalario += sts.filter((s) => /\bsalario\b/.test(s)).length;
+      violacoes.push(...violacoesDeEscritaTs(fonte, arquivo));
+    }
+    expect(violacoes).toEqual([]);
+
+    // CANÁRIO DO PRÓPRIO RECORTE: zero statement seria verde mentindo (regex que parou de casar, arquivo
+    // renomeado, encadeamento reescrito). Os números são os medidos, e mexer neles é decisão consciente.
+    expect(statements, "statements de escrita Drizzle em dados_vaga_folha, no backend todo").toBe(7);
+    expect(comSalario, "statements de escrita que tocam salario").toBe(4);
+  });
+
+  it("ENUMERACAO: os arquivos que escrevem em `dados_vaga_folha` sao EXATAMENTE os medidos", () => {
+    /**
+     * O conjunto é fechado de propósito. Arquivo novo escrevendo na tabela fica vermelho AQUI, e quem o
+     * acrescentar é obrigado a olhar o selo antes de incluí-lo na lista. É o par da caminhada: a
+     * caminhada acha, a igualdade exige decisão consciente.
+     */
+    const drizzle: string[] = [];
+    const sqlCru: string[] = [];
+    const alias: string[] = [];
+    for (const arquivo of arquivosDeProducaoDoBackend()) {
+      const fonte = fonteSemComentario(arquivo);
+      if (/\.(?:insert|update)\(\s*dadosVagaFolha\s*\)/.test(fonte)) drizzle.push(arquivo);
+      if (/\b(?:insert\s+into|update)\s+(?:only\s+)?"?dados_vaga_folha"?/i.test(fonte)) {
+        sqlCru.push(arquivo);
+      }
+      // ALIAS DA TABELA: `const t = dadosVagaFolha` (ou `import { dadosVagaFolha as t }`) esconderia a
+      // escrita do recorte estrutural, porque a regex procura o identificador. Ninguém renomeia o
+      // objeto da tabela hoje, e quem precisar renomear tem de passar por aqui.
+      if (
+        /(?:const|let|var)\s+\w+\s*(?::[^=\n]*)?=\s*dadosVagaFolha\s*[;,)\n]/.test(fonte) ||
+        /dadosVagaFolha\s+as\s+\w+/.test(fonte)
+      ) {
+        alias.push(arquivo);
+      }
+    }
+    expect(drizzle).toEqual(["admissoes/admissoes.service.ts", "admissoes/expurgo.service.ts"]);
+    expect(sqlCru).toEqual([
+      "as/ingestao-pandape/arnes-seed-manual.ts",
+      "db/carga-provisorio.ts",
+    ]);
+    expect(alias, "ninguem apelida `dadosVagaFolha` (apelido esconde a escrita da varredura)").toEqual(
+      [],
+    );
+  });
+
+  it("VARREDURA: nenhum SQL CRU do backend faz `update dados_vaga_folha set ... salario`", () => {
+    /**
+     * Endurecimento 3. O `tx.execute(sql\`update dados_vaga_folha set salario = ...\`)` passa por fora do
+     * Drizzle, por fora do helper e por fora do recorte de statement, e era a quinta burla que a
+     * auditoria de 01/10/2026 reproduziu verde. Aqui ele é proibido no backend inteiro.
+     */
+    const violacoes: string[] = [];
+    for (const arquivo of arquivosDeProducaoDoBackend()) {
+      violacoes.push(...violacoesDeSqlCru(fonteSemComentario(arquivo), arquivo));
+    }
+    expect(violacoes).toEqual([]);
+  });
+
+  it("VARREDURA: a carga em SQL cru zera o selo na lista de colunas, e NUNCA faz UPDATE", () => {
+    /**
+     * `db/carga-provisorio.ts` traz salário de PLANILHA, sem ninguém do time olhar o valor, então o selo
+     * não pode nascer preenchido. Não dá para usar o helper em SQL cru, então as três colunas vão na
+     * lista do INSERT como NULL, que é a mesma afirmação escrita à mão.
+     *
+     * ⚠️ E É **INSERT DE LINHA NOVA, NUNCA UPDATE**, que é o ponto do risco de lote: a carga não reescreve
+     * as 2.595 linhas que já têm salário. Nenhuma admissão existente perde selo porque a carga rodou.
+     *
+     * O OUTRO ESCRITOR DE SQL CRU, `as/ingestao-pandape/arnes-seed-manual.ts`, escreve `salario` SEM as
+     * colunas do selo, e é seguro por construção: é `insert ... on conflict do nothing` de arnês de
+     * homologação, linha NOVA, em que o selo nasce nulo (a 0140 não dá `default`). Ele agora é
+     * ENUMERADO pela caminhada e coberto pela proibição de UPDATE cru, o que antes não acontecia.
+     */
+    const fonte = fonteSemComentario("db/carga-provisorio.ts");
+    const insert = /INSERT INTO dados_vaga_folha \(([^)]*)\)/.exec(fonte);
+    expect(insert, "a carga insere em dados_vaga_folha").not.toBeNull();
+    const colunas = (insert?.[1] ?? "").replace(/\s+/g, " ");
+    for (const c of ["salario_unidade", "salario_auditado_em", "salario_auditado_por"]) {
+      expect(colunas, `a carga declara ${c} na lista de colunas`).toContain(c);
+    }
+    // Nenhum UPDATE de `dados_vaga_folha` nesta rotina de lote.
+    expect(/UPDATE\s+dados_vaga_folha/i.test(fonte), "a carga NAO faz UPDATE em dados_vaga_folha").toBe(
+      false,
+    );
+  });
+
+  describe("O ENDURECIMENTO MORDE: as cinco burlas que ficavam VERDES, provadas em BUFFER", () => {
+    /**
+     * ⚠️ TESTE DE GUARDA QUE NÃO SE PROVA CONTRA A BURLA É O QUE ACABOU DE FALHAR AQUI. A auditoria de
+     * 01/10/2026 reproduziu o extrator anterior e rodou CINCO formas de escrever salário por fora do
+     * helper: **as cinco ficaram verdes**. Cada caso abaixo é uma delas, escrita num BUFFER (nunca num
+     * arquivo), e o teste exige que a régua ACUSE. Molde do `'TAREFA'` → `'XX'` já usado na casa: a
+     * prova do mecanismo é ele reprovando, não ele passando.
+     */
+    const ok = `await tx.insert(dadosVagaFolha).values({ ...comSalarioInvalidandoSelo({}, vf.salario ?? null), escala: vf.escala });`;
+
+    it("o CONTROLE: a forma correta continua passando (senao a prova abaixo nao vale nada)", () => {
+      expect(violacoesDeEscritaTs(ok, "buffer.ts")).toEqual([]);
+      expect(violacoesDeSqlCru(ok, "buffer.ts")).toEqual([]);
+    });
+
+    it("B) OVERRIDE NO MESMO BLOCO, a pior: o texto do helper esta la, e o salario e escrito por cima", () => {
+      const burla = `await tx.update(dadosVagaFolha).set({ ...comSalarioInvalidandoSelo({}, undefined), salario: novo });`;
+      const v = violacoesDeEscritaTs(burla, "buffer.ts");
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("escrito FORA do helper");
+    });
+
+    it("A) `salario` no `set:` do `onConflictDoUpdate`, que o recorte antigo nao enxergava", () => {
+      const burla = `await tx.insert(dadosVagaFolha).values({ admissaoId }).onConflictDoUpdate({ target: dadosVagaFolha.admissaoId, set: { salario: novo } });`;
+      const v = violacoesDeEscritaTs(burla, "buffer.ts");
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("SEM comSalarioInvalidandoSelo()");
+    });
+
+    it("E) PATCH MONTADO FORA DO BLOCO: recusado pela FORMA do argumento", () => {
+      const burla = `const patch = { salario: novo }; await tx.update(dadosVagaFolha).set(patch);`;
+      const v = violacoesDeEscritaTs(burla, "buffer.ts");
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("não é objeto literal");
+    });
+
+    it("D) SQL CRU por `tx.execute`: proibido no backend inteiro", () => {
+      const burla = "await tx.execute(sql`update dados_vaga_folha set salario = ${novo} where admissao_id = ${id}`);";
+      const v = violacoesDeSqlCru(burla, "buffer.ts");
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("SQL CRU");
+      // E a forma com aspas e `only` também, que é a mesma escrita com outro vestido.
+      expect(violacoesDeSqlCru('`UPDATE ONLY "dados_vaga_folha" SET "salario" = $1`', "b.ts")).toHaveLength(1);
+    });
+
+    it("C) ALIAS DA TABELA: o apelido e proibido, porque esconderia a escrita do recorte", () => {
+      /**
+       * Esta é a única das cinco cuja guarda NÃO é por statement: um apelido faz a escrita desaparecer do
+       * recorte estrutural, então a régua é a PROIBIÇÃO do apelido, verificada pela enumeração acima
+       * sobre os arquivos reais. Aqui se prova que a regex do apelido ACUSA as duas formas.
+       */
+      const apelido = (f: string): boolean =>
+        /(?:const|let|var)\s+\w+\s*(?::[^=\n]*)?=\s*dadosVagaFolha\s*[;,)\n]/.test(f) ||
+        /dadosVagaFolha\s+as\s+\w+/.test(f);
+      expect(apelido("const t = dadosVagaFolha;\n")).toBe(true);
+      expect(apelido("import { dadosVagaFolha as t } from './schema';")).toBe(true);
+      // E NÃO acusa o uso normal, que é o que mantém a varredura utilizável.
+      expect(apelido("await tx.update(dadosVagaFolha).set({ escala: null });")).toBe(false);
+      expect(apelido("eq(dadosVagaFolha.admissaoId, id)")).toBe(false);
+    });
+  });
+});
+
+describe("A MIGRATION 0140 e o CODIGO dizem a MESMA coisa, provado contra o .sql", () => {
+  /**
+   * ═══ POR QUE ESTE BLOCO EXISTE, e por que ele é mais necessário aqui que no normal ═══
+   *
+   * Há DUAS listas do mesmo dado: o `CHECK` da migration, no banco, e `SALARIO_UNIDADES_EA`, no código.
+   * Duas listas do mesmo dado divergem no primeiro ajuste, e divergem **CALADAS**: a tela ofertaria uma
+   * unidade que o `INSERT` recusa (erro de banco na cara do time), ou o CHECK aceitaria um valor que
+   * `tipoSalarioGi` não traduz (sai NULO no envio, e a admissão é recusada sem ninguém entender por quê).
+   *
+   * E AQUI NÃO HÁ A REDE DE SEGURANÇA DE SEMPRE: **a 0140 não está aplicada em NENHUM dos dois bancos**
+   * (produção nem homologação, conferido em 01/10/2026). Então a divergência não apareceria usando o
+   * sistema, porque a coluna ainda não existe em lugar nenhum. Quando ela existir, o primeiro a descobrir
+   * seria o time, no meio de um cadastro. Este teste é a única coisa que olha os dois lados hoje.
+   *
+   * ⚠️ OS COMENTÁRIOS DO `.sql` SÃO REMOVIDOS ANTES DE QUALQUER ASSERÇÃO, e isso não é zelo: a 0140 é
+   * quase toda comentário, e os comentários CITAM os sete valores, as letras do fornecedor e os números
+   * 744 e 168. Asserir sobre o texto cru daria verde lendo a prosa em vez do `CHECK`, que é o falso
+   * VERDE, o pior dos dois. (Memória da fábrica: varredura de fonte casa comentário.)
+   */
+  const SQL = (() => {
+    const bruto = readFileSync(
+      join(__dirname, "..", "..", "drizzle", "0140_dados_vaga_folha_salario_unidade.sql"),
+      "utf8",
+    );
+    return bruto
+      .split("\n")
+      .map((l) => l.replace(/--.*$/, ""))
+      .join("\n");
+  })();
+
+  it("o CHECK da unidade tem EXATAMENTE as unidades do codigo, na mesma ordem", () => {
+    const m = /ck_dados_vaga_folha_salario_unidade[\s\S]*?IN \(([^)]*)\)/.exec(SQL);
+    expect(m, "o CHECK da unidade existe na 0140 (fora dos comentarios)").not.toBeNull();
+    const doBanco = (m?.[1] ?? "").split(",").map((v) => v.trim().replace(/^'|'$/g, ""));
+    expect(doBanco).toEqual([...SALARIO_UNIDADES_EA]);
+  });
+
+  it("o CHECK da unidade aceita NULO, que e o unico valor honesto para as 2.595 linhas existentes", () => {
+    // `NOT NULL DEFAULT 'MENSAL'` falsearia auditoria que ninguém fez nas 7 horistas medidas.
+    expect(/ck_dados_vaga_folha_salario_unidade[\s\S]*?IS NULL OR/.test(SQL)).toBe(true);
+    expect(/"salario_unidade"\s+varchar\(10\)(?!\s+not null)/i.test(SQL)).toBe(true);
+  });
+
+  it("os tetos de jornada do CHECK sao os MESMOS do codigo, e sao FISICOS", () => {
+    // 744 = 31×24 e 168 = 7×24. O teto da CLT (220/44) NÃO entra: jornada acima dele é legítima em
+    // regime próprio, e CHECK trabalhista viraria erro de banco anos depois.
+    expect(TETO_FISICO_JORNADA).toEqual({ mes: 744, sem: 168 });
+    const teto = (coluna: string): number | null => {
+      const m = new RegExp(`"${coluna}"\\s*<=\\s*(\\d+)`).exec(SQL);
+      return m ? Number(m[1]) : null;
+    };
+    expect(teto("jornada_horas_mes")).toBe(TETO_FISICO_JORNADA.mes);
+    expect(teto("jornada_horas_sem")).toBe(TETO_FISICO_JORNADA.sem);
+    // E o ZERO é recusado nos dois, porque zero aqui é o `default 0` do fornecedor, que é o dano.
+    expect(/"jornada_horas_mes"\s*>\s*0/.test(SQL)).toBe(true);
+    expect(/"jornada_horas_sem"\s*>\s*0/.test(SQL)).toBe(true);
+  });
+
+  it("as colunas que a 0140 cria sao as que o schema declara, e nenhuma nasce NOT NULL", () => {
+    // Coluna nova com `NOT NULL DEFAULT` reescreveria as 2.595 linhas com salário e, pior que o custo,
+    // falsearia auditoria que ninguém fez (§A.16 preserva o histórico da carga).
+    for (const c of [
+      "salario_unidade",
+      "salario_auditado_em",
+      "salario_auditado_por",
+      "jornada_horas_mes",
+      "jornada_horas_sem",
+    ]) {
+      expect(SQL, `a 0140 cria ${c}`).toContain(`ADD COLUMN IF NOT EXISTS "${c}"`);
+    }
+    expect(/ADD COLUMN IF NOT EXISTS "[^"]+" [^;]*not null/i.test(SQL)).toBe(false);
   });
 });

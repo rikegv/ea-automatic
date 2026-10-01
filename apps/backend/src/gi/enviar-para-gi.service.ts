@@ -39,6 +39,34 @@ export type GiEnvioMotivo =
    * folha é salário ERRADO, não campo vazio. §A.6: o motivo é código fechado e **não carrega o valor**.
    */
   | "GI_SALARIO_INVALIDO"
+  /**
+   * RECUSA DURA: o salário é válido e **ninguém declarou a UNIDADE** (por HORA ou MENSAL). O
+   * `tipoSalario` do GI tem `default 'M'` (Mês), e medido na produção em 01/10/2026 há **7 admissões
+   * VIVAS com `9,34` e `10,90`**, que são valores de HORA: sem a declaração, as 7 entram na folha como
+   * salário MENSAL de R$ 9,34, em silêncio, passando por todas as outras guardas (§A.33).
+   *
+   * Regra permanente do diretor: **nenhum salário é gravado na folha sem auditoria do time.** Dedução
+   * por faixa de valor está VETADA. Destrava-se declarando `dados_vaga_folha.salario_unidade` (0140),
+   * que é o próprio ato de auditoria. §A.6: o motivo é código fechado e **não carrega o valor**.
+   */
+  | "GI_SALARIO_SEM_UNIDADE"
+  /**
+   * RECUSA DURA: a unidade FOI declarada e é **HORA**, e **falta a JORNADA** em horas que o GI exige junto.
+   * Medido no contrato: ao lado de `salario`/`tipoSalario` existem `salarioHora`, `qtdeHorasMes` e
+   * `qtdeHorasSem`, **todos com default `0`**, e o EA emite só os campos nomeados da allowlist. Então
+   * `tipoSalario = 'H'` sem jornada gravaria um horista com ZERO horas por mês: deixaria de ser "9,34
+   * mensal" para ser "9,34 por hora vezes 0 horas", que é outro valor errado, pela MESMA falha de default
+   * `0` em campo de folha.
+   *
+   * ⚠️ **PENDÊNCIA PREENCHÍVEL, NÃO RECUSA PERPÉTUA, e foi isso que a 0140 mudou.** Antes dela o EA não
+   * tinha jornada em lugar nenhum (`escala` é texto livre, `tempo_contrato` é vigência em dias), então o
+   * horista auditado era recusado PARA SEMPRE, e **uma admissão que o time auditou e que o sistema recusa
+   * para sempre é indistinguível de uma admissão quebrada**: ninguém sabe o que preencher. Agora existem
+   * `dados_vaga_folha.jornada_horas_mes` e `jornada_horas_sem`, o motivo NOMEIA o que falta, e informar a
+   * jornada destrava o envio. **AS DUAS são exigidas** (mensal sem semanal grava contradição no
+   * fornecedor), e só para o `H`. §A.6: o motivo não carrega valor, nem salário nem horas.
+   */
+  | "GI_SALARIO_HORISTA_SEM_JORNADA"
   | "GI_ENVIADO"
   | "GI_FALHA_ENVIO";
 
@@ -57,6 +85,12 @@ const MOTIVO_RECUSA_CONTRATACAO: Record<GiRecusaContratacao, string> = {
   GI_PAR_EMPRESA_FILIAL_DESCONHECIDO:
     "GI: o par empresa/filial nao consta da lista autoritativa do GI (GI_PARES_EMPRESA_FILIAL): envio RECUSADO.",
   GI_SALARIO_INVALIDO: "GI: salario ausente ou fora de faixa para a folha: envio RECUSADO.",
+  GI_SALARIO_SEM_UNIDADE:
+    "GI: unidade do salario nao declarada pelo time (hora ou mensal): envio RECUSADO.",
+  // A FRASE DIZ O QUE FALTA, nao so que recusou: e a diferenca entre pendencia preenchivel e admissao
+  // que parece quebrada. §A.6: nenhum valor, nem o salario nem as horas.
+  GI_SALARIO_HORISTA_SEM_JORNADA:
+    "GI: salario declarado por HORA e a jornada em horas nao esta informada (mensal e semanal, dados_vaga_folha.jornada_horas_mes/sem): envio RECUSADO, preencha a jornada.",
 };
 
 /**
@@ -137,7 +171,8 @@ export class EnviarParaGiService {
    *   4. monta o payload: pessoa (allowlist 1) + contratação (allowlist 2), com o de/para de cidade.
    *   5. disparo DESARMADO → PARA aqui. `GI_MONTADO_NAO_DISPARADO` (estado desta entrega).
    *   6. contratação incompleta → RECUSA sem tocar a rede: `GI_SEM_EMPRESA_FILIAL`,
-   *      `GI_PAR_EMPRESA_FILIAL_DESCONHECIDO` ou `GI_SALARIO_INVALIDO`.
+   *      `GI_PAR_EMPRESA_FILIAL_DESCONHECIDO`, `GI_SALARIO_INVALIDO`, `GI_SALARIO_SEM_UNIDADE` ou
+   *      `GI_SALARIO_HORISTA_SEM_JORNADA`.
    *   7. disparo ARMADO    → cria no GI e carimba a idempotência. `GI_ENVIADO` / `GI_FALHA_ENVIO`.
    *
    * POR QUE AS GUARDAS DA CONTRATAÇÃO VÊM NO PASSO 6, e não antes do 5: a trava `GI_DISPARO_ARMADO` é a
@@ -161,11 +196,12 @@ export class EnviarParaGiService {
       return { enviado: false, motivo: "GI_SEM_DADOS_PESSOA" };
     }
 
-    // Os SEIS campos de contratação (salário, data de admissão, vínculo, prazo, empresa+filial), por
-    // porta própria e recorte explícito de colunas. Ausentes, saem nulos e as guardas do passo 6 recusam.
+    // Os NOVE campos de contratação (salário, unidade, jornada mensal e semanal, data de admissão,
+    // vínculo, prazo, empresa+filial), por porta própria e recorte explícito de colunas. Ausentes, saem
+    // nulos e as guardas do passo 6 recusam.
     const contratacao = await this.leitor.lerContratacao(admissaoId);
 
-    // Monta o payload das DUAS allowlists FECHADAS (pessoa + os seis campos nomeados) com o de/para de
+    // Monta o payload das DUAS allowlists FECHADAS (pessoa + os nove campos nomeados) com o de/para de
     // cidade. O objeto carrega PII E SALÁRIO: não é logado, não é retornado, morre no escopo do método.
     const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined);
 
@@ -181,6 +217,12 @@ export class EnviarParaGiService {
     // omissão faz o fornecedor gravar `0` e criar registro órfão, calado. A validação do PAR entra junto,
     // porque campo a campo não pega `1/37` (válido nos dois campos, inexistente no GI). E salário
     // zero/negativo é salário ERRADO indo para a folha, não campo vazio.
+    // E A UNIDADE DO SALÁRIO ENTRA AQUI PELO MESMO MOTIVO: o `tipoSalario` do GI tem `default 'M'`, então
+    // salário de HORA enviado sem declaração vira salário MENSAL na folha sem nada falhar. Não se deduz
+    // pela faixa do valor (vetado) e não se cai no default: recusa, e o time declara (0140). E declarar
+    // HORA recusa ENQUANTO a jornada não estiver informada: o `H` exige `qtdeHorasMes` e `qtdeHorasSem`
+    // (default `0` nos dois), que desde a 0140 o EA tem colunas para guardar. É pendência preenchível, e
+    // o motivo nomeia a jornada em vez de só recusar.
     // §A.6: o log diz o MOTIVO e nada mais. Nenhum valor, nenhum id de pessoa, nenhuma remuneração.
     // O predicado do PAR tem TIPO PROPRIO (`ParEmpresaFilialConhecido`) e e injetado AQUI, no servico que
     // o usa, nao em `DeParaGi` (que e o contrato do MONTADOR, e o montador nao valida par). Chamada

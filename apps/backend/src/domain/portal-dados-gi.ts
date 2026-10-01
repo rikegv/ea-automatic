@@ -108,8 +108,13 @@ export function dadoGiExpirado(expurgarEm: Date | null, agora: Date): boolean {
  * ANTES: "só dado de PESSOA atravessa para o GI; salário e situação trabalhista NUNCA".
  *
  * AGORA: **dado de PESSOA, MAIS os campos de CONTRATAÇÃO nomeados em `ContratacaoGi`, e NADA MAIS.**
- * São seis: `salario`, `dataAdmissao`, `vinculo`, `tipoContrato` (o PRAZO do GI, derivado do vínculo),
- * `codigoEmpresa` e `codigoFilial`.
+ * São SETE: `salario`, `tipoSalario` (a UNIDADE do salário), `dataAdmissao`, `vinculo`, `tipoContrato`
+ * (o PRAZO do GI, derivado do vínculo), `codigoEmpresa` e `codigoFilial`.
+ *
+ * O SÉTIMO ENTROU EM 01/10/2026, e ele é CORREÇÃO DE BLOQUEIO, não campo a mais: `tipoSalario` tem
+ * `default 'M'` (Mês) no GI, e o EA tem 7 admissões VIVAS com salário de HORA (`9,34` e `10,90`). Sem
+ * declarar a unidade, aquelas 7 entrariam na folha como salário MENSAL de R$ 9,34, em silêncio
+ * (§A.33). Ver `tipoSalarioGi` e a recusa `GI_SALARIO_SEM_UNIDADE`.
  *
  * O QUE **NÃO** MUDOU, e é a metade que importa: as allowlists continuam **FECHADAS**. De
  * `dados_vaga_folha`, que tem dezenas de colunas, atravessa **SÓ o `salario`**: benefícios, escala,
@@ -177,7 +182,11 @@ export interface PessoaParaGi {
 }
 
 /**
- * ═══ ALLOWLIST 2: os SEIS campos de CONTRATAÇÃO, e SÓ eles ═══
+ * ═══ ALLOWLIST 2: os NOVE campos de CONTRATAÇÃO, e SÓ eles ═══
+ *
+ * Eram SETE até 01/10/2026; a JORNADA (`qtdeHorasMes`, `qtdeHorasSem`) entrou com a 0140, autorizada
+ * pelo diretor, porque sem ela o `tipoSalario = 'H'` grava horista com ZERO horas (ver `tipoSalarioGi`).
+ * **`salarioHora` NÃO entrou**, e a ausência é deliberada e justificada lá, não um campo esquecido.
  *
  * TIPO PRÓPRIO, SEPARADO DE `PessoaParaGi` de propósito (ver o invariante no topo do bloco).
  *
@@ -189,6 +198,40 @@ export interface PessoaParaGi {
 export interface ContratacaoGi {
   /** `double` no GI (nullable, default `0`). Nulo aqui = NÃO RESOLVIDO, e o envio é RECUSADO. */
   salario: number | null;
+  /**
+   * A UNIDADE do salário: `tipoSalario` do GI, 1 caractere, **`default 'M'` (Mês)**. O EA traduz `HORA`
+   * para `H` e `MENSAL` para `M`.
+   *
+   * TRÊS DESFECHOS, e são os SETE valores, não dois:
+   *  - `M`, `D`, `Q`, `A`, `C`, `T` → **ENVIAM**. Cada um diz o período inteiro no próprio par
+   *    valor+unidade, e não exige nada ao lado.
+   *  - `H` → envia **se a JORNADA estiver informada**; sem ela, **RECUSA**
+   *    (`GI_SALARIO_HORISTA_SEM_JORNADA`): o GI precisa de `qtdeHorasMes` e `qtdeHorasSem`, os dois com
+   *    default `0`, e desde a 0140 o EA TEM as colunas para guardá-los. É pendência preenchível, não
+   *    recusa perpétua. Ver `tipoSalarioGi`.
+   *  - `null` (ninguém declarou) → **RECUSA** (`GI_SALARIO_SEM_UNIDADE`): cair no default do fornecedor
+   *    é justamente o dano.
+   *
+   * O `H` SEM JORNADA ATRAVESSA ATÉ O PAYLOAD DE PROPÓSITO, mesmo recusando: é ele que permite à guarda
+   * dizer o motivo CERTO ("é horista e falta a jornada") em vez do motivo errado ("ninguém declarou").
+   * Quem impede o envio é a recusa encostada no `POST`, não o esvaziamento do campo, exatamente como
+   * empresa e filial nulas são marca interna e nunca valor a enviar.
+   */
+  tipoSalario: TipoSalarioGi | null;
+  /**
+   * A JORNADA em horas (`qtdeHorasMes` / `qtdeHorasSem` no GI), os dois `double` com **`default 0`**.
+   *
+   * SÓ SÃO EXIGIDOS QUANDO A UNIDADE É `H`, e isso é recorte medido, não economia: o `H` é a única
+   * unidade cujo valor **não fecha sozinho** (preço da hora sem quantidade de horas não é remuneração).
+   * `M`, `D`, `Q`, `A`, `C` e `T` dizem o período inteiro no próprio par valor+unidade.
+   *
+   * Nulo é "não informado", **nunca `0`**: zero aqui é o default do fornecedor, que é o dano.
+   *
+   * ⚠️ OS DOIS, OU NENHUM. Jornada mensal preenchida ao lado de semanal zerada é contradição gravada na
+   * folha. Quem exige o par é `recusaDaContratacaoGi`.
+   */
+  qtdeHorasMes: number | null;
+  qtdeHorasSem: number | null;
   /** `date-time` no GI. "YYYY-MM-DD", que é o que uma coluna `date` entrega e o GI já aceita. */
   dataAdmissao: string | null;
   /** `vinculo` do GI: 1 caractere, tabela fechada de 18 valores. Nulo quando não se reconhece. */
@@ -206,6 +249,9 @@ export interface ContratacaoGi {
 /** Contratação TODA nula: o default quando não se leu contratação nenhuma. Tudo nulo = tudo recusado. */
 export const CONTRATACAO_GI_VAZIA: ContratacaoGi = {
   salario: null,
+  tipoSalario: null,
+  qtdeHorasMes: null,
+  qtdeHorasSem: null,
   dataAdmissao: null,
   vinculo: null,
   tipoContrato: null,
@@ -318,18 +364,46 @@ export function mapearVinculoGi(tipoContrato: string | null | undefined): string
  * "indeterminado" ao lado, contraditório e silencioso. Então o prazo é **DERIVADO DO VÍNCULO**, aqui, e
  * não coletado em lugar nenhum: assim a contradição é estruturalmente impossível, não só improvável.
  *
- * O ACOPLAMENTO, que é o invariante testado: **`1` obriga `I`** e **`7` obriga `D`**.
+ * O ACOPLAMENTO, que é o invariante testado: **`1` obriga `I`**, e **`D` tem QUATRO origens**.
  *
- * ❓ PERGUNTA AO DIRETOR, de propósito FORA da tabela: `4` (Temporário), `J` (Estágio) e `H` (Aprendiz)
- * saem com o prazo **NULO**, e o GI aplica o default `I` dele, que é EXATAMENTE o que já acontece hoje
- * (o EA nunca emitiu este campo). Não se inventa regra de folha: enquanto o diretor não decidir o prazo
- * desses três regimes, nada muda em relação ao comportamento atual. O `7` (CLT Prazo Determinado)
- * também não é emitido por ninguém hoje: depende da decisão sobre `dados_vaga_folha.tempo_contrato`, e
- * o acoplamento já está pronto e testado para quando ela vier.
+ * ═══ RESPONDIDO PELO DIRETOR EM 01/10/2026: `D` PASSOU A TER QUATRO ORIGENS, NÃO UMA ═══
+ *
+ * ANTES, e estava ERRADO: `4` (Temporário), `J` (Estagiário) e `H` (Menor Aprendiz) saíam com o prazo
+ * **NULO**. A redação de então dizia que nulo "preserva o comportamento de hoje", e isso é verdade
+ * sobre o EA e **falso sobre a folha**: o campo tem `default 'I'` no GI, então nulo não deixa o campo
+ * vazio, **faz o fornecedor gravar `I` (Indeterminado)**. Os três são contratos COM PRAZO (Lei 6.019,
+ * Lei 11.788, Lei 10.097), logo o silêncio do EA produzia o prazo ERRADO para os três, calado. Não
+ * decidir não era neutro: era decidir pelo default do fornecedor.
+ *
+ * AGORA, por decisão do diretor, a tabela está FECHADA e completa:
+ *
+ *     `1` Contrato CLT             → `I`
+ *     `4` Temporário               → `D`   (passou a sair; antes nulo → `I` por default)
+ *     `7` CLT Prazo Determinado    → `D`
+ *     `J` Estagiário               → `D`   (passou a sair; antes nulo → `I` por default)
+ *     `H` Menor Aprendiz           → `D`   (passou a sair; antes nulo → `I` por default)
+ *
+ * ⚠️ POR QUE O TESTE DO SENTIDO INVERSO MUDOU DE EXPECTATIVA, e não "quebrou": ele exigia que `D`
+ * saísse **só** do `7`, porque naquele momento essa era a regra inteira. A trava que ele existe para dar
+ * continua valendo e continua testada, só com a lista certa: **`D` sai de `{4, 7, J, H}` e de mais
+ * nada; `I` sai só do `1`; todo outro vínculo sai NULO.** O que o teste pega é a tabela editada pela
+ * metade (alguém dar `D` a um vínculo que não é desses quatro, ou trocar o prazo do `1`), e isso ele
+ * segue pegando. O acoplamento `1 → I` e `7 → D` não foi tocado.
+ *
+ * O PRAZO SEGUE DERIVADO DO VÍNCULO, e isso é o que importa preservar: não é coletado em lugar nenhum,
+ * então "vínculo a prazo determinado com prazo indeterminado ao lado" continua estruturalmente
+ * impossível. `dados_vaga_folha.tempo_contrato` **não** é lido aqui.
  */
+const PRAZO_DETERMINADO_POR_VINCULO: ReadonlySet<string> = new Set([
+  "4", // Temporário (Lei 6.019): regime próprio, com prazo.
+  "7", // CLT Prazo Determinado: o nome do vínculo já é o prazo.
+  "J", // Estagiário (Lei 11.788): termo de compromisso com vigência.
+  "H", // Menor Aprendiz (Lei 10.097): contrato de aprendizagem com prazo.
+]);
+
 export function prazoContratoGi(vinculo: string | null | undefined): "D" | "I" | null {
   if (vinculo === "1") return "I";
-  if (vinculo === "7") return "D";
+  if (typeof vinculo === "string" && PRAZO_DETERMINADO_POR_VINCULO.has(vinculo)) return "D";
   return null;
 }
 
@@ -348,6 +422,162 @@ export function prazoContratoGi(vinculo: string | null | undefined): "D" | "I" |
 function salarioGi(v: unknown): number | null {
   const bruto = typeof v === "number" ? v : Number((typeof v === "string" ? v.trim() : "") || NaN);
   return Number.isFinite(bruto) && bruto > 0 ? bruto : null;
+}
+
+/**
+ * ═══ A UNIDADE DO SALÁRIO, E POR QUE ELA É BLOQUEIO DE DISPARO ═══
+ *
+ * O VALOR SOZINHO NÃO DIZ NADA. `dados_vaga_folha.salario` é um `numeric(12,2)` sem unidade, e medido
+ * na produção em 01/10/2026 há **7 admissões VIVAS com `9,34` (2) e `10,90` (5)**, que são valores de
+ * HORA, mais **72 linhas abaixo de 100** na base inteira. No GI, `tipoSalario` tem **`default 'M'`
+ * (Mês)**: enviar o salário sem a unidade faz aquelas 7 entrarem na folha como **salário MENSAL de
+ * R$ 9,34 e R$ 10,90**, passando por todas as guardas que já existem (valor positivo, empresa e filial
+ * resolvidas, par conhecido). É a família da §A.33: o fornecedor responde sucesso, o EA carimba o
+ * envio, nada falha, e o erro aparece no holerite.
+ *
+ * ⚠️ **NUNCA SE DEDUZ A UNIDADE, E NUNCA SE CAI NO DEFAULT.** Heurística por faixa de valor está
+ * VETADA (casamento aproximado sobre remuneração, erra calado nos dois sentidos: horista de R$ 120 e
+ * mensalista de R$ 90 existem). E o `default 'M'` do fornecedor é o próprio dano, não um fallback: por
+ * isso a ausência vira NULO aqui e **RECUSA** lá (`GI_SALARIO_SEM_UNIDADE`), encostada no `POST`.
+ * Regra permanente do diretor: nenhum salário é gravado na folha sem auditoria do time, e DECLARAR a
+ * unidade É esse ato de auditoria (as três colunas da 0140 são carimbadas juntas).
+ *
+ * ═══ SÃO AS **SETE** DO FORNECEDOR, E A VERSÃO DE DUAS ERA PIOR QUE NÃO TER COLUNA ═══
+ *
+ * A lista do GI tem SETE valores, conferidos na `description` de `TB_FuncionarioSelecaoAPI` em
+ * 01/10/2026: `A` Aula (Professor), `C` Comissão, `D` Dia, `H` Hora, `M` Mês, `Q` Quinzenal, `T` Tarefa.
+ * O rascunho desta frente oferecia **só `HORA` e `MENSAL`**, e o desfecho disso é o oposto do objetivo:
+ * sem `DIA` e sem `QUINZENAL`, o diarista e o quinzenalista **não têm onde se declarar**, e diante de
+ * duas opções erradas o time marca `MENSAL`. Aí o valor errado passa a carregar **um selo dizendo que
+ * alguém conferiu**, e isso é pior que a ausência de selo: o selo desliga a desconfiança de quem lê
+ * depois. **Escolha binária obrigatória FABRICA declaração falsa.** Com as sete, declarar a verdade é
+ * sempre possível, e o selo volta a significar o que diz.
+ *
+ * O de/para segue sendo um `Record` FECHADO sobre a união do EA (mesmo padrão de
+ * `VINCULO_GI_POR_TIPO_SERVICO`): unidade nova no banco **não compila** sem decisão humana. A diferença
+ * é que agora não se espera unidade nova nenhuma, porque a lista é a do fornecedor INTEIRA.
+ *
+ * ═══ `H` EXIGE A JORNADA, E DESDE A 0140 ISSO É PENDÊNCIA PREENCHÍVEL, NÃO BECO ═══
+ *
+ * Medido no contrato: ao lado de `salario` e `tipoSalario` existem **`salarioHora`**, **`qtdeHorasMes`**
+ * e **`qtdeHorasSem`**, os três `double` anuláveis **com `default 0`**. O EA emite SÓ os campos nomeados
+ * nas duas allowlists, e o resto do payload assume o default do fornecedor. Então `tipoSalario = 'H'`
+ * sem jornada grava um horista com **ZERO horas por mês**: troca "R$ 9,34 por mês" por "R$ 9,34 por hora
+ * vezes 0 horas", que não é melhor, é outro valor errado, pela MESMA falha de `default 0` que o
+ * `salarioGi` deste arquivo já recusa no valor.
+ *
+ * **A 0140 TROUXE A JORNADA** (`dados_vaga_folha.jornada_horas_mes` e `jornada_horas_sem`), e com ela o
+ * desfecho mudou de natureza. Antes, horista auditado era recusado PARA SEMPRE, e **uma admissão que o
+ * time auditou e que o sistema recusa para sempre é indistinguível de uma admissão quebrada**: não há o
+ * que preencher nem o que corrigir. Agora a recusa (`GI_SALARIO_HORISTA_SEM_JORNADA`) **nomeia o que
+ * falta** e se resolve informando a jornada. §A.6: o motivo continua sem carregar valor nenhum.
+ *
+ * ⚠️ **NÃO SE DERIVA UMA JORNADA DA OUTRA.** 44 h/semana para 220 h/mês usa o fator 30/7 e o DSR, que é
+ * convenção de folha, varia por acordo coletivo, e derivar aqui seria o mesmo "casamento aproximado
+ * sobre remuneração" que foi vetado para a unidade. As duas são COLETADAS, e as duas são exigidas
+ * juntas: 220 h/mês ao lado de ZERO h/semana é contradição gravada na folha, não campo vazio.
+ *
+ * ⚠️ **`salarioHora` FICA FORA DA ALLOWLIST, e é decisão fail-closed, não esquecimento.** O contrato não
+ * descreve o campo (sem `description`, só `double` default `0`), e em folha brasileira "valor hora"
+ * costuma ser DERIVADO (salário ÷ horas do mês) para calcular hora extra, não insumo de cadastro. O par
+ * `salario` + `tipoSalario` já diz "9,34 por hora" por inteiro; escrever o mesmo número TAMBÉM em
+ * `salarioHora` seria o EA afirmando algo sobre um campo cuja semântica não mediu, e **mandar os dois
+ * errado é tão ruim quanto mandar zero**. Fica com o default do fornecedor, e a conta é dele.
+ * **PENDÊNCIA REGISTRADA, não resolvida:** se o time de folha confirmar que o GI lê `salarioHora` em vez
+ * de `salario` para o horista, isto muda, e muda com uma linha na allowlist 2.
+ */
+export type SalarioUnidadeEa =
+  | "AULA"
+  | "COMISSAO"
+  | "DIA"
+  | "HORA"
+  | "MENSAL"
+  | "QUINZENAL"
+  | "TAREFA";
+
+/** O `tipoSalario` do GI: 1 caractere, os SETE da `description` do contrato. */
+export type TipoSalarioGi = "A" | "C" | "D" | "H" | "M" | "Q" | "T";
+
+/**
+ * As unidades que o EA declara (`dados_vaga_folha.salario_unidade`), e o CHECK do banco espelha.
+ *
+ * ORDEM ALFABÉTICA, que é a mesma do CHECK da 0140 de propósito: a conferência entre a lista do código
+ * e a do banco passa a ser leitura direta, em vez de busca.
+ */
+export const SALARIO_UNIDADES_EA: readonly SalarioUnidadeEa[] = [
+  "AULA",
+  "COMISSAO",
+  "DIA",
+  "HORA",
+  "MENSAL",
+  "QUINZENAL",
+  "TAREFA",
+];
+
+/**
+ * De/para da unidade do EA para o `tipoSalario` do GI. `Record` FECHADO de propósito (ver acima).
+ *
+ * A COLUNA GUARDA O VOCABULÁRIO DO EA, NÃO A LETRA DO FORNECEDOR, pelo mesmo motivo que
+ * `admissoes.tipo_contrato` não guarda o `vinculo` do GI: letra do fornecedor no nosso banco amarra a
+ * coluna ao contrato dele, e o dia em que o alfabeto mudar a coluna vira lixo sem nada falhar.
+ */
+const TIPO_SALARIO_GI_POR_UNIDADE: Record<SalarioUnidadeEa, TipoSalarioGi> = {
+  AULA: "A", // `A` Aula (Professor)
+  COMISSAO: "C", // `C` Comissao
+  DIA: "D", // `D` Dia
+  HORA: "H", // `H` Hora  ← a única que exige jornada junto (ver acima)
+  MENSAL: "M", // `M` Mês  ← o `default` do fornecedor, e por isso o nulo não pode virar ele
+  QUINZENAL: "Q", // `Q` Quinzenal
+  TAREFA: "T", // `T` Tarefa
+};
+
+/**
+ * `dados_vaga_folha.salario_unidade` (varchar livre, do ponto de vista do TypeScript) para o
+ * `tipoSalario` do GI. Desconhecido, vazio ou ausente: **null**, nunca um palpite e nunca o default do
+ * fornecedor. Normaliza só caixa e espaço de borda: a coluna tem CHECK no banco, então grafia criativa
+ * aqui é sinal de que alguém escreveu por fora, e o desfecho seguro é recusar.
+ */
+export function tipoSalarioGi(unidade: string | null | undefined): TipoSalarioGi | null {
+  const t = (typeof unidade === "string" ? unidade : "").trim().toUpperCase();
+  return (TIPO_SALARIO_GI_POR_UNIDADE as Record<string, TipoSalarioGi | undefined>)[t] ?? null;
+}
+
+/**
+ * ═══ REDE DE RUNTIME DA UNIDADE (mesmo padrão de `vinculoGiValido`/`prazoGiValido`) ═══
+ *
+ * O TIPO NÃO BASTA na fronteira do payload: um `as`, um `JSON.parse` ou uma leitura nova de banco
+ * fariam `"MENSAL"` (o vocabulário do EA!) atravessar para um campo de 1 caractere, e o GI aceitaria
+ * a letra `M`... ou gravaria lixo, dependendo do que ele faça com os 5 caracteres restantes. O
+ * conjunto permitido é DERIVADO do de/para, nunca recopiado: unidade nova autorizada no `Record` passa
+ * a ser emitível sozinha, em vez de sair NULA em silêncio por esquecimento de uma segunda lista.
+ */
+function tipoSalarioGiValido(v: unknown): TipoSalarioGi | null {
+  const emitiveis = new Set<unknown>(Object.values(TIPO_SALARIO_GI_POR_UNIDADE));
+  return emitiveis.has(v) ? (v as TipoSalarioGi) : null;
+}
+
+/**
+ * ═══ REDE DE RUNTIME DA JORNADA, e ela é a MESMA régua do CHECK da 0140, de propósito ═══
+ *
+ * `qtdeHorasMes`/`qtdeHorasSem` são `double` no GI com **`default 0`**, e no EA a coluna é
+ * `numeric(6,2)`, que o Drizzle entrega como **STRING**. Então aqui há duas conversões a errar: texto
+ * que não é número, e o ZERO, que neste campo **não é "informado como zero"**, é exatamente o default do
+ * fornecedor que a frente existe para não reproduzir. Os dois viram `null`, e `null` RECUSA.
+ *
+ * O TETO É FÍSICO, NÃO TRABALHISTA (744 = 31×24, 168 = 7×24), espelhando o CHECK do banco: jornada acima
+ * do teto da CLT é legítima em regime próprio, e o que a régua precisa pegar é o 2200 digitado no lugar
+ * de 220. Fail-closed em todos os degraus.
+ */
+export const TETO_FISICO_JORNADA = {
+  /** 31 × 24: o máximo de horas que EXISTE num mês. Espelha `ck_dados_vaga_folha_jornada_horas_mes`. */
+  mes: 744,
+  /** 7 × 24: o máximo de horas que EXISTE numa semana. Espelha `ck_dados_vaga_folha_jornada_horas_sem`. */
+  sem: 168,
+} as const;
+
+function jornadaHorasGi(v: unknown, tetoFisico: number): number | null {
+  const bruto = typeof v === "number" ? v : Number((typeof v === "string" ? v.trim() : "") || NaN);
+  return Number.isFinite(bruto) && bruto > 0 && bruto <= tetoFisico ? bruto : null;
 }
 
 /**
@@ -441,6 +671,18 @@ function inteiroNaFaixaInt16(v: unknown, padrao: RegExp): number | null {
 export interface EntradaContratacaoGi {
   /** `dados_vaga_folha.salario` (`numeric(12,2)`), que o Drizzle entrega como STRING. */
   salario?: string | number | null;
+  /**
+   * `dados_vaga_folha.salario_unidade` (`varchar(10)`, 0140): `HORA` ou `MENSAL`, DECLARADO pelo time.
+   * Ausente ou nulo é "ninguém declarou", e o envio é RECUSADO. Ver `tipoSalarioGi`.
+   */
+  salarioUnidade?: string | null;
+  /**
+   * `dados_vaga_folha.jornada_horas_mes` / `jornada_horas_sem` (`numeric(6,2)`, 0140), que o Drizzle
+   * entrega como STRING. Só importam quando a unidade é `HORA`; nas demais são repassadas se existirem
+   * (jornada informada é melhor que o `default 0` do fornecedor) e a ausência não recusa.
+   */
+  jornadaHorasMes?: string | number | null;
+  jornadaHorasSem?: string | number | null;
   /** `admissoes.data_admissao` (`date`), que o Drizzle entrega como "YYYY-MM-DD". */
   dataAdmissao?: string | null;
   /** `admissoes.tipo_contrato`, TEXTO LIVRE `varchar(60)`. */
@@ -465,6 +707,12 @@ export function montarContratacaoGi(
   const empresaFilial = resolverEmpresaFilialGi(e.vinculos, e.tipoContrato);
   return {
     salario: salarioGi(e.salario),
+    // A UNIDADE é DECLARADA, nunca deduzida do valor. Não declarada: nulo, e a guarda do envio recusa.
+    tipoSalario: tipoSalarioGi(e.salarioUnidade),
+    // A JORNADA é INFORMADA, nunca derivada (nem uma da outra, nem da `escala`): ver `jornadaHorasGi`.
+    // Zero e fora de faixa física caem para nulo, porque zero aqui É o default que faz o dano.
+    qtdeHorasMes: jornadaHorasGi(e.jornadaHorasMes, TETO_FISICO_JORNADA.mes),
+    qtdeHorasSem: jornadaHorasGi(e.jornadaHorasSem, TETO_FISICO_JORNADA.sem),
     dataAdmissao: limpo(e.dataAdmissao ?? null),
     vinculo,
     tipoContrato: prazoContratoGi(vinculo),
@@ -566,7 +814,7 @@ export interface FuncionarioSelecao {
   agencia: string | null;
   contaCorrente: string | null;
 
-  // ══ OS SEIS CAMPOS DE CONTRATAÇÃO (allowlist 2, autorizada pelo diretor em 01/10/2026) ═════════
+  // ══ OS SETE CAMPOS DE CONTRATAÇÃO (allowlist 2, autorizada pelo diretor em 01/10/2026) ═════════
   // Vêm de `ContratacaoGi`, JÁ traduzidos e validados, nunca do objeto de PESSOA.
 
   /**
@@ -575,6 +823,29 @@ export interface FuncionarioSelecao {
    * NUNCA logado.
    */
   salario: number | null;
+  /**
+   * A UNIDADE do salário (`H` Hora / `M` Mês). **O campo tem `default 'M'` no GI**, e é esse default que
+   * faria as 7 horistas medidas (`9,34` e `10,90`) entrarem na folha como salário MENSAL.
+   *
+   * OS SETE PODEM SER ENVIADOS, e o `H` depende da jornada. Nulo é marca de "o time NÃO DECLAROU", e `H`
+   * sem jornada é marca de "horista sem jornada": os dois são recusados por `recusaDaContratacaoGi`
+   * (`GI_SALARIO_SEM_UNIDADE` e `GI_SALARIO_HORISTA_SEM_JORNADA`) IMEDIATAMENTE antes do `POST`, então
+   * nenhum dos dois atravessa. Ver `tipoSalarioGi` para por que o `H` exige `qtdeHorasMes`/`qtdeHorasSem`
+   * e por que isso deixou de ser recusa sem saída.
+   */
+  tipoSalario: TipoSalarioGi | null;
+  /**
+   * A JORNADA em horas (`qtdeHorasMes` / `qtdeHorasSem`), os dois `double` com **`default 0`** no GI.
+   * Chegam JÁ validados por `jornadaHorasGi` (número > 0, dentro do teto físico), e o nulo é marca
+   * interna de "não informado": `recusaDaContratacaoGi` o recusa quando a unidade é `H`, e nas outras
+   * unidades ele simplesmente não é enviado.
+   *
+   * `salarioHora` NÃO ESTÁ AQUI de propósito, e o motivo está em `tipoSalarioGi`: o contrato não descreve
+   * o campo, em folha brasileira "valor hora" normalmente é derivado, e escrever remuneração em campo de
+   * semântica não medida é tão ruim quanto mandar zero.
+   */
+  qtdeHorasMes: number | null;
+  qtdeHorasSem: number | null;
   /**
    * DATA DE ADMISSÃO. `date-time` nullable no GI, sem default. Sai como "YYYY-MM-DD", que é o que o
    * Drizzle entrega de uma coluna `date` e o que o GI já aceita nos outros `date-time` deste payload
@@ -833,12 +1104,17 @@ export function montarFuncionarioSelecao(
     codigoCidadeResid: inteiroGi(depara.codigoCidade(p.cidade, p.uf)),
     agencia: cortarTexto(limpo(p.agencia), 10),
     contaCorrente: cortarTexto(limpo(p.conta), 20),
-    // ── Os SEIS campos de contratação, e SÓ eles, do SEGUNDO parâmetro NOMEADO. ──
-    // As DUAS REDES DE RUNTIME (`vinculoGiValido`/`prazoGiValido`) ficam AQUI, na fronteira do payload,
+    // ── Os NOVE campos de contratação, e SÓ eles, do SEGUNDO parâmetro NOMEADO. ──
+    // As REDES DE RUNTIME (`vinculoGiValido`/`prazoGiValido`/`tipoSalarioGiValido`/`jornadaHorasGi`) ficam AQUI, na fronteira do payload,
     // e não em `montarContratacaoGi`: é este o único ponto por onde um valor chega ao fornecedor, então é
     // aqui que a lista fechada tem de ser conferida, inclusive quando a `ContratacaoGi` foi montada por
     // fora. Repasse cru deixava "Temporário" atravessar para campo de 1 caractere (§A.33).
     salario: c.salario,
+    tipoSalario: tipoSalarioGiValido(c.tipoSalario),
+    // A jornada repassa pela MESMA rede do montador, pelo mesmo motivo das outras três: `ContratacaoGi`
+    // montada por fora chegaria com `0` (o default do fornecedor) ou com string, e aqui é a fronteira.
+    qtdeHorasMes: jornadaHorasGi(c.qtdeHorasMes, TETO_FISICO_JORNADA.mes),
+    qtdeHorasSem: jornadaHorasGi(c.qtdeHorasSem, TETO_FISICO_JORNADA.sem),
     dataAdmissao: c.dataAdmissao,
     vinculo: vinculoGiValido(c.vinculo),
     tipoContrato: prazoGiValido(c.tipoContrato),
@@ -851,7 +1127,9 @@ export function montarFuncionarioSelecao(
 export type GiRecusaContratacao =
   | "GI_SEM_EMPRESA_FILIAL"
   | "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO"
-  | "GI_SALARIO_INVALIDO";
+  | "GI_SALARIO_INVALIDO"
+  | "GI_SALARIO_SEM_UNIDADE"
+  | "GI_SALARIO_HORISTA_SEM_JORNADA";
 
 /**
  * A lista AUTORITATIVA de pares (empresa, filial) do GI, injetada. `false` = par não verificado.
@@ -883,6 +1161,34 @@ export const NENHUM_PAR_EMPRESA_FILIAL: ParEmpresaFilialConhecido = () => false;
  *    do GI. `1/37` é válido campo a campo e inexistente lá.
  *  - `GI_SALARIO_INVALIDO`: salário ausente, zero ou negativo. Zero em folha é salário ERRADO, não campo
  *    vazio, e o `default 0` do campo faria o erro entrar sozinho.
+ *  - `GI_SALARIO_SEM_UNIDADE`: o valor existe e é válido, e **ninguém declarou se é por HORA ou por
+ *    MÊS**. É a guarda do bloqueio medido em 01/10/2026: 7 admissões VIVAS com `9,34` e `10,90`, e o
+ *    `tipoSalario` do GI com `default 'M'`. Sem a declaração, aquelas 7 entram na folha como MENSAL e
+ *    nada falha. **Não se deduz pela faixa do valor** (vetado) e **não se cai no default**: recusa.
+ *  - `GI_SALARIO_HORISTA_SEM_JORNADA`: a unidade FOI declarada e é **HORA**, e **falta a JORNADA** em
+ *    horas que o `tipoSalario = 'H'` exige do outro lado (`qtdeHorasMes` e `qtdeHorasSem`, ambos com
+ *    default `0`). Enviar criaria "R$ 9,34 por hora vezes 0 horas", que é a MESMA falha de default `0`
+ *    em campo de folha.
+ *
+ *    ⚠️ **ESTA RECUSA DEIXOU DE SER UM BECO, e é isso que o nome passou a dizer.** Até a 0140 o EA não
+ *    tinha jornada em lugar nenhum, então o horista auditado era recusado PARA SEMPRE, e **uma admissão
+ *    que o time auditou e que o sistema recusa para sempre é indistinguível de uma admissão quebrada**.
+ *    Com as colunas `jornada_horas_mes`/`jornada_horas_sem`, a recusa é **PENDÊNCIA PREENCHÍVEL**: o
+ *    código nomeia O QUE FALTA (a jornada), e informar a jornada destrava o envio. §A.6: o código
+ *    continua fechado e **não carrega valor**, nem o salário nem as horas.
+ *
+ *    E EXIGE **AS DUAS**, mensal e semanal. Uma só, no fornecedor, grava 220 h/mês ao lado de ZERO
+ *    h/semana, que é contradição, não campo vazio, e deriválas uma da outra é regra de folha (fator
+ *    30/7 e DSR, variável por acordo coletivo), vetada pelo mesmo motivo que a dedução da unidade.
+ *
+ *    E É SÓ PARA `H`. As outras seis unidades dizem o período inteiro no próprio par valor+unidade, e
+ *    exigir jornada delas seria inventar obrigação que o contrato não pede. Jornada informada numa
+ *    unidade não-`H` É enviada de todo jeito: informada é sempre melhor que o `default 0`.
+ *
+ * A ORDEM É DELIBERADA: o valor é conferido ANTES da unidade, e a unidade DECLARADA antes do insumo que
+ * ela exige. Salário ausente/zero é problema do próprio número, e declarar a unidade de um número que
+ * não serve não conserta nada; e distinguir "não declarou" de "declarou horista sem jornada" é o que faz
+ * a tela dizer ao time a coisa certa a fazer, que são duas coisas diferentes.
  *
  * §A.6: o código é fechado e **não carrega o valor**. Salário em log é remuneração em log.
  */
@@ -903,7 +1209,221 @@ export function recusaDaContratacaoGi(
   }
   if (!parConhecido(empresa, filial)) return "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO";
   if (!(typeof payload.salario === "number" && payload.salario > 0)) return "GI_SALARIO_INVALIDO";
+  // A UNIDADE, e aqui a régua é PRESENÇA DA DECLARAÇÃO, igual à de empresa/filial: `M` é o default do
+  // fornecedor, então "não declarado" e "declarado como mensal" produziriam o MESMO envio querendo dizer
+  // coisas diferentes. Quem separa os dois é o nulo, e é por isso que ele não pode virar `M` aqui.
+  //
+  // ⚠️ A LISTA É DERIVADA DO DE/PARA, não recopiada aqui, e a escolha é a mesma de `vinculoGiValido`: uma
+  // segunda lista literal (`H`/`M`/`D`/...) faria a unidade nova autorizada no `Record` ser recusada em
+  // silêncio por esquecimento deste ponto, que é a divergência calada que a frente existe para evitar.
+  if (!tipoSalarioGiValido(payload.tipoSalario)) return "GI_SALARIO_SEM_UNIDADE";
+  // DECLARADO HORISTA: o `H` sem `qtdeHorasMes`/`qtdeHorasSem` grava "valor por hora vezes 0 horas" na
+  // folha, pelo `default 0` dos dois campos. **AS DUAS são exigidas** (uma só grava contradição), e só
+  // para o `H` (as outras seis unidades fecham o período no próprio par valor+unidade). O `H` chegou até
+  // aqui de propósito: é ele que permite nomear ESTE motivo, que diz O QUE FALTA, em vez do motivo de
+  // "não declarou". Desde a 0140 isso é PENDÊNCIA PREENCHÍVEL, não recusa perpétua.
+  if (payload.tipoSalario === "H") {
+    const mes = payload.qtdeHorasMes;
+    const sem = payload.qtdeHorasSem;
+    const horaValida = (v: number | null): boolean => typeof v === "number" && v > 0;
+    if (!(horaValida(mes) && horaValida(sem))) return "GI_SALARIO_HORISTA_SEM_JORNADA";
+  }
   return null;
+}
+
+/**
+ * ═══ A INVALIDAÇÃO DO SELO DO SALÁRIO, E POR QUE ELA MORA NUM LUGAR SÓ ═══
+ *
+ * **TODA ESCRITA EM `dados_vaga_folha.salario` ZERA `salario_unidade`, `salario_auditado_em` e
+ * `salario_auditado_por`.** Autorizado pelo diretor em 01/10/2026, inclusive em código já validado.
+ *
+ * O QUE ISSO IMPEDE, e é o oposto exato da regra do diretor ("nenhum salário vai para a folha sem
+ * auditoria do time"): sem a invalidação, o lápis troca R$ 9,34 por R$ 2.000 e o carimbo de ontem
+ * continua lá. O selo passa a certificar um valor que ninguém olhou, e **a EDIÇÃO sai LAVADA pela
+ * auditoria anterior**. Pior que não ter selo: o selo desliga a desconfiança de quem lê depois, e a
+ * guarda do envio (`GI_SALARIO_SEM_UNIDADE`) deixa de morder justamente no caso em que deveria.
+ *
+ * ⚠️ **UM LUGAR SÓ, E ISSO É O PONTO, NÃO ESTILO.** A invalidação repetida à mão em N escritores é a
+ * invalidação que o escritor N+1 esquece, e o esquecimento é **CALADO**: nada falha, o selo antigo
+ * simplesmente permanece. Então existe esta constante, existe `comSalarioInvalidandoSelo()`, e existe um teste que
+ * VARRE O FONTE (`portal-dados-gi.montador.spec.ts`) reprovando qualquer escrita de `salario` em
+ * `dados_vaga_folha` que não passe por aqui. O SÉTIMO escritor nasce coberto sem ninguém lembrar.
+ *
+ * POR QUE NÃO UM TRIGGER DE BANCO, que seria literalmente impossível de esquecer: **não existe UM
+ * trigger nas 140 migrations deste repositório**, e **não existe caminho de teste contra Postgres real**
+ * (`docs/FRENTE-REGISTRADA-TESTE-POSTGRES-REAL.md`). O trigger seria a única guarda, numa convenção
+ * nova, sem nenhum teste capaz de executá-la: é exatamente o padrão do incidente de 18/09/2026, em que
+ * 3.680 testes verdes conviveram com a instrução central da frente sendo incapaz de rodar. Fica
+ * REGISTRADO como o desenho certo para quando a frente do Postgres real existir.
+ */
+export const INVALIDACAO_DO_SELO_DO_SALARIO = {
+  salarioUnidade: null,
+  salarioAuditadoEm: null,
+  salarioAuditadoPor: null,
+} as const;
+
+/**
+ * O patch de `dados_vaga_folha` que grava `salario` **e derruba o selo junto**, numa expressão só.
+ *
+ * É A ÚNICA FORMA AUTORIZADA de escrever salário, e o teste de varredura do fonte é quem faz valer o
+ * "única". Use em `insert().values()` e em `update().set()` igualmente: no INSERT o selo já nasceria
+ * nulo por construção (coluna omitida), e declarar de todo jeito é deliberado, para quem lê o escritor
+ * não precisar saber disso de cabeça, e para o escritor continuar correto se um dia a coluna ganhar
+ * default.
+ *
+ * ⚠️ `salario === undefined` NÃO INVALIDA NADA, e este ramo é o que faz o lápis continuar correto. No
+ * Drizzle, `undefined` em `.set()` significa **"não toque nesta coluna"** e `null` significa **"grave
+ * NULL"**. O `editar` (`admissoes.service.ts`) manda `undefined` quando a edição não mexeu no salário:
+ * ali **não houve escrita**, então não há selo a derrubar, e invalidar seria apagar a auditoria de quem
+ * só trocou o centro de custo. É a diferença entre "o valor mudou" e "o formulário passou por aqui".
+ *
+ * ⚠️ **A DECLARAÇÃO DA UNIDADE NÃO PASSA POR AQUI.** Quem grava `salario_unidade` + os carimbos é o ato de
+ * auditoria, e ele não escreve `salario`. Se um dia uma tela corrigir o valor E declarar a unidade no
+ * mesmo gesto, o jeito certo é `{ ...comSalarioInvalidandoSelo(patch, v), salarioUnidade: u, salarioAuditadoEm: new
+ * Date(), salarioAuditadoPor: autor }`, nessa ordem: o selo novo sobrescreve a invalidação, de propósito,
+ * porque ali houve declaração nova de verdade.
+ */
+export function comSalarioInvalidandoSelo<T extends object>(
+  patch: T,
+  salario: string | null | undefined,
+): T & PatchDeSalario {
+  // Nada a invalidar quando a coluna não é tocada (ver o aviso acima). As três chaves ficam AUSENTES,
+  // não nulas: ausente é "não toque", nulo seria "apague", e aqui a diferença é a auditoria de alguém.
+  if (salario === undefined) return { ...patch, salario: undefined };
+  return { ...patch, salario, ...INVALIDACAO_DO_SELO_DO_SALARIO };
+}
+
+/** O que `comSalarioInvalidandoSelo` acrescenta ao patch: o valor, e as três colunas do selo zeradas (ou ausentes). */
+export interface PatchDeSalario {
+  salario: string | null | undefined;
+  salarioUnidade?: null;
+  salarioAuditadoEm?: null;
+  salarioAuditadoPor?: null;
+}
+
+/**
+ * ══ A DECLARAÇÃO DA UNIDADE, QUE É O ATO DE AUDITORIA (OST do salário horista) ═════════════════
+ *
+ * Regra permanente do diretor: **nenhum salário é gravado na folha sem auditoria do time.** Quem
+ * escolhe "por hora" ou "mensal" está, naquele gesto, afirmando que OLHOU o valor. Então a unidade e
+ * os dois carimbos (`salario_auditado_em`, `salario_auditado_por`) são UMA COISA SÓ: não há um seletor
+ * e um "conferi" separados, há um gesto e as colunas carimbadas juntas.
+ *
+ * ┌─ POR QUE ISTO NÃO ENTRA NO `comSalarioInvalidandoSelo`, e sim POR CIMA dele ──────────────────┐
+ * │ Os dois helpers respondem perguntas opostas, e juntá-los apagaria a distinção: o primeiro trata │
+ * │ da ESCRITA DO VALOR (que invalida auditoria anterior), este trata da DECLARAÇÃO (que carimba    │
+ * │ auditoria nova). A composição `comDeclaracaoDaUnidadeDoSalario(comSalarioInvalidandoSelo(...))` │
+ * │ é a ordem documentada: a invalidação zera, e a declaração sobrescreve DEPOIS, de propósito,     │
+ * │ porque ali houve declaração de verdade no mesmo gesto. Salvar valor SEM declarar unidade cai no  │
+ * │ caso de baixo (`undefined`) e o selo fica zerado, que é exatamente o desejado.                  │
+ * │                                                                                               │
+ * │ E a composição é o que mantém a VARREDURA DO FONTE verde sem afrouxá-la                        │
+ * │ (`portal-dados-gi.montador.spec.ts`): a statement continua contendo a chamada do helper do      │
+ * │ salário e continua sem `salario:` e sem `salarioAuditadoEm:` escritos à mão fora dele.          │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: aqui não há dado pessoal e **nenhum valor de remuneração**. A unidade é uma classificação de
+ * lista fechada, a jornada é um número de horas, o autor é um id de usuário INTERNO.
+ */
+export interface DeclaracaoDaUnidadeDoSalario {
+  salarioUnidade: string;
+  /** `numeric(6,2)`: o Drizzle quer STRING na escrita. `null` LIMPA (ver a nota em `comDeclaracao…`). */
+  jornadaHorasMes: string | null;
+  jornadaHorasSem: string | null;
+  salarioAuditadoEm: Date;
+  /** `null` só nos caminhos sem usuário (ingestão automática), que nunca declaram unidade. */
+  salarioAuditadoPor: string | null;
+}
+
+/** O que a declaração acrescenta ao patch. Ausente = nada declarado, nada tocado. */
+export interface PatchDaDeclaracaoDaUnidade {
+  salarioUnidade?: string;
+  jornadaHorasMes?: string | null;
+  jornadaHorasSem?: string | null;
+  salarioAuditadoEm?: Date;
+  salarioAuditadoPor?: string | null;
+}
+
+/** Jornada (`numeric(6,2)`) na forma canônica de ESCRITA, ou `null`. Zero é `null`: zero é o default do GI. */
+function jornadaCanonica(v: unknown): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n.toFixed(2);
+}
+
+/** Unidade na forma canônica de comparação (a lista fechada é toda em maiúscula). */
+function unidadeCanonica(v: unknown): string {
+  return (typeof v === "string" ? v : "").trim().toUpperCase();
+}
+
+/**
+ * A DECLARAÇÃO que este gesto produziu, ou `undefined` quando NÃO houve declaração nova.
+ *
+ * ⚠️ **"A UNIDADE FOI DECLARADA", NÃO "O FORMULÁRIO PASSOU POR AQUI".** É a mesma distinção que o
+ * `comSalarioInvalidandoSelo` faz com `undefined`, e aqui ela é obrigatória por um motivo concreto: o
+ * lápis do Gerenciador PRÉ-PREENCHE a unidade e a devolve em TODO salvamento. Carimbar a cada
+ * salvamento faria a data do selo avançar sozinha e o autor virar quem só trocou o centro de custo,
+ * ou seja, uma auditoria que ninguém fez com a assinatura de quem não a fez. Então:
+ *  - unidade vazia/ausente            -> `undefined` (nada declarado; quem zera o selo é a escrita do valor);
+ *  - unidade IGUAL à já gravada, com a MESMA jornada -> `undefined` (o carimbo anterior permanece);
+ *  - qualquer diferença               -> declaração nova, com autor e data de AGORA.
+ *
+ * `anterior` nulo significa "sem declaração anterior conhecida" (linha nova, ou liberação, em que o
+ * gesto do consultor é a própria auditoria da folha): aí qualquer unidade enviada é declaração nova.
+ */
+export function declaracaoDaUnidadeDoSalario(
+  enviado: {
+    salarioUnidade?: string | null;
+    jornadaHorasMes?: string | number | null;
+    jornadaHorasSem?: string | number | null;
+  },
+  anterior:
+    | {
+        salarioUnidade?: string | null;
+        jornadaHorasMes?: string | number | null;
+        jornadaHorasSem?: string | number | null;
+      }
+    | null
+    | undefined,
+  autorId: string | null | undefined,
+  agora: Date = new Date(),
+): DeclaracaoDaUnidadeDoSalario | undefined {
+  const unidade = unidadeCanonica(enviado.salarioUnidade);
+  if (unidade === "") return undefined;
+  const mes = jornadaCanonica(enviado.jornadaHorasMes);
+  const sem = jornadaCanonica(enviado.jornadaHorasSem);
+  if (
+    anterior &&
+    unidadeCanonica(anterior.salarioUnidade) === unidade &&
+    jornadaCanonica(anterior.jornadaHorasMes) === mes &&
+    jornadaCanonica(anterior.jornadaHorasSem) === sem
+  ) {
+    return undefined;
+  }
+  return {
+    salarioUnidade: unidade,
+    jornadaHorasMes: mes,
+    jornadaHorasSem: sem,
+    salarioAuditadoEm: agora,
+    salarioAuditadoPor: autorId ?? null,
+  };
+}
+
+/**
+ * Acrescenta a DECLARAÇÃO ao patch de `dados_vaga_folha`. Sem declaração, devolve o patch INTACTO.
+ *
+ * ⚠️ A JORNADA É ESCRITA JUNTO, inclusive como `null`, e isso é deliberado: declarar `MENSAL` sobre uma
+ * linha que tinha 220 h/mês precisa LIMPAR as horas, senão fica jornada de horista pendurada numa
+ * unidade mensal e o fornecedor recebe a contradição calado. A jornada é parte da declaração, não um
+ * campo solto: jornada enviada sem unidade é ignorada aqui de propósito (não há declaração a carimbar).
+ */
+export function comDeclaracaoDaUnidadeDoSalario<T extends object>(
+  patch: T,
+  declaracao: DeclaracaoDaUnidadeDoSalario | undefined,
+): T & PatchDaDeclaracaoDaUnidade {
+  if (!declaracao) return patch;
+  return { ...patch, ...declaracao };
 }
 
 /**
