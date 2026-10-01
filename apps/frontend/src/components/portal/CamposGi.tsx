@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CampoExtraidoPortal } from "@ea/shared-types";
 import {
   CAMPOS_SEM_DOCUMENTO,
+  PRE_SELECIONADOS_PASSO_FINAL,
   rotuloDaOpcao,
   separarCampos,
   type CampoConfirmadoGi,
@@ -496,7 +497,12 @@ export function PassoFinal({
   vazios: { campo: string; rotulo: string }[];
   aoConcluir: (campos: CampoConfirmadoGi[]) => Promise<boolean>;
 }) {
-  const [valores, setValores] = useState<Record<string, string>>({});
+  // PRÉ-SELECIONADO: `nacionalidade` abre em Brasileiro (`010`). Sem isto, quem não abrisse o
+  // seletor mandava o campo VAZIO, e o passo final não envia vazio. O valor fica à vista e
+  // editável; o motivo está em `PRE_SELECIONADOS_PASSO_FINAL`.
+  const [valores, setValores] = useState<Record<string, string>>(() => ({
+    ...PRE_SELECIONADOS_PASSO_FINAL,
+  }));
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 

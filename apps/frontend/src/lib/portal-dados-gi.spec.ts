@@ -4,6 +4,7 @@ import {
   ESTADO_CIVIL,
   GRAU_INSTRUCAO,
   NACIONALIDADE,
+  PRE_SELECIONADOS_PASSO_FINAL,
   RACA,
   UF_NASCIMENTO,
   camposVaziosDe,
@@ -69,10 +70,31 @@ describe("dicionários do G.I", () => {
   it("nacionalidade tem os 254 códigos, Brasileiro primeiro, e nenhum estoura os 3 caracteres", () => {
     expect(NACIONALIDADE).toHaveLength(254);
     // `010` é o default do G.I e o caso de quase todo candidato: primeira opção, não a 1a alfabética.
-    expect(NACIONALIDADE[0]).toEqual({ value: "010", label: "Brasileiro" });
+    expect(NACIONALIDADE[0]).toEqual({ value: "010", label: "010 - Brasileiro" });
     expect(NACIONALIDADE.every((o) => o.value.length <= 3)).toBe(true);
     expect(new Set(NACIONALIDADE.map((o) => o.value)).size).toBe(254);
-    expect(rotuloDaOpcao(NACIONALIDADE, "021")).toBe("Argentino");
+    expect(rotuloDaOpcao(NACIONALIDADE, "021")).toBe("021 - Argentino");
+  });
+
+  it("o CÓDIGO está no rótulo de toda nacionalidade, com hífen simples, para a busca achar", () => {
+    // A BUSCA DO SELETOR FILTRA PELO `label`. Esta é a expectativa que trava o motivo da mudança:
+    // sem o código no rótulo, digitar "010" numa lista de 254 opções não achava nada.
+    expect(NACIONALIDADE.every((o) => o.label.startsWith(`${o.value} - `))).toBe(true);
+    // §A.11: hífen simples, nunca travessão, que é também o formato da `description` do G.I.
+    expect(NACIONALIDADE.filter((o) => o.label.includes("\u2014"))).toEqual([]);
+    // O nome continua inteiro depois do código: o rótulo ganhou o código, não perdeu o nome.
+    expect(rotuloDaOpcao(NACIONALIDADE, "010")).toBe("010 - Brasileiro");
+  });
+
+  it("o passo final pré-seleciona SÓ a nacionalidade, em Brasileiro, e nada mais", () => {
+    // O passo final só envia campo com valor não vazio: pré-selecionar é o que faz o campo SER
+    // enviado. Os outros quatro ficam vazios de propósito (não há default do G.I que sirva a todos).
+    expect(PRE_SELECIONADOS_PASSO_FINAL).toEqual({ nacionalidade: "010" });
+    const pre = Object.keys(PRE_SELECIONADOS_PASSO_FINAL);
+    expect(pre.every((campo) => CAMPOS_SEM_DOCUMENTO.some((c) => c.campo === campo))).toBe(true);
+    // O código pré-selecionado existe no dicionário: pré-seleção que não casa com opção nenhuma
+    // apareceria na tela como o código cru, e seria recusada pelo G.I.
+    expect(NACIONALIDADE.some((o) => o.value === PRE_SELECIONADOS_PASSO_FINAL.nacionalidade)).toBe(true);
   });
 
   it("nenhum rótulo de opção tem travessão (§A.11), em nenhum dos cinco dicionários", () => {
