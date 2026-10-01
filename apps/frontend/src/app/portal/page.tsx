@@ -28,6 +28,7 @@ import {
 } from "@/lib/portal-dados-gi";
 import { dicaDoPasso } from "@/lib/dicas-documento";
 import { BotaoFalarComRh, TelaDeIdentificacao } from "@/components/portal/Identificacao";
+import { EntradaSemLink } from "@/components/portal/EntradaSemLink";
 import { PortalHeader, PortalFooter } from "@/components/portal/designer/PortalHeader";
 import { PalcoAnalise } from "@/components/portal/designer/Analise";
 import { SolAvatar, SolMensagem } from "@/components/portal/designer/Sol";
@@ -987,20 +988,35 @@ export default function PortalDoCandidatoPage() {
   // lista para abrir.
   // SEM FRAGMENTO: instrução, nunca erro. O link dele está vivo, só não chegou até aqui, e o que
   // resolve é ele tocar de novo no mesmo link que já tem. O RH é a segunda saída, não a primeira.
+  //
+  // AQUI, E SÓ AQUI, ENTRA A ESCOLHA DO CAMINHO (acesso por e-mail). Este estado é o beco sem saída
+  // de quem NÃO tem link, então é dele que nasce a segunda porta: `EntradaSemLink` oferece "Já Tenho
+  // O Link" (que mostra a MESMA instrução de sempre, envelopada e não reescrita) e "Entrar Com Meu
+  // E-mail" (que pede um código na caixa e, provada a identidade, faz o servidor ENVIAR o link).
+  //
+  // O CAMINHO DO LINK NÃO MUDOU EM NADA: com `#t=` presente, o efeito de retomada nem chega a ligar
+  // o `semFragmento`, esta tela não é montada e a identificação de sempre abre direto. Nenhum outro
+  // estado desta página foi tocado.
   if (semFragmento) {
     return (
       <Casca centralizado>
-        <div className="flex flex-col items-center text-center">
-          <IconeLink cor={AZUL} tamanho={38} />
-          <h1 className="font-display mt-4 text-xl font-bold text-slate-900">Abra O Link De Novo</h1>
-          <p className="mt-3 text-sm leading-relaxed text-slate-600">
-            Esta página só abre pelo link que você recebeu no WhatsApp ou no e-mail. Toque nesse
-            mesmo link de novo e você continua de onde parou.
-          </p>
-          <p className="mt-3 text-[13px] leading-relaxed text-slate-500">
-            Se o link não abrir, fale com o RH que está acompanhando a sua admissão.
-          </p>
-        </div>
+        <EntradaSemLink
+          instrucaoDoLink={
+            <div className="flex flex-col items-center text-center">
+              <IconeLink cor={AZUL} tamanho={38} />
+              <h1 className="font-display mt-4 text-xl font-bold text-slate-900">
+                Abra O Link De Novo
+              </h1>
+              <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                Esta página só abre pelo link que você recebeu no WhatsApp ou no e-mail. Toque nesse
+                mesmo link de novo e você continua de onde parou.
+              </p>
+              <p className="mt-3 text-[13px] leading-relaxed text-slate-500">
+                Se o link não abrir, fale com o RH que está acompanhando a sua admissão.
+              </p>
+            </div>
+          }
+        />
       </Casca>
     );
   }

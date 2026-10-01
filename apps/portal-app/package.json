@@ -1,0 +1,11 @@
+{
+  "name": "@ea/portal-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build Next separado SO com a tela do candidato (/portal). Reusa apps/frontend/src via alias @/*, sem duplicar codigo (opcao a). Porta e basePath por variavel de ambiente. Fase 1 do Portal publico: homologacao, nao expoe nada.",
+  "scripts": {
+    "build": "next build",
+    "start": "next start -p 3121 -H 127.0.0.1",
+    "typecheck": "tsc --noEmit"
+  }
+}

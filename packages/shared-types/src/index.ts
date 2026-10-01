@@ -4759,7 +4759,28 @@ export type CanalDeEnvioDoLink = (typeof CANAIS_DE_ENVIO_DO_LINK)[number];
  * coisas diferentes na mesma palavra. A pergunta que a coluna existe para responder é "o candidato
  * recebeu, e por onde?", e a resposta aqui é "o sistema não entregou, alguém entregou".
  */
-export const ORIGENS_DE_ENVIO_DO_LINK = ["AUTOMATICO", "MANUAL", "ENTREGA_A_MAO"] as const;
+/**
+ * ┌─ `AUTOATENDIMENTO` ENTROU POR VETO DA AUDITORIA (C7), E ELE NÃO É COSMÉTICO ────────────────┐
+ * │ A porta de e-mail do candidato emite o link pelo caminho de envio que já existia, e aquele   │
+ * │ caminho exige autor (`portal_links.criado_por_id` é NOT NULL FK `usuarios`). Como o candidato │
+ * │ não é usuário do sistema, o autor gravado é o DONO DO REGISTRO (quem cadastrou o candidato no │
+ * │ funil), por custódia.                                                                        │
+ * │                                                                                             │
+ * │ SEM ESTE VALOR, A TRILHA MENTIA: a origem saía `AUTOMATICO`, que é a MESMA do gancho do       │
+ * │ funil, e ninguém conseguia distinguir "o consultor mandou o link" de "um candidato pediu e    │
+ * │ nós debitamos no nome do consultor". A auditoria chamou isso de autoria falsa, e estava       │
+ * │ certa: o `criado_por_id` afirmava um ato que aquela pessoa não praticou.                      │
+ * │                                                                                             │
+ * │ Com o valor próprio, `criado_por_id` volta a significar CUSTÓDIA e a linha ao lado diz quem   │
+ * │ DISPAROU. Não precisou de migration: `portal_links.envio_origem` é `varchar(20)` sem CHECK.   │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const ORIGENS_DE_ENVIO_DO_LINK = [
+  "AUTOMATICO",
+  "MANUAL",
+  "ENTREGA_A_MAO",
+  "AUTOATENDIMENTO",
+] as const;
 export type OrigemDeEnvioDoLink = (typeof ORIGENS_DE_ENVIO_DO_LINK)[number];
 
 /**
@@ -4799,6 +4820,107 @@ export const MOTIVOS_DE_RECUSA_DE_ENVIO = [
   "FALHA_NO_ENVIO",
 ] as const;
 export type MotivoDeRecusaDeEnvio = (typeof MOTIVOS_DE_RECUSA_DE_ENVIO)[number];
+
+/**
+ * ─ PORTAL: O ACESSO POR E-MAIL (candidato sem CPF) ──────────────────────────────────────────────
+ *
+ * ┌─ O QUE ESTA PORTA É, E O QUE ELA NÃO É ────────────────────────────────────────────────────┐
+ * │ Ela NÃO abre o Portal e NÃO emite sessão. Ela prova a posse de uma caixa de e-mail e, com   │
+ * │ isso, dispara o ENVIO DO LINK para aquela mesma caixa. A chave de acesso do Portal continua │
+ * │ sendo link + CPF + nascimento, em `POST portal/identificar`, byte a byte como antes.        │
+ * │                                                                                            │
+ * │ O DESENHO ANTERIOR ABRIA O PORTAL e foi VETADO com prova: ele achava a admissão BUSCANDO    │
+ * │ PELO CPF DIGITADO, e a trava de divergência que deveria conter isso é VAZIA justamente na   │
+ * │ população-alvo, porque candidato sem CPF tem `cpf` nulo e nulo não discorda de nada. Quem    │
+ * │ tivesse a caixa de um candidato digitava o CPF DE UM TERCEIRO e abria o prontuário dele.    │
+ * │ A correção é estrutural: a admissão vem do VÍNCULO do registro, nunca de busca por CPF.     │
+ * │                                                                                            │
+ * │ E-MAIL NÃO É CHAVE DE IDENTIDADE, e isto foi medido em produção, não temido: 6 e-mails são  │
+ * │ compartilhados por 12 CPFs distintos, e 5 deles carregam DOIS NOMES diferentes. É por isso  │
+ * │ que a confirmação do código NÃO devolve nada da pessoa, nem o nome mascarado.               │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+
+/** Por que uma tentativa de acesso por e-mail travou o candidato. Catálogo fechado, sem texto livre. */
+export const MOTIVOS_DA_TRAVA_DE_ACESSO = [
+  /** O que ele informou discorda do que a ficha do funil já tem. */
+  "DIVERGENCIA_CADASTRO",
+  /** O CPF informado já pertence a outro candidato do funil (`uq_as_candidatos_cpf`). */
+  "CPF_DE_OUTRO_CANDIDATO",
+  /** O e-mail resolve para mais de um candidato: escolher um seria escolher a identidade de alguém. */
+  "EMAIL_AMBIGUO",
+  /** Já estava travado quando tentou de novo. */
+  "TRAVA_ANTERIOR",
+] as const;
+export type MotivoDaTravaDeAcesso = (typeof MOTIVOS_DA_TRAVA_DE_ACESSO)[number];
+
+export const MOTIVO_DA_TRAVA_LABEL: Record<MotivoDaTravaDeAcesso, string> = {
+  DIVERGENCIA_CADASTRO: "Divergência De Cadastro",
+  CPF_DE_OUTRO_CANDIDATO: "CPF De Outro Candidato",
+  EMAIL_AMBIGUO: "E-mail Ambíguo",
+  TRAVA_ANTERIOR: "Trava Anterior",
+};
+
+/**
+ * O DESFECHO do passo de identidade, como a tela do candidato o recebe.
+ *
+ * Note o que NÃO existe aqui: nenhuma variante que entregue sessão. `LINK_ENVIADO` é o sucesso, e
+ * ele significa "olhe o seu e-mail", não "entre agora".
+ */
+export const SITUACOES_DO_ACESSO_POR_EMAIL = [
+  /** Havia admissão viva pelo vínculo: o link foi emitido e enviado para o e-mail já verificado. */
+  "LINK_ENVIADO",
+  /** Não havia admissão ainda: o CPF e a data foram gravados e o time segue. */
+  "DADOS_RECEBIDOS",
+] as const;
+export type SituacaoDoAcessoPorEmail = (typeof SITUACOES_DO_ACESSO_POR_EMAIL)[number];
+
+/** Resposta de `POST portal/acesso-email/solicitar`. É a MESMA para todo e-mail, por desenho. */
+export interface SolicitacaoDeCodigoResposta {
+  /** SEMPRE `true`. Dizer "não achei" seria o oráculo de enumeração que a auditoria proibiu. */
+  enviado: true;
+  expiraEmMinutos: number;
+}
+
+/** Resposta de `POST portal/acesso-email/confirmar`. NÃO carrega nada da pessoa (proibição O10). */
+export interface ConfirmacaoDeCodigoResposta {
+  /** Bilhete curto de identificação. NÃO é sessão do Portal e não abre rota alguma do prontuário. */
+  bilhete: string;
+  expiraEmMinutos: number;
+}
+
+/**
+ * Resposta de `POST portal/acesso-email/identidade`.
+ *
+ * ┌─ POR QUE NÃO HÁ E-MAIL AQUI, NEM MASCARADO (condição 1 da segunda auditoria) ───────────────┐
+ * │ Havia um `emailMascarado`, para a pessoa saber para onde o link foi. Saiu, e a razão é fina:  │
+ * │ o link é enviado para `candidatos.email` (a ficha da ADMISSÃO), e quem chamou provou a posse  │
+ * │ de `as_candidatos.email` (a ficha do FUNIL). Os dois podem ser endereços DIFERENTES, e no     │
+ * │ caso-alvo desta porta (ficha com `cpf` nulo) o chamador não provou nada além da caixa do      │
+ * │ funil. Devolver primeira letra, última letra e o DOMÍNIO INTEIRO de um endereço cuja posse    │
+ * │ ele não provou é entregar dado de terceiro.                                                  │
+ * │                                                                                             │
+ * │ O fato NECESSÁRIO continua sendo dito pela tela ("enviamos o link para o e-mail cadastrado    │
+ * │ na sua admissão"), que é o que a pessoa precisa para procurar na caixa certa. Os caracteres   │
+ * │ não eram necessários para isso.                                                              │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface IdentidadeDoAcessoResposta {
+  situacao: SituacaoDoAcessoPorEmail;
+}
+
+/** Uma linha da fila de travas, na tela do time. §A.6: sem CPF, sem e-mail, sem valor divergente. */
+export interface TravaDeAcessoItem {
+  id: string;
+  asCandidatoId: string;
+  /** Nome do candidato do funil. É dado que o time já vê na Central de Candidatos. */
+  nome: string;
+  motivoCodigo: MotivoDaTravaDeAcesso;
+  travadoEm: string;
+  tentativas: number;
+  destravadoEm: string | null;
+  destravadoPorNome: string | null;
+}
 
 /**
  * O QUE UM ENVIO DEVOLVE.
