@@ -11,15 +11,31 @@
  * │    coluna Candidato mostra se a pessoa TEM o número, não qual é. O número sai só na FICHA.   │
  * │ 3. A TELA NÃO HIDRATA A LISTA COM FICHAS. Seria o caminho fácil para preencher as colunas de │
  * │    funil, e traria o CPF da base inteira para o navegador, desfazendo em uma linha a         │
- * │    minimização que o backend construiu. O funil vem do PAINEL DA VAGA, que não devolve CPF.  │
+ * │    minimização que o backend construiu. O funil vem da PRÓPRIA BUSCA, numa projeção mínima   │
+ * │    (`AsCandidaturaNaLista`), que não devolve CPF nem texto livre de recusa.                  │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * DE ONDE VEM CADA COLUNA, já que o backend desta onda tem três leituras e nenhuma entrega tudo:
- *   - a PESSOA vem de `POST /buscar` (pobre de propósito);
- *   - a CANDIDATURA (vaga, etapa, situação) vem de `GET /vaga/:id`, o painel de cada vaga;
- *   - CLIENTE e CARGO vêm da própria vaga, em `GET /as/vagas`.
- * A tela cruza as três em memória. Uma linha é uma CANDIDATURA, e quem ainda não foi alocada aparece
- * com a vaga em branco: pessoa sem candidatura é pessoa NA BASE, não cadastro pela metade.
+ * ┌─ O 429, E POR QUE ELE ERA O MESMO DEFEITO DA TELA QUE JURAVA "VAGA NÃO ALOCADA" ────────────┐
+ * │ A tela montava as colunas de funil com UMA CHAMADA POR VAGA (`painelDaVaga` em laço). Com   │
+ * │ 481 vagas em produção isso dava 483 requisições por carregamento, contra um teto de 120 por  │
+ * │ 60s, e cada mexida em filtro refazia tudo: da 121 em diante vinha 429. E o estouro caía no   │
+ * │ `catch`, o estado de candidaturas ficava VAZIO, e a tabela pintava "Vaga Não Alocada" para   │
+ * │ TODA pessoa, tenha vaga ou não. A ficha, que é uma chamada só, mostrava a etapa certa.       │
+ * │ Agora são DUAS chamadas por carregamento, e o funil vem junto de cada pessoa da página.      │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * DE ONDE VEM CADA COLUNA:
+ *   - a PESSOA e as CANDIDATURAS dela (vaga, etapa, situação, último contato) vêm de `POST /buscar`;
+ *   - CLIENTE e CARGO vêm da vaga, em `GET /as/vagas`, que também alimenta os filtros.
+ * Uma linha é uma CANDIDATURA, e quem ainda não foi alocada aparece com a vaga em branco: pessoa sem
+ * candidatura é pessoa NA BASE, não cadastro pela metade.
+ *
+ * ┌─ AUSENTE NÃO É VAZIO, E ESTA DISTINÇÃO É A LIÇÃO DO DEFEITO ACIMA ──────────────────────────┐
+ * │ `candidaturas: []` quer dizer "esta pessoa não está em vaga nenhuma", que é estado legítimo  │
+ * │ e vira "Vaga Não Alocada". `candidaturas` AUSENTE quer dizer "o funil não veio", e aí a tela │
+ * │ DIZ isso, em texto, em vez de fingir que a pessoa não tem vaga. Era exatamente esse fingir   │
+ * │ que fazia a lista mentir enquanto a ficha dizia a verdade.                                   │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * §A.12 (máscara única de tabela: cabeçalho centralizado, divisória entre colunas, ícone dinâmico por
  * estado, KPI clicável como filtro), §A.11 (sem travessão), §A.24 (title case em título e tag).
@@ -35,6 +51,7 @@ import {
   type AsCandidatoListItem,
   type AsCandidatoOrigem,
   type AsCandidaturaItem,
+  type AsCandidaturaNaLista,
   type VagaListItem,
 } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
@@ -57,6 +74,7 @@ import {
   CARD_SEM_VAGA,
   CARD_TOTAL,
   dataHoraBr,
+  funilNaoVeio,
   mensagemDoErro,
   painelDaVaga,
 } from "@/lib/as-candidatos";
@@ -71,25 +89,22 @@ import { TrocarVagaModal } from "@/components/as/candidatos/TrocarVagaModal";
 import { MoverCandidaturaModal } from "@/components/as/candidatos/MoverCandidaturaModal";
 import { RegistrarContatoModal } from "@/components/as/candidatos/RegistrarContatoModal";
 
-/** Uma linha da tabela: a pessoa mais, quando existe, a candidatura dela e a vaga correspondente. */
+/**
+ * Uma linha da tabela: a pessoa mais, quando existe, a candidatura dela e a vaga correspondente.
+ *
+ * SÃO TRÊS ESTADOS, e não dois, porque "sem vaga" e "não sei" não são a mesma coisa:
+ *   - `candidatura` preenchida: a pessoa está nesta vaga;
+ *   - `candidatura` nula com `funilIndisponivel` falso: a pessoa não está em vaga nenhuma;
+ *   - `candidatura` nula com `funilIndisponivel` VERDADEIRO: o funil desta pessoa não veio na
+ *     resposta, e a tela não tem o que afirmar sobre vaga, etapa nem situação.
+ */
 interface Linha {
   chave: string;
   pessoa: AsCandidatoListItem;
-  candidatura: AsCandidaturaItem | null;
+  candidatura: AsCandidaturaNaLista | null;
+  /** O funil desta pessoa não veio na busca. Diferente de "ela não tem vaga". */
+  funilIndisponivel: boolean;
   vaga: VagaListItem | null;
-}
-
-/**
- * Os painéis das vagas, buscados em PARALELO COM TETO. Sem o teto, uma base com muitas vagas abriria
- * uma requisição por vaga de uma vez só e o navegador enfileiraria tudo de qualquer jeito, com o
- * agravante de o backend receber a rajada inteira junto.
- */
-async function comTeto<T, R>(itens: T[], teto: number, tarefa: (t: T) => Promise<R>): Promise<R[]> {
-  const saida: R[] = [];
-  for (let i = 0; i < itens.length; i += teto) {
-    saida.push(...(await Promise.all(itens.slice(i, i + teto).map(tarefa))));
-  }
-  return saida;
 }
 
 export default function CentralDeCandidatosPage() {
@@ -107,7 +122,6 @@ export default function CentralDeCandidatosPage() {
 
   const [vagas, setVagas] = useState<VagaListItem[]>([]);
   const [pessoas, setPessoas] = useState<AsCandidatoListItem[]>([]);
-  const [candidaturas, setCandidaturas] = useState<AsCandidaturaItem[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   /** O aviso do corte da busca: nulo é "a lista está inteira". */
@@ -177,10 +191,13 @@ export default function CentralDeCandidatosPage() {
   const [contatoAlvo, setContatoAlvo] = useState<AsCandidaturaItem | null>(null);
 
   /**
-   * A CARGA. Três leituras, nesta ordem porque a terceira depende da primeira:
-   *   1. as vagas (cliente, cargo, nome e status de cada uma);
-   *   2. as pessoas, pela busca POST com os filtros que o backend conhece;
-   *   3. o painel de cada vaga, que é a única fonte de funil sem CPF.
+   * A CARGA. DUAS leituras, em paralelo, e nenhuma delas depende da outra:
+   *   1. as vagas (cliente, cargo, nome e status de cada uma), que alimentam os filtros e as
+   *      colunas Cliente e Cargo;
+   *   2. as pessoas da página, pela busca POST, JÁ COM AS CANDIDATURAS DE CADA UMA.
+   *
+   * ERAM TRÊS, e a terceira era um laço de uma chamada POR VAGA. Era ela que estourava o teto do
+   * throttler (120 por 60s) com 483 requisições por carregamento e derrubava a tela inteira no 429.
    */
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -203,15 +220,67 @@ export default function CentralDeCandidatosPage() {
       // gente além dela. A tela usa o aviso logo abaixo do contador de linhas.
       setPessoas(listaPessoas.itens);
       setAvisoCorte(avisoDeCorte(listaPessoas));
-
-      const paineis = await comTeto(listaVagas, 6, (v) => painelDaVaga(v.id, token));
-      setCandidaturas(paineis.flatMap((p) => p.candidaturas));
     } catch (err) {
       setErro(mensagemDoErro(err, "Falha ao carregar a Central de Candidatos."));
     } finally {
       setCarregando(false);
     }
   }, [token, busca, cpfBusca, fOrigem, fVaga]);
+
+  /**
+   * ─ OS MODAIS DE AÇÃO PEDEM A CANDIDATURA INTEIRA, E A LISTA NÃO A TEM MAIS ───────────────────
+   *
+   * `MoverCandidaturaModal`, `RegistrarContatoModal` e `TrocarVagaModal` são os MESMOS componentes
+   * da tela da vaga, e leem campos que a projeção da lista NÃO carrega de propósito (§A.6): o nome
+   * na candidatura, o motivo da recusa, a pretensão salarial, o lado da posição. Preencher esses
+   * campos com nulo só para o tipo fechar faria o modal mentir em silêncio (o motivo registrado
+   * desapareceria, o desvínculo perderia o lado da posição), então a tela vai BUSCAR a candidatura
+   * inteira NO CLIQUE.
+   *
+   * É UMA CHAMADA, DEPOIS DE UM GESTO DELIBERADO, e é a diferença que define o conserto: o que
+   * estourava o throttler era pedir o painel de TODAS as vagas a cada carregamento, não pedir o de
+   * UMA vaga quando alguém abre uma linha. E o painel continua sendo a fonte sem CPF.
+   *
+   * ┌─ "UMA VAGA" É MÍNIMO EM CHAMADAS, NÃO EM REGISTROS, e o número tem de estar escrito aqui ──┐
+   * │ A auditoria mediu em produção: o painel de uma vaga alcançável por esta tela traz, em        │
+   * │ MÉDIA, 781 candidaturas (mediana 80, p95 867, máximo 2.460), com `candidatoNome` de cada    │
+   * │ uma e 376 `motivoDescarte` em texto livre nas 13 vagas da primeira página. A tela descarta   │
+   * │ tudo menos UMA linha, logo ela baixa ~780 registros que não usa.                             │
+   * │                                                                                             │
+   * │ POR QUE ISSO FOI APROVADO ASSIM MESMO: é a mesma superfície que o bloco §A.6 do              │
+   * │ `AsCandidaturaItem` já autoriza ("as candidaturas de UMA vaga"), pelo mesmo endpoint         │
+   * │ inalterado, alcançável pelo mesmo papel com um clique na tela da vaga. Nenhuma rota nova,    │
+   * │ nenhum campo novo, nenhum público novo. E 781 é 0,8% dos 95.312 que esta tela baixava a      │
+   * │ CADA carregamento, antes do conserto.                                                        │
+   * │                                                                                             │
+   * │ SEM ESTE NÚMERO ESCRITO, quem ler "uma vaga" entende "uma pessoa", e foi a auditoria que     │
+   * │ exigiu o registro. A frente própria que zeraria os 780 excedentes é uma leitura estreita de  │
+   * │ UMA candidatura: os campos estão todos na linha, mais um join para o nome.                    │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  const [abrindo, setAbrindo] = useState<string | null>(null);
+
+  async function abrirAcao(linha: Linha, destino: (cheia: AsCandidaturaItem) => void) {
+    const resumo = linha.candidatura;
+    if (!resumo) return;
+    setAbrindo(linha.chave);
+    setErro(null);
+    try {
+      const painel = await painelDaVaga(resumo.vagaId, token);
+      const cheia = painel.candidaturas.find((c) => c.id === resumo.id);
+      if (!cheia) {
+        setErro(
+          "Esta candidatura não está mais nesta vaga. Recarregue a lista para ver o estado atual.",
+        );
+        return;
+      }
+      destino(cheia);
+    } catch (err) {
+      setErro(mensagemDoErro(err, "Falha ao abrir esta candidatura."));
+    } finally {
+      setAbrindo(null);
+    }
+  }
 
   // A busca por texto é adiada, para não disparar uma requisição por tecla digitada.
   useEffect(() => {
@@ -236,28 +305,53 @@ export default function CentralDeCandidatosPage() {
     [pessoas],
   );
 
-  /** As linhas, antes do card e dos filtros locais. Pessoa sem candidatura vira uma linha só. */
-  const linhasBase = useMemo<Linha[]>(() => {
-    const porPessoa = new Map<string, AsCandidaturaItem[]>();
-    for (const c of candidaturas) {
-      const atual = porPessoa.get(c.candidatoId);
-      if (atual) atual.push(c);
-      else porPessoa.set(c.candidatoId, [c]);
-    }
+  /**
+   * O FUNIL NÃO VEIO NESTA RESPOSTA? A pergunta é feita sobre a página inteira, porque o campo é da
+   * projeção: ou a busca o envia para todo mundo, ou não o envia para ninguém.
+   *
+   * ELA EXISTE PARA A TELA NÃO MENTIR. Sem essa distinção, ausência de funil viraria "Vaga Não
+   * Alocada" em todas as linhas, que foi o segundo sintoma do 429 e o motivo de a lista contradizer
+   * a ficha da mesma pessoa.
+   */
+  const funilIndisponivel = useMemo(() => funilNaoVeio(pessoas), [pessoas]);
 
-    return pessoas.flatMap<Linha>((p) => {
-      const minhas = (porPessoa.get(p.id) ?? []).filter((c) => !fVaga || c.vagaId === fVaga);
-      if (minhas.length === 0) {
-        return fVaga ? [] : [{ chave: p.id, pessoa: p, candidatura: null, vaga: null }];
-      }
-      return minhas.map((c) => ({
-        chave: c.id,
-        pessoa: p,
-        candidatura: c,
-        vaga: vagaPorId.get(c.vagaId) ?? null,
-      }));
-    });
-  }, [pessoas, candidaturas, vagaPorId, fVaga]);
+  /** As linhas, antes do card e dos filtros locais. Pessoa sem candidatura vira uma linha só. */
+  const linhasBase = useMemo<Linha[]>(
+    () =>
+      pessoas.flatMap<Linha>((p) => {
+        /*
+         * AUSENTE x VAZIO. `undefined` é "a busca não mandou o funil desta pessoa", e a linha fica
+         * em um terceiro estado, que a tabela mostra como tal. Lista VAZIA é "ela não está em vaga
+         * nenhuma", que é estado legítimo e continua sendo "Vaga Não Alocada".
+         */
+        if (p.candidaturas === undefined) {
+          return [
+            { chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: true, vaga: null },
+          ];
+        }
+        const minhas = p.candidaturas.filter((c) => !fVaga || c.vagaId === fVaga);
+        if (minhas.length === 0) {
+          return fVaga
+            ? []
+            : [{ chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: false, vaga: null }];
+        }
+        return minhas.map((c) => ({
+          chave: c.id,
+          pessoa: p,
+          candidatura: c,
+          funilIndisponivel: false,
+          /*
+           * CLIENTE E CARGO CONTINUAM VINDO DE `/as/vagas`, que é filtrada por status: a vaga
+           * encerrada ou em revisão não está lá, e a célula diz "não informado". A COLUNA VAGA NÃO
+           * DEPENDE MAIS DISSO, de propósito: ela lê `vagaNome`/`vagaCodigo` da própria projeção,
+           * senão a linha que TEM vaga pintaria vazio e o 429 teria sido trocado por uma cegueira
+           * mais discreta (todas as vagas das candidatas que o diretor procurou estão em revisão).
+           */
+          vaga: vagaPorId.get(c.vagaId) ?? null,
+        }));
+      }),
+    [pessoas, vagaPorId, fVaga],
+  );
 
   /**
    * OS NÚMEROS DOS CARDS. Contados sobre as linhas já filtradas por cliente e etapa, mas ANTES do
@@ -275,6 +369,8 @@ export default function CentralDeCandidatosPage() {
          * desistiu) NÃO é frente de trabalho: sai da visão padrão e mora no HISTÓRICO. O recorte vem
          * ANTES da conta dos cards, de propósito, para o card sempre bater com a tabela.
          */
+        // A LINHA SEM FUNIL FICA NA FRENTE DE TRABALHO, e não no Histórico: mandar para o
+        // histórico quem a tela não conseguiu resolver seria decidir o desfecho dela no escuro.
         const emAndamento = l.candidatura === null || l.candidatura.situacao === "ATIVO";
         if (escopo === "andamento" && !emAndamento) return false;
         if (escopo === "historico" && emAndamento) return false;
@@ -325,7 +421,9 @@ export default function CentralDeCandidatosPage() {
     let semVaga = 0;
     for (const l of linhasSemCard) {
       if (!l.candidatura) {
-        semVaga += 1;
+        // A LINHA SEM FUNIL NÃO CONTA COMO "SEM VAGA": não se sabe se ela tem vaga, e um card que
+        // soma o desconhecido ao vazio é a mesma mentira da coluna, só em número.
+        if (!l.funilIndisponivel) semVaga += 1;
         continue;
       }
       const chave = cardDaCandidatura(l.candidatura.etapa, l.candidatura.situacao);
@@ -344,7 +442,9 @@ export default function CentralDeCandidatosPage() {
 
   const linhas = useMemo(() => {
     if (cardAtivo === CARD_TOTAL) return linhasSemCard;
-    if (cardAtivo === CARD_SEM_VAGA) return linhasSemCard.filter((l) => l.candidatura === null);
+    // "Sem Vaga" é quem não está em vaga nenhuma, e não quem a tela não conseguiu resolver.
+    if (cardAtivo === CARD_SEM_VAGA)
+      return linhasSemCard.filter((l) => l.candidatura === null && !l.funilIndisponivel);
     // Nos demais, a chave do card é o próprio código (da etapa ou da situação), e a régua do filtro
     // é EXATAMENTE a que contou o número: card e tabela não têm como discordar.
     return linhasSemCard.filter(
@@ -633,6 +733,22 @@ export default function CentralDeCandidatosPage() {
         </p>
       )}
 
+      {/* O FUNIL NÃO VEIO. O aviso é obrigatório, e não decorativo: sem ele a tabela mostraria cinco
+          colunas em branco e quem olha completaria a frase sozinho, concluindo que essas pessoas não
+          estão em vaga nenhuma. É o aviso que separa "não tem" de "não sei".
+          §A.11 sem travessão, §A.24 isto é frase de apoio, então só a primeira maiúscula. */}
+      {funilIndisponivel && (
+        <p
+          className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-dim"
+          role="status"
+        >
+          Não foi possível carregar o funil desta página: vaga, cliente, cargo, etapa e situação
+          aparecem como não carregados nas linhas abaixo. As pessoas continuam listadas, e nenhuma
+          delas está sendo apresentada como se não tivesse vaga. Recarregue a tela para tentar de
+          novo.
+        </p>
+      )}
+
       {/* ESCOPO DA VISÃO (item 5): frente de trabalho (em andamento) × histórico (concluídos). O
           escopo recorta ANTES da conta dos cards, então trocar de aba muda cards e tabela juntos. */}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
@@ -789,21 +905,21 @@ export default function CentralDeCandidatosPage() {
                       {l.candidatura ? (
                         (l.candidatura.vagaNome ?? l.candidatura.vagaCodigo ?? "não informado")
                       ) : (
-                        <span className="text-faint">Vaga Não Alocada</span>
+                        <CelulaSemCandidatura linha={l} />
                       )}
                     </td>
                     <td className="text-center">
                       {l.candidatura ? (
                         (l.vaga?.clienteNome ?? "não informado")
                       ) : (
-                        <span className="text-faint">Vaga Não Alocada</span>
+                        <CelulaSemCandidatura linha={l} />
                       )}
                     </td>
                     <td className="text-center">
                       {l.candidatura ? (
                         (l.vaga?.cargoNome ?? "não informado")
                       ) : (
-                        <span className="text-faint">Vaga Não Alocada</span>
+                        <CelulaSemCandidatura linha={l} />
                       )}
                     </td>
                     {/* ─ A ETAPA SÓ VALE ENQUANTO A CANDIDATURA ESTÁ VIVA (peça P1 do bug 1) ─────
@@ -828,7 +944,7 @@ export default function CentralDeCandidatosPage() {
                           )}
                         </span>
                       ) : (
-                        <span className="text-faint">Vaga Não Alocada</span>
+                        <CelulaSemCandidatura linha={l} />
                       )}
                     </td>
                     <td className="text-center">
@@ -840,7 +956,7 @@ export default function CentralDeCandidatosPage() {
                           />
                         </span>
                       ) : (
-                        <span className="text-faint">Vaga Não Alocada</span>
+                        <CelulaSemCandidatura linha={l} />
                       )}
                     </td>
                     {/* ÚLTIMO CONTATO, e não "última movimentação": é a pergunta que a operação
@@ -881,7 +997,8 @@ export default function CentralDeCandidatosPage() {
                                 icone="arr"
                                 titulo="Mover de etapa"
                                 descricao={`Mover ${l.pessoa.nome} de etapa`}
-                                onClick={() => setMoverAlvo(l.candidatura)}
+                                desabilitado={abrindo === l.chave}
+                                onClick={() => void abrirAcao(l, setMoverAlvo)}
                               />
                             )}
                             {/* TELEFONE, e não mais o LÁPIS (correção do diretor, 27/08): o lápis
@@ -893,7 +1010,8 @@ export default function CentralDeCandidatosPage() {
                               icone="phone"
                               titulo="Registrar contato"
                               descricao={`Registrar contato com ${l.pessoa.nome}`}
-                              onClick={() => setContatoAlvo(l.candidatura)}
+                              desabilitado={abrindo === l.chave}
+                              onClick={() => void abrirAcao(l, setContatoAlvo)}
                             />
                             {/* ─ TRAZER DE VOLTA, e ele aparece SÓ na linha encerrada (bug 2) ────
                                 É a porta que faltava. A reentrada existia inteira no backend e só
@@ -915,7 +1033,8 @@ export default function CentralDeCandidatosPage() {
                                 icone="refresh"
                                 titulo="Trocar vaga"
                                 descricao={`Trocar a vaga de ${l.pessoa.nome}`}
-                                onClick={() => setTrocaAlvo(l.candidatura)}
+                                desabilitado={abrindo === l.chave}
+                                onClick={() => void abrirAcao(l, setTrocaAlvo)}
                               />
                             )}
                             {!candidaturaViva(l.candidatura.situacao) && (
@@ -1111,16 +1230,39 @@ export default function CentralDeCandidatosPage() {
   }
 }
 
+/**
+ * ─ O QUE A CÉLULA DIZ QUANDO NÃO HÁ CANDIDATURA, E SÃO DUAS RESPOSTAS DIFERENTES ───────────────
+ *
+ * "Vaga Não Alocada" é uma AFIRMAÇÃO: esta pessoa está na base e não está em vaga nenhuma. Dizê-la
+ * quando o funil simplesmente não veio foi o segundo sintoma do 429, e o mais caro: a tela jurava
+ * que ninguém tinha vaga, a ficha da mesma pessoa mostrava a etapa certa, e quem olhou concluiu que
+ * o dado havia sumido. Ausência de resposta não é resposta, então a célula diz que não carregou.
+ *
+ * §A.24: as duas são etiqueta de estado, então title case.
+ */
+function CelulaSemCandidatura({ linha }: { linha: Linha }) {
+  if (linha.funilIndisponivel) {
+    return (
+      <span className="text-faint" title="O funil desta pessoa não veio na resposta da busca.">
+        Funil Não Carregado
+      </span>
+    );
+  }
+  return <span className="text-faint">Vaga Não Alocada</span>;
+}
+
 function AcaoIcone({
   icone,
   titulo,
   descricao,
   onClick,
+  desabilitado,
 }: {
   icone: IconName;
   titulo: string;
   descricao: string;
   onClick: () => void;
+  desabilitado?: boolean;
 }) {
   return (
     <button
@@ -1128,7 +1270,8 @@ function AcaoIcone({
       title={titulo}
       aria-label={descricao}
       onClick={onClick}
-      className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+      disabled={desabilitado}
+      className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent disabled:opacity-50"
     >
       <Icon name={icone} className="h-4 w-4" />
     </button>

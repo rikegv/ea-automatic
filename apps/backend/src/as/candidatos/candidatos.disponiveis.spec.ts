@@ -102,8 +102,28 @@ function bancoDaBusca(cenario: { linhas?: number; total?: number } = {}) {
     return Promise.resolve(linhas);
   };
 
+  /*
+   * A SEGUNDA CONSULTA, A DO FUNIL, CAI NUMA CADEIA PROPRIA E INERTE, e ela precisa ser propria.
+   *
+   * A busca passou a ler o funil da pagina em UMA segunda consulta (`as_candidaturas` por
+   * `candidato_id in (...)`), que e justamente o conserto do 429. Se ela caisse no construtor de
+   * cima, o `where` e a coluna de ativas que este arquivo afere seriam SOBRESCRITOS pela consulta
+   * seguinte, e as afirmacoes sobre a consulta PAGINADA passariam a falar da outra.
+   *
+   * ELA DEVOLVE LISTA VAZIA de proposito: o que este arquivo afere e a consulta paginada e o corte,
+   * e quem cobre a forma e a paginacao do funil sao os arquivos proprios daquela frente.
+   */
+  const cadeiaDoFunil: Record<string, unknown> = {};
+  for (const passo of ["from", "innerJoin", "leftJoin", "where", "orderBy"]) {
+    cadeiaDoFunil[passo] = () => cadeiaDoFunil;
+  }
+  cadeiaDoFunil.then = (ok: (v: unknown) => unknown, falha?: (e: unknown) => unknown) =>
+    Promise.resolve([]).then(ok, falha);
+
   const db = {
     select: vi.fn((selecao: Record<string, unknown>) => {
+      // A consulta paginada e a unica que pede `candidaturasAtivas`; a do funil nao pede.
+      if (!selecao || !("candidaturasAtivas" in selecao)) return cadeiaDoFunil;
       consulta.colunaDeAtivas = textoDe(selecao?.candidaturasAtivas);
       return construtor;
     }),

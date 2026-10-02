@@ -12,9 +12,14 @@
  * lista com fichas: puxar a ficha de todo mundo para preencher colunas traria o CPF da base inteira
  * para o navegador e desfaria, em uma linha, a minimização que o backend construiu.
  *
- * DE ONDE VÊM AS COLUNAS DE FUNIL, ENTÃO: do PAINEL DA VAGA (`GET /as/candidatos/vaga/:id`), que
- * devolve as candidaturas com etapa e situação e NÃO devolve CPF nenhum. É a única fonte de funil
- * que respeita a minimização, e é a que a tela usa.
+ * DE ONDE VÊM AS COLUNAS DE FUNIL, ENTÃO: da PRÓPRIA BUSCA, que devolve, junto de cada pessoa da
+ * página, uma projeção MÍNIMA das candidaturas dela (`AsCandidaturaNaLista`: vaga, etapa, situação e
+ * último contato, sem CPF e sem o texto livre da recusa).
+ *
+ * ERA O PAINEL DA VAGA (`GET /as/candidatos/vaga/:id`), uma chamada POR VAGA, e com 481 vagas em
+ * produção isso dava 483 requisições por carregamento contra um teto de 120 por 60s: a tela tomava
+ * 429 e, no estouro, pintava todo mundo como sem vaga. O painel CONTINUA existindo aqui, servindo a
+ * tela da vaga e a abertura de UMA candidatura por clique, e deixou de ser fonte de lista.
  */
 
 import type { AsCandidaturaEtapaItem } from "@ea/shared-types";
@@ -108,6 +113,24 @@ export function avisoDeCorte(pagina: {
 }): string | null {
   if (!pagina.truncado) return null;
   return `Mostrando ${pagina.itens.length} de ${pagina.total} candidatos. Use a busca para encontrar quem não está na lista.`;
+}
+
+/**
+ * ─ AUSENTE NÃO É VAZIO, e esta é a régua que o 429 ensinou ──────────────────────────────────────
+ *
+ * `candidaturas: []` é uma AFIRMAÇÃO do servidor: esta pessoa não está em vaga nenhuma, estado
+ * legítimo e comum (pessoa na base ainda não alocada). `candidaturas` AUSENTE é o contrário de uma
+ * afirmação: o funil não veio, e a tela não sabe nada sobre a vaga dessa pessoa.
+ *
+ * TRATAR AS DUAS COISAS IGUAL FOI O SEGUNDO SINTOMA DO 429: com o funil faltando, a lista jurava
+ * "Vaga Não Alocada" para TODA pessoa, enquanto a ficha da mesma pessoa mostrava a etapa certa. Por
+ * isso a pergunta mora numa função só, com teste, em vez de num `??  []` espalhado pela tela.
+ *
+ * A PERGUNTA É DA PÁGINA, não da pessoa: o campo é da projeção, então ou a busca o manda para todo
+ * mundo, ou não manda para ninguém. Página vazia não tem funil faltando, tem página vazia.
+ */
+export function funilNaoVeio(pessoas: readonly { candidaturas?: unknown[] }[]): boolean {
+  return pessoas.length > 0 && pessoas.some((p) => p.candidaturas === undefined);
 }
 
 /**

@@ -19,8 +19,13 @@
  * │ fazer.                                                                                       │
  * │                                                                                              │
  * │ O QUE É REUSADO É A LEITURA, que é o que importa: a MESMA rota `GET /as/candidatos/vaga/:id`  │
- * │ (`painelDaVaga`) que a Central de Candidatos já usa para montar as colunas de funil. Nenhuma  │
- * │ consulta nova, nenhum campo novo no backend.                                                  │
+ * │ (`painelDaVaga`) que as telas de VAGA usam. Nenhuma consulta nova, nenhum campo novo.          │
+ * │                                                                                              │
+ * │ ELA DEIXOU DE SER A FONTE DA CENTRAL DE CANDIDATOS EM 02/10/2026, e o texto antigo dizia que  │
+ * │ era: aquela tela pedia o painel de CADA vaga para montar as colunas, 483 chamadas por carga   │
+ * │ contra um teto de 120 por minuto, e passou a responder 429 ao time. Hoje o funil dela vem na  │
+ * │ propria pagina da busca, em projecao minima. O painel segue servindo quem pergunta por UMA    │
+ * │ vaga, que e o caso deste modal.                                                               │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * §A.6, E É POR ISSO QUE A LEITURA É ESTA E NÃO A BUSCA DE CANDIDATOS: o painel da vaga devolve

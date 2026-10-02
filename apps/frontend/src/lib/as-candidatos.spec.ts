@@ -9,6 +9,7 @@ import {
   bancoPrecisaCiencia,
   formatCpf,
   cardDaCandidatura,
+  funilNaoVeio,
   reentradaPrecisaCiencia,
 } from "./as-candidatos";
 
@@ -319,5 +320,28 @@ describe("bancoPrecisaCiencia (o TERCEIRO 409 do módulo: avisa, não bloqueia)"
     expect(bancoPrecisaCiencia(new ApiError(corpo.message, 404, corpo))).toBeNull();
     expect(bancoPrecisaCiencia(new Error("Falha de rede"))).toBeNull();
     expect(bancoPrecisaCiencia(null)).toBeNull();
+  });
+});
+
+describe("funilNaoVeio (ausente não é vazio, e foi essa confusão que cegou a lista)", () => {
+  it("lista VAZIA é afirmação de que a pessoa não está em vaga nenhuma, e não falha de carga", () => {
+    expect(funilNaoVeio([{ candidaturas: [] }, { candidaturas: [] }])).toBe(false);
+  });
+
+  it("campo AUSENTE é funil que não veio, mesmo que as outras pessoas tenham vindo", () => {
+    expect(funilNaoVeio([{ candidaturas: [{}] }, {}])).toBe(true);
+  });
+
+  it("página inteira sem o campo é funil que não veio", () => {
+    expect(funilNaoVeio([{}, {}])).toBe(true);
+  });
+
+  /*
+   * PÁGINA VAZIA NÃO TEM FUNIL FALTANDO. Sem esta régua, a busca que não achou ninguém abriria o
+   * aviso de falha de carregamento, e quem procurou um nome que não existe leria "não carregou"
+   * em vez de "não achei", que são diagnósticos opostos.
+   */
+  it("página vazia não é funil faltando", () => {
+    expect(funilNaoVeio([])).toBe(false);
   });
 });
