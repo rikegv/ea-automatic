@@ -246,6 +246,12 @@ const ROTULO_DA_ORIGEM: Record<OrigemDeEnvioDoLink, string> = {
   AUTOMATICO: "Automático",
   MANUAL: "Manual",
   ENTREGA_A_MAO: "Entrega À Mão",
+  // `AUTOATENDIMENTO` é a PORTA DE E-MAIL: o próprio candidato pediu e o sistema enviou, sem humano
+  // nenhum clicar. Ele PRECISA ser distinto de `AUTOMATICO` (o gancho do funil) porque o autor
+  // gravado na linha é o dono do REGISTRO, e não quem agiu: sem o código próprio, a tela leria
+  // autoria onde há apenas custódia. §A.24: title case, e o `Record` é o que garante que um código
+  // novo do contrato pare de COMPILAR até ganhar rótulo, em vez de aparecer vazio na coluna.
+  AUTOATENDIMENTO: "Autoatendimento",
 };
 
 /**

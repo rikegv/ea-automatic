@@ -3012,6 +3012,29 @@ export const AS_CONTATO_TIPO_LABEL: Record<AsContatoTipo, string> = {
  * precisa do número. Quem responde "com CPF ou sem" é `temCpf`, um booleano; o número em si só sai
  * na FICHA de um candidato, que é o único lugar com uso legítimo para ele.
  */
+/**
+ * A CANDIDATURA COMO ELA APARECE NA LINHA DA LISTA: projecao MINIMA, e o minimo e a regra.
+ *
+ * NAO E `AsCandidaturaItem`, e a diferenca e de §A.6, nao de conveniencia. Aquele tipo carrega
+ * `motivoDescarte` (texto livre do consultor sobre a recusa) e `pretensaoSalarial` (dado
+ * financeiro), autorizados para superficies de UMA pessoa ou de UMA vaga. A lista e varredura de
+ * base: 200 linhas por carga, cinco leitores, tres deles oferecendo gente para alocacao.
+ *
+ * A LISTA E FECHADA DE PROPOSITO. Campo novo aqui e decisao de §A.6, nao acrescimo de conveniencia,
+ * e a assercao de forma da resposta existe para que acrescentar um sem pensar fique vermelho.
+ */
+export interface AsCandidaturaNaLista {
+  id: string;
+  candidatoId: string;
+  vagaId: string;
+  vagaCodigo: string | null;
+  vagaNome: string | null;
+  etapa: CandidaturaEtapa;
+  situacao: CandidaturaSituacao;
+  /** Quando falamos com esta pessoa pela ultima vez. Nulo quer dizer que nao houve contato. */
+  ultimoContatoEm: string | null;
+}
+
 export interface AsCandidatoListItem {
   id: string;
   nome: string;
@@ -3031,6 +3054,62 @@ export interface AsCandidatoListItem {
    */
   bancoTalentos: boolean;
   criadoEm: string;
+  /**
+   * AS CANDIDATURAS DESTA PESSOA, na MESMA resposta da lista, e isto e o conserto do 429.
+   *
+   * ┌─ POR QUE O CAMPO SOBE AO CONTRATO, e o que ele substitui ──────────────────────────────────┐
+   * │ A Central de Candidatos montava as colunas de funil pedindo o PAINEL DE CADA VAGA, uma      │
+   * │ requisicao por vaga. Com 481 vagas isso virou 483 chamadas por carregamento, contra um teto  │
+   * │ de 120 por minuto, e a tela passou a responder 429 ao proprio time. Pior: ao estourar, o     │
+   * │ estado de candidaturas ficava VAZIO e TODA pessoa aparecia como "Vaga Nao Alocada", com vaga │
+   * │ ou sem. Os dois defeitos que o diretor relatou eram UM.                                      │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ POR QUE PROJECAO MINIMA, E NAO `AsCandidaturaItem` ───────────────────────────────────────┐
+   * │ ERA `AsCandidaturaItem` INTEIRO, e o `seguranca` VETOU com a razao escrita no proprio tipo:  │
+   * │ a autorizacao §A.6 de `motivoDescarte` e de `pretensaoSalarial` esta concedida SOBRE A       │
+   * │ PREMISSA de que a busca da Central NAO usa aquele tipo (ver o bloco de `pretensaoSalarial`). │
+   * │ Reusa-lo aqui quebraria a premissa que autorizou os campos.                                  │
+   * │                                                                                             │
+   * │ E O DANO NAO FICARIA NESTA TELA: a mesma rota tem CINCO leitores, e tres deles chamam com    │
+   * │ `semCandidatura: true` para OFERECER pessoas para alocacao. Medido em producao, 1.645         │
+   * │ candidaturas desceriam para eles, 100% com `motivoDescarte` preenchido, porque DESCARTADO    │
+   * │ sempre grava motivo. O modal de alocar viraria vitrine do motivo da recusa e da pretensao    │
+   * │ salarial de quem ele oferece, sem nenhuma coluna mostrar nada disso. E o precedente tem nome:│
+   * │ foi o `substituidoCpf`, que desceu cru por meses porque nenhuma coluna o mostrava.           │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SAO OS CAMPOS QUE A TELA DE FATO LE, e nada mais. `vagaCodigo` e `vagaNome` entram porque sem
+   * eles a coluna de vaga passaria a depender de a vaga estar na lista de `/as/vagas`, que e
+   * filtrada por status: vaga encerrada ou em PENDENTE_REVISAO pintaria "nao informado" numa linha
+   * que TEM vaga, trocando o 429 por uma cegueira mais discreta. Todas as vagas das candidatas que
+   * o diretor procurou estao em PENDENTE_REVISAO.
+   *
+   * ┌─ AUSENTE E `[]` SAO COISAS DIFERENTES, E A DISTINCAO E O CONSERTO DO SEGUNDO SINTOMA ──────┐
+   * │   AUSENTE  = o funil NAO FOI PEDIDO nesta chamada, ou nao veio.                              │
+   * │   `[]`     = foi pedido, e a pessoa nao tem candidatura nenhuma.                             │
+   * │                                                                                             │
+   * │ POR QUE NAO SE UNIFICA EM `[]`: a chamada com `semCandidatura: true` filtra quem nao tem     │
+   * │ candidatura VIVA, e essa gente PODE ter candidatura MORTA (medido: 1.620 pessoas com 1.645   │
+   * │ candidaturas descartadas). Devolver `[]` para elas afirmaria que a candidatura nao existe,   │
+   * │ o que e falso. Entao naquela chamada o campo e AUSENTE, porque nao foi pedido.                │
+   * │                                                                                             │
+   * │ QUEM DISTINGUE "NAO VEIO" DE "NAO TEM" E A TELA, e so a Central de Candidatos faz essa       │
+   * │ pergunta: ela chama SEM `semCandidatura`, logo o campo sempre vem, e ausente ali significa   │
+   * │ falha de carregamento. E foi exatamente a falta dessa distincao que fez a tela pintar         │
+   * │ "Vaga Nao Alocada" para TODO MUNDO quando o carregamento estourava: ela nao tinha como       │
+   * │ saber se a pessoa nao tinha vaga ou se a informacao nao havia chegado.                        │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * VAZIO E ESTADO LEGITIMO: pessoa na base sem vaga e normal, e e assim que a tela sabe pintar
+   * "Vaga Nao Alocada" de verdade, em vez de por falha de carregamento.
+   *
+   * OPCIONAL SO ENQUANTO A FRENTE CORRE, e a razao e de convivencia, nao de desenho: este arquivo e
+   * lido por DUAS outras sessoes ao mesmo tempo, e declara-lo obrigatorio antes de os dois lados o
+   * preencherem deixa a arvore VERMELHA para elas (foi o que aconteceu, e a sessao do GI avisou).
+   * O ultimo passo da frente e tirar o `?`, com os dois lados preenchendo.
+   */
+  candidaturas?: AsCandidaturaNaLista[];
 }
 
 /**
