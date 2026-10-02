@@ -19459,3 +19459,94 @@ ARQUIVO, e um arquivo pode conter duas frentes.
    proteção de retenção. Ligar é a correção barata.
 4. **826 pessoas duplicadas** (mesma vaga, mesmo nome, uma com CPF e outra sem; 4.103 sem CPF, todas
    do Pandapé). É da **ingestão**, frente própria.
+
+---
+
+## 01 e 02/10/2026, O GI: de "o 200 não prova nada" até a ponte quase fechada, e os 3 vetos que a seguraram
+
+Sessão do GI (a integração com o ERP de folha do fornecedor), operada distribuída (§A.39), com três
+sessões simultâneas no ar (Portal, Pandapé) e dois restarts de produção coordenados.
+
+### A frente de 01/10, em quatro commits, toda provada contra a PRODUÇÃO do fornecedor
+
+- **`bccbc02`** o `HTTP 200` do `Add` **não prova criação**: o GI responde 200 com `sucess: false`, e o
+  `maxLength` dele derrubava a admissão INTEIRA com 400. Passou a conferir o `sucess` e a cortar na
+  fronteira de saída.
+- **`7f6ced1`** normalização numérica, idempotência por upsert, e o **banco da EMPRESA saiu do envio**:
+  `codigoBcoFolha`/`codigoBcoPagar` apontam para a conta PAGADORA da empresa, quem cadastra é a folha,
+  o EA não deve mandar. O `341` que o EA mandava era FEBRABAN, e o campo espera a chave interna.
+- **`59b0d8f`** salário, data de admissão, vínculo e empresa/filial, todos com **recusa fail-closed**.
+- **`1ae8cf8`** **o time DECLARA a unidade do salário.** O `tipoSalario` do GI tem `default 'M'`, então
+  salário de HORA enviado sem declaração virava salário MENSAL na folha sem nada falhar. Não se deduz
+  pela faixa do valor (vetado): recusa, e o time declara.
+
+**Os 4 envios mistos** (`docs/GI-4-ENVIOS-MISTOS-RESULTADO.md`), registros 20 a 23, um por vez, com
+CPF de classe que a Receita nunca emitiu. Achado: **o GI PERDE o zero à esquerda do CPF** (`double` no
+contrato dele, sem conserto do nosso lado).
+
+### 02/10, de madrugada: o cliente final e as três cidades (`819bc7c`, migration 0141)
+
+O diretor estava certo, e o de/para é DIRETO: `codigoCliente` = `clientes.cod_cliente`, **243 dos 244
+casam** com os códigos reais do GI. As três cidades (nascimento, RG, CTPS) **estavam no documento e a
+IA não era perguntada**: foram acrescentadas à extração, à allowlist, às colunas e ao payload.
+`naturalidade` continua sendo a **UF** (máx 2), não a cidade.
+
+**Rodada 4** (`docs/GI-RODADA-4-RESULTADO.md`), registros **27 e 28**: os dois com o **MESMO**
+`codigoCliente` 51525 em empresas diferentes, e **o GI guardou os dois separados**. 8 mutações
+testadas, as 8 morderam. E o **sumiço dos registros ficou explicado: ninguém apagou nada**, o
+sincronizador do fornecedor **consome a fila em menos de 10 minutos** (2 às 13:38, 0 às 13:48), então
+toda leitura de volta tem de acontecer no mesmo ciclo do envio.
+
+### 02/10, à tarde: fechar a ponte. Entregue o que passou, SEGURADO o que não
+
+- **`a33323e` EM PRODUÇÃO** (restart 15:30): o **sufixo de contrato sai na SAÍDA**, por régua derivada,
+  não por lista fixa. Medido nos 7 `cod_cliente` com sufixo: **4 destravam limpo** (51525, 55642,
+  56085, 56702-TEMP.) e **3 recusam** (57315-T e 57315-TEMP., as duas no mesmo par 1/4, e 56702-T, sem
+  vínculo). Publicado por **build em worktree isolada no commit**, nunca do working tree sujo, e por
+  **cópia nominal de 2 arquivos** do `dist`, com o diff de intenção conferido antes (só a minha
+  mudança) e rollback guardado.
+- **`ad2084f`**: os dois de/para **materializados e provados**. 5.571 municípios do IBGE (27 UFs, zero
+  colisão) e os 127 pares de `Empresa/GetAll` (conferidos 127/127). 34 testes novos, 5 de 6 mutações
+  mordendo, e a 6ª declarada como **mutante equivalente** em vez de maquiada.
+- **`GI_PARES_EMPRESA_FILIAL` LIGADA em produção**, e provada contra o valor real do `.env`: os pares
+  reais conhecidos, `1/37` e `99/0` recusados.
+
+### OS TRÊS VETOS DO `seguranca`, todos confirmados por medição minha
+
+1. **UM de/para alimenta DOIS espaços de código.** `codMunicipioNascto` é IBGE (provado: o GI guardou
+   `3509502` para Campinas, e a tabela pública do IBGE dá o mesmo número). `codigoCidadeResid` tem
+   espaço **DESCONHECIDO**, e hoje é **inmedível**: `DePara/GetAll` do GI devolve 0 itens,
+   `FuncionarioSelecao/GetAll` esvazia em 10 min, `ApiFicha` responde 403 e **não existe recurso de
+   Município nos 443 paths**. Forma igual não prova espaço igual, e o contra-exemplo está no mesmo
+   contrato (`codigoCliente` tem forma idêntica e é outro espaço). **O mapa de cidades NÃO foi ligado.**
+2. **O primeiro envio real tem exatamente UM destinatário possível, e é pessoa real.** Das **58
+   admissões vivas**, só **1** tem salário com unidade (as 57 recusam), e ela passa por todas as
+   guardas levando nome, CPF, nascimento, telefone e **conta bancária**, e **zero documento** (a tabela
+   `admissao_dados_gi` tem 0 linhas em produção, e a leitura é `leftJoin`). Não há guarda nenhuma sobre
+   documento de pessoa, não existe endpoint de Update, e `jaEnviado` bloqueia para sempre: **registro
+   magro é permanente**.
+3. **O TTL DELETA O CARIMBO DE IDEMPOTÊNCIA.** `gi_enviado_em` mora na MESMA linha que o expurgo apaga
+   por TTL de 30 dias, e `jaEnviado` lê essa linha. Logo, 30 dias depois de um envio o carimbo
+   desaparece e **uma retentativa cria um SEGUNDO `FuncionarioSelecao`** na produção do fornecedor.
+   Verificado por mim: as duas colunas estão na mesma tabela, o expurgo dá `DELETE` na linha inteira.
+
+### Correção de premissa no item 4, que volta à mesa do diretor
+
+O veto do autor do envio foi dado como resolvido porque "o GI carimba quem enviou do lado dele".
+Medição: o EA autentica com **uma credencial de serviço única**, então o que o fornecedor carimba é a
+**credencial do EA**, não o MASTER que clicou; e do nosso lado `enviarManual` recebe o autor com
+underscore e **não o usa**. O RBAC está correto (`MASTER`/`SUPER_ADMIN`). Registro em
+`docs/GI-VETO-DISPARO-ARMADO-RESOLVIDO.md`, com esta ressalva anotada.
+
+### Agentes e vereditos (§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o **MAPA antes do código** (§A.40 regra 1), 6 pontos | **VETOU 4**, aprovou o código do item 1 e os 127 pares |
+| `tester` | 34 travas dos dois de/para, em paralelo com a materialização | verde, 5 de 6 mutantes mortos, 1 equivalente declarado |
+| coordenador | investigação de alcance, sonda GET-only no GI, commit, publicação, env | 427 testes do GI verdes, typecheck limpo |
+
+**O que a auditoria do mapa pegou e que eu não tinha:** o recorte não listava `.env.example` (com o
+`7107` fictício, semente do próximo preenchimento errado), nem as fixtures novas, e **a seção do mapa
+mediu o `.env` errado** (o de produção é o do `ea-release-portal`; a conclusão sobrevive, a citação
+não). Documentos: `docs/MAPA-GI-FECHAR-A-PONTE.md`, `docs/GI-VETO-DISPARO-ARMADO-RESOLVIDO.md`.
