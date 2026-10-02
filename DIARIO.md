@@ -17585,6 +17585,200 @@ registrada acima.
 
 ---
 
+## 29/09/2026: PORTAL, ACESSO POR E-MAIL. A premissa invertida, o VETO do desenho e a porta que entrega link em vez de sessão
+
+**OST do diretor:** candidato sem CPF não consegue acessar o Portal para entregar documento. Ele
+desenhou dois cenários na entrada: com CPF, como hoje; sem CPF, entra pelo e-mail, recebe um código,
+o sistema puxa os dados dele, ele informa CPF e nascimento, e o Portal abre. Divergiu, trava. Qualquer
+usuário do Soul ADM destrava.
+
+### A PREMISSA ESTAVA INVERTIDA, pela segunda vez numa frente do Portal
+
+A OST diz que esses candidatos "passam pela triagem, avançam, chegam à admissão". **Eles não chegam.**
+A ponte A&S para a esteira recusa em letras (`as/candidatos/candidatos.service.ts:1894-1899`): "Este
+candidato não tem CPF válido. Preencha o CPF antes de enviar para admissão." A trava é deliberada e o
+comentário explica: o funil admite candidato sem CPF de propósito, e é no avanço para a esteira que o
+dado passa a ser exigido, porque é ali que ele começa a ser necessário.
+
+Três paredes estruturais, medidas:
+1. `candidatos.cpf` é **chave primária NOT NULL** e `admissoes.candidato_cpf` é FK dela. Não existe
+   admissão sem CPF.
+2. A **identidade provisória existe** (`domain/identidade-provisoria.ts`, prefixo `PROV`) e é
+   **proibida para vivo**: só `DECLINOU` e `RESCISAO`. Medido: 48 admissões `PROV%`, **todas
+   DECLINOU**, em produção e em homologação.
+3. A entrada do Portal é **escopada pelo LINK**: `POST portal/identificar` exige o bilhete Ed25519 e
+   compara CPF e nascimento **da admissão daquele bilhete**, nunca por busca global.
+
+E os "397 candidatos" da OST **não estão em nenhum banco**: `as_candidatos` tem **0 linhas em
+produção** e 13 em homologação. São a planilha ainda não importada.
+
+### O DESENHO DA FÁBRICA FOI VETADO, e o veto achou o furo antes de existir código
+
+Seguindo a §A.40 (o mapa é auditado ANTES do primeiro despacho), o `seguranca` recebeu o mapa de
+alcance e **VETOU**. O achado, que nenhum teste pegaria:
+
+O desenho abria o Portal buscando a admissão **pelo CPF digitado**, e a trava de divergência que
+deveria conter isso **é vazia por construção justamente na população-alvo**: candidato sem CPF tem
+`cpf` nulo, e nulo não discorda de nada. Cadeia completa: quem controlasse **uma** caixa de e-mail
+pediria o código, provaria a posse, digitaria o **CPF de um terceiro**, zero campos divergiriam, e o
+**prontuário documental do terceiro abriria**. A porta de hoje recusa exatamente isso, por escrito
+(`portal-identidade.service.ts:1078-1081`).
+
+Somando, medido em **produção**: **6 e-mails compartilhados por 12 CPFs distintos, e 5 deles com DOIS
+NOMES diferentes.** E-mail não identifica pessoa.
+
+Mais três achados do coordenador, antes de construir:
+- a **sessão do Portal não existe sem `jti` de link** (é a chave da cota de arquivos), então "abrir o
+  Portal pela porta de e-mail" implicava inserir em `portal_links`;
+- `portal_links.criado_por_id` é **NOT NULL com FK para `usuarios`**, e o usuário-sistema de UUID nulo
+  do precedente **não existe na tabela** (medido: 36 usuários em homologação, 38 em produção, zero com
+  aquele id). O precedente não serve para coluna com FK;
+- emitir link **revoga os links vivos da admissão**, então a porta nova mataria o link legítimo de
+  quem estivesse enviando documento: a V1 virava negação de serviço com um clique.
+
+### O QUE FICOU NO LUGAR: a porta entrega LINK, não sessão
+
+A chave de acesso do Portal **não mudou**. A porta de e-mail prova a posse da caixa e, com isso,
+manda o link para aquela mesma caixa. O candidato entra pelo link, com CPF e nascimento, que é a porta
+de sempre.
+
+E a correção estrutural que fecha o veto: **a admissão vem do VÍNCULO do registro**
+(`as_candidatos` -> `as_candidaturas` -> `admissoes`), **nunca de busca por CPF**. Com isso o pior caso
+deixa de ser "abro o prontuário de um terceiro" e passa a ser "escrevo um CPF errado na ficha de quem
+eu já tenho a caixa", que o time ainda tem de acatar.
+
+### Duas coisas que o diretor pediu e NÃO foram feitas assim
+
+1. **"O sistema puxa os dados dele (nome, e-mail)".** Proibido pela auditoria: posse de caixa não é
+   prova de identidade, e cinco caixas medidas pertencem a duas pessoas. A confirmação do código
+   devolve o bilhete e **nada da pessoa, nem o nome mascarado**.
+2. **"Aí abre o Portal para ele subir a documentação".** Passou a ser "enviamos um link para o seu
+   e-mail". Um passo a mais para o candidato, e a chave de acesso intacta.
+
+### O que NÃO foi construído, de propósito (§A.31: propõe, não constrói)
+
+O CPF que o candidato informa **não dispara sozinho o envio para a admissão**. Esse gesto consome
+posição de vaga e tem porta declarada com Master e aceite de reentrada (a "terceira porta fechada",
+`candidatos.service.ts:1905-1920`); abri-la por um candidato autenticado só por e-mail seria uma
+quarta porta não declarada. **É decisão do diretor.**
+
+### O correio: a fábrica resolveu tudo o que podia, e falta UM ato de administrador
+
+Medido ao vivo, não deduzido. O código do correio existe e está completo (Gmail REST API, conta de
+serviço, JWT assinado à mão, MIME, anti header-injection, logs mordaçados). A conta de serviço existe
+e a chave privada está na máquina: `ea-automatic-sa@ea-v2-automatic.iam.gserviceaccount.com`,
+`client_id` **116735761528318719537**. A fábrica montou o JWT com escopo `gmail.send` e pediu o token:
+
+```
+HTTP 401 · unauthorized_client
+Client is unauthorized to retrieve access tokens using this method,
+or client not authorized for any of the scopes requested.
+```
+
+Falta **autorizar aquele client_id no escopo `gmail.send`** na delegação de domínio do Workspace, e
+**escolher a caixa remetente**. Detalhe em `docs/CORREIO-DO-PORTAL-O-QUE-FALTA.md`.
+
+**Consequência dura para a validação:** sem correio a porta responde **503 por desenho** (fail-closed,
+condição C6 da auditoria), e a condição **C9 proíbe expor o código fora do e-mail em qualquer
+ambiente**, inclusive na homologação e inclusive "para teste". Então o fluxo do código **não fecha
+hoje**, e a fábrica não vai contorná-lo.
+
+### A SEGUNDA AUDITORIA, sobre o código, vetou a TRILHA
+
+O `seguranca` voltou depois da construção e deu **APROVADO** em seis das nove condições (C1, C2, C5,
+C6, C8, C9), com prova estrutural forte na C1: a tabela `candidatos` da esteira **não é nem importada**
+pelo serviço novo, existe **uma única** igualdade sobre coluna de CPF em todo o arquivo, e ela tem um
+`ne(asCandidatos.id, candidatoId)` que **exclui por construção a pessoa que está sendo atendida**. A
+correção do veto está no código, não na intenção.
+
+**VETOU a C7, a trilha**, com dois furos:
+
+1. **A trava de `EMAIL_AMBIGUO` era gravada sem uma linha de trilha.** Um POST **anônimo** em
+   `solicitar` punha até **20 pessoas** na fila do time, fechava a porta para cada uma, e a Sala De
+   Segurança não tinha o que ler. Era a trava de maior alcance da frente e a única sem rastro.
+2. **O sucesso do despacho do link não registrava nada na porta**, e a origem saía `AUTOMATICO`, que é
+   **o mesmo valor do gancho do funil**. Ninguém distinguia na trilha "o consultor mandou o link" de
+   "um candidato pediu e nós debitamos no nome do consultor". A auditoria chamou de **autoria falsa**, e
+   estava certa.
+
+**O conserto da autoria, que é a parte interessante.** `portal_links.criado_por_id` é NOT NULL com FK
+para `usuarios`, e o candidato não é usuário. A régua que o coordenador fechou tem três degraus: o dono
+do registro no funil, depois quem já emitiu link para aquela admissão, e **abstenção** se nenhum dos
+dois existir (medido: 9 de 13 fichas têm autor). Nenhum usuário-sistema foi semeado, o que a auditoria
+havia proibido. O que faltava era **dizer quem disparou**: entrou `AUTOATENDIMENTO` em
+`ORIGENS_DE_ENVIO_DO_LINK`, e com isso `criado_por_id` volta a significar **custódia** enquanto a
+coluna ao lado diz o ato. Não precisou de migration (`envio_origem` é `varchar(20)` sem CHECK).
+
+**Quatro condições**, todas aceitas:
+- **saiu o `emailMascarado` da resposta.** O link vai para `candidatos.email` (ficha da ADMISSÃO) e
+  quem chamou provou posse de `as_candidatos.email` (ficha do FUNIL); **podem ser endereços
+  diferentes**, então devolver domínio de um endereço cuja posse ele não provou é dado de terceiro;
+- **canal de TEMPO em `solicitar`**: o corpo é idêntico byte a byte, mas o caminho que resolve fazia
+  chamada de rede ao Gmail **dentro da requisição**, e a latência distinguia. O envio deixou de ser
+  esperado na requisição. A fila BullMQ é o desenho definitivo e fica como proposta;
+- **teto em `identidade`**, que não tinha nenhum: POST com UUID aleatório gastava trava e um insert na
+  trilha, o que é amplificação de log em rota pública;
+- **degrau (b) do autor não conferia `usuarios.ativo`**, e o degrau (a) conferia, com a razão escrita.
+
+**A auditoria também testou as travas de teste POR MUTAÇÃO**, e duas escaparam: uma busca por CPF
+inserida **antes** da conferência legítima driblava a janela de 400 caracteres do teste estrutural, e
+uma busca em **SQL cru** era invisível a todos os padrões. Não era falso verde (o código está limpo),
+mas a trava não impedia o retorno do padrão vetado, que é a razão de ela existir.
+
+### O QUE FOI CONSTRUÍDO
+
+**A porta do candidato**, três rotas `@Public()` sob `portal/`, sem guard de sessão:
+`acesso-email/solicitar`, `acesso-email/confirmar`, `acesso-email/identidade`. Domínio puro em
+`domain/portal-acesso-email.ts`. Duas tabelas novas (`portal_acesso_codigos`, `portal_acesso_travas`)
+na migration **0134**, escrita à mão e idempotente.
+
+**A fila de travas e o destrave** NÃO ganharam controller novo: entraram como handlers de
+`PortalPainelController` (`esteira/portal-painel`), e a escolha é o ponto técnico da entrega. Aquela
+classe já é reivindicada **por nome** pelo menu `portal-links` (coringa `PortalPainelController.*`,
+restrição `NENHUMA`, concedível a qualquer usuário), está **fora do prefixo `portal/`** que a barreira
+allowlista, e não tem `@Roles`. Isso satisfaz a exigência do diretor ("qualquer usuário do Soul ADM
+destrava") **sem tocar em `domain/menus.ts`**, que outra sessão está reescrevendo agora. Controller
+nova teria nascido **fail-open**, porque o `MenuGuard` passa livre por operação que nenhum menu
+reivindica.
+
+**O destrave recusa se o motivo informado não bater com o da trava**, o que impede destravar às cegas
+com tela velha, e a recusa vira linha de trilha.
+
+### Números
+
+| medição | valor |
+|---|---|
+| suíte do Portal, antes desta frente | 1.100 verdes, 54 arquivos |
+| suíte do Portal, depois | **1.229 verdes, 56 arquivos, zero vermelho** |
+| testes do domínio, cobertura independente | 87 |
+| travas estruturais da auditoria | 39 |
+| frontend (`components/portal` + libs) | 120 |
+| e-mails compartilhados por 2+ CPFs, em produção | 6 (12 CPFs, 5 com dois nomes) |
+| `as_candidatos` em produção | **0 linhas** |
+| admissões com CPF `PROV%` | 48, **todas DECLINOU** |
+
+### Quem rodou (§A.34/§A.38/§A.39)
+
+| agente | frente | veredito |
+|---|---|---|
+| Explore x4 | mapa da identificação, do correio, da trava/trilha, e do RBAC e working tree | mapas entregues |
+| **seguranca (1, sobre o MAPA)** | auditoria ANTES de construir (§A.40 regra 1) | **VETADO**, com prova de tomada de conta |
+| backend | domínio, migration, serviço, rotas, trilha, fila | verde |
+| frontend | escolha do caminho, tela do candidato, fila do time | verde |
+| tester (independente, em paralelo com a construção) | 87 testes do requisito + 39 travas estruturais | achou 1 defeito real (`hashDoCodigo` estourava com nulo) |
+| **seguranca (2, sobre o CÓDIGO)** | reauditoria das nove condições | **VETADO em C7**, 6 aprovadas, 4 condições |
+| coordenador | mapa, contrato, vocabulário compartilhado, consolidação | achou a regressão dos 3 testes do painel, o falso vermelho do `Math.random`, o vão do autor do link, a janela apertada do bilhete e a armadilha do modal de destrave |
+
+### Uma lição de processo que vale registrar
+
+**Teste que fixa uma LISTA FECHADA é canário, não chatice.** Acrescentar handlers ao
+`PortalPainelController` quebrou três testes que fixavam a lista de handlers, as rotas com `no-store` e
+os parâmetros aceitos. A resposta certa é **atualizar a lista e escrever por que o item novo pertence a
+ela**, nunca trocar por `toContain` ou `arrayContaining`: afrouxar faz o vermelho sumir e a garantia
+junto, e ninguém percebe até a próxima frente pendurar uma operação ali e ela nascer fail-open.
+
+---
+
 ## 29/09/2026, terça. Digai: o token chegou, a API real derrubou três premissas, e 174 testes verdes estavam errados
 
 **O que o diretor pediu:** atualizar os docs com as confirmações do Ivan e seguir com a construção da
@@ -17935,6 +18129,262 @@ Enviados ao Gilberto o payload do registro 17 e quatro perguntas: quais campos o
 persistir documentos e endereço (hipótese: `codigoEmpresa`/`codigoFilial`/`codigoCliente`, que não
 mandamos); se o caminho é `Add` ou `Add_Update`; por que três campos voltaram diferentes; e como
 conferir depois da matrícula. **Nenhum novo envio até a resposta dele (§A.27).**
+
+---
+
+## 29/09/2026: ACESSO POR E-MAIL, a conferência do que já existia, e o LEVANTAMENTO do correio sem o Workspace
+
+Sessão própria do acesso por e-mail, rodando em paralelo com outras quatro (Central de Ajuda, Digai,
+GI, Portal público). **Nada foi construído e nada foi commitado.** §A.14 respeitada: não toquei em
+arquivo de nenhuma das outras frentes. Quem executou: **coordenador, direto**, nas duas partes.
+Nenhum agente despachado, e o motivo está dito em cada parte.
+
+### PARTE 1: a OST pedia construir do começo ao fim, e a frente JÁ ESTAVA CONSTRUÍDA
+
+A OST chegou pedindo o acesso por e-mail "do começo ao fim". A investigação de alcance (§A.27/§A.39
+passo 1) mostrou que **a frente inteira já tinha sido construída por uma sessão anterior do mesmo
+dia**. Não construí nada: **medi o que existe**. Nenhum agente foi acionado porque não havia o que
+construir, e a auditoria do `seguranca` e a cobertura do `tester` já tinham acontecido na sessão que
+construiu (pareceres em `docs/`).
+
+**O que foi medido, item a item:**
+
+| o que | resultado |
+|---|---|
+| Código no repositório | completo: `domain/portal-acesso-email.ts`, service (1.539 linhas), controller, dto, migration `0134`, telas `AcessoPorEmail.tsx` e `EntradaSemLink.tsx` |
+| Testes desta frente | **205 passando** (152 backend + 53 frontend), rodados na sessão, **só os desta frente** (§A.40: a suíte inteira não roda a cada rodada, e as outras sessões disputam CPU) |
+| Homologação 3120 | **está no ar**: tabelas `portal_acesso_codigos` e `portal_acesso_travas` aplicadas, rotas registradas |
+| A porta, chamada ao vivo | **HTTP 503 "Portal indisponível"**, fail-closed por desenho, porque o correio não existe |
+| Delegação do Workspace | **HTTP 401 `unauthorized_client`**, remedido nesta sessão: continua não concedida |
+| Destravar candidato travado | aberto a **qualquer usuário autenticado**, sem `@Roles`, como o diretor pediu |
+
+**Correção de premissa minha, registrada porque quase virou diagnóstico errado:** meu primeiro teste
+da rota devolveu 404 e eu quase reportei que o código não estava na homologação. Estava: o backend tem
+**prefixo global `api`**, e a URL sem ele não existe mesmo. Com `/api/portal/acesso-email/solicitar` a
+resposta é 503, que é o comportamento correto. Medir de novo antes de afirmar é o que evitou o erro.
+
+### A DECISÃO DO DIRETOR sobre o desenho, registrada
+
+**Ele ACEITOU o fluxo que a auditoria propôs.** O candidato prova a posse da caixa com o código,
+informa CPF e data de nascimento, e o sistema **envia o link do Portal para aquela mesma caixa**, em
+vez de abrir o Portal direto. Ele entra pelo link, com CPF e nascimento, que é a porta de sempre.
+
+**O desenho vetado NÃO volta.** O que a auditoria derrubou foi abrir o Portal achando a admissão por
+**busca do CPF digitado**: candidato sem CPF tem o campo nulo, nulo não discorda de nada, então a
+trava de divergência era **vazia justamente na população desta frente**, e quem tivesse a caixa de um
+candidato do funil abriria o prontuário **de um terceiro**. Somado a isso, medido em produção: **6
+e-mails compartilhados por 12 CPFs, 5 deles com dois nomes diferentes**. E-mail não é chave de
+identidade. Nenhuma implementação futura pode reintroduzir esse caminho.
+
+Consequência prática, e é ela que amarra a parte 2: **sem correio não há frente nenhuma**, porque
+tanto o código quanto o link viajam por e-mail.
+
+### PARTE 2: LEVANTAMENTO do correio sem depender do Workspace (só levantar, §A.31)
+
+O diretor **não** é admin do Google Workspace (a delegação do `gmail.send` é do Fernando), mas **é**
+admin do Google Cloud. Pediu o levantamento das alternativas. Documento completo:
+**`docs/CORREIO-DO-PORTAL-ALTERNATIVAS.md`**.
+
+**Três achados, medidos ao vivo no DNS público e na rede da VM:**
+
+1. **JÁ EXISTE conta SendGrid com o `soulan.com.br` autenticado.** `s1._domainkey` e `s2._domainkey`
+   apontam para `u14395425.wl176.sendgrid.net`, e o SPF traz `include:sendgrid.net`. **A parte cara de
+   qualquer provedor, publicar DNS, já está feita nessa conta.** Ressalva que não pode passar batido:
+   vale para **aquela** conta; uma conta SendGrid **nova** não herda nada.
+2. **Os dois domínios são mundos diferentes.** `soulan.com.br` é **Google Workspace**;
+   `soulanrh.com.br`, que é o domínio público do Portal e do VT, é **Microsoft 365**, com SPF `-all`.
+   A recomendação é enviar como `@soulan.com.br`.
+3. **O `soulan.com.br` tem DMARC `p=quarantine`.** É o coração da entregabilidade: quem não alinhar
+   SPF ou DKIM com o domínio **é retido ou vai para spam**, por política da própria empresa.
+
+Também medido: a rede da VM **não bloqueia nada** (587, 465 e 443 abertos para Gmail, SendGrid, SES e
+Resend). Nenhuma opção morre por firewall. E **o Google Cloud não tem serviço de envio de e-mail
+próprio**: ser admin do Cloud não destrava envio sozinho, o que ele destrava é criar o cliente OAuth
+da opção B.
+
+**A regra única de entregabilidade:** para o candidato receber algo que pareça da empresa, o provedor
+precisa assinar como o domínio da empresa, e isso é DNS, que mora no Registro.br e passa pelo Fernando.
+**Só três caminhos escapam disso.**
+
+| # | opção | DNS novo | DMARC passa | depende do Fernando | custo | hoje? |
+|---|---|---|---|---|---|---|
+| **A** | **Gmail, senha de app** da conta do diretor | não | **sim** | **não** | zero | **sim** |
+| **B** | **OAuth de app interno** (Cloud, onde ele é admin) | não | **sim** | **não** | zero | provável |
+| **C** | **SendGrid da conta existente** | não | **sim** | **não**, só do dono interno | já paga | sim, com a chave |
+| D | Resend | **sim** | só com DNS | **sim** | grátis 3.000/mês | não |
+| E | Brevo | reescreve remetente | **não**, sai `@brevosend.com` | **sim**, para ficar bom | grátis 300/dia | não assim |
+| F | Mailgun | **sim** | só com DNS | **sim** | grátis 100/dia | não |
+| G | Amazon SES | recomendado | **não**, tende a spam | **sim** | US$ 0,10/mil | não |
+| H | SMTP Microsoft 365 | não | sim | **sim** (admin do tenant) | — | não |
+| J | SMTP próprio | **sim**, e mais | improvável | **sim** | — | descartada |
+
+**RECOMENDAÇÃO DA FÁBRICA, em duas camadas que não competem:**
+- **Agora, para destravar a validação:** **opção A**, senha de app na conta do diretor. Custo zero, sem
+  DNS, sem terceiro, DMARC alinhado porque sai pelo próprio Google. Descobre-se em dois minutos se o
+  Workspace permite. Ponto fraco dito na cara: o remetente vira a caixa pessoal dele e a credencial
+  fica no servidor. É destrave, não desenho final.
+- **Depois, como definitivo:** **opção C**, a chave da conta SendGrid que já existe, com remetente
+  institucional do tipo `admissao@soulan.com.br`.
+
+**O que a fábrica NÃO recomenda, e por quê:** Brevo saindo como `@brevosend.com` e domínio paralelo só
+para usar o Resend de graça, porque nos dois casos o candidato receberia um pedido de documento de um
+domínio que não é o da empresa, **que é a cara exata de um golpe**. E SES sem DNS, porque o
+`p=quarantine` joga o código no spam, falha silenciosa no pior lugar possível.
+
+### ESTADO AO FIM DA SESSÃO
+
+- **Frente do acesso por e-mail: pronta, na homologação, INERTE e não commitada.** Aguarda o correio
+  para ser validada em tela, e a validação do diretor para subir (§A.25).
+- **Bloqueio único: o correio.** Nada mais falta de código.
+- **Arquivos criados nesta sessão:** `docs/CORREIO-DO-PORTAL-ALTERNATIVAS.md` (levantamento) e a
+  entrada de memória `ea-correio-alternativas-sem-workspace`. Mais nada foi tocado.
+- **Duas perguntas abertas ao diretor:** (1) testa a senha de app agora, para a fábrica ligar o
+  correio? (2) a fábrica vai atrás do dono da conta SendGrid, ou ele pergunta internamente?
+
+---
+
+## 2026-09-29 — Portal PÚBLICO: caminho provado, tabelas em produção, limite de ritmo fechado. PUBLICAÇÃO ADIADA pelo diretor
+
+Sessão "Portal público". O diretor mandou **esgotar o que a fábrica faz sozinha antes de pedir
+qualquer coisa ao Fernando**, decidiu as cinco questões que sobraram, e ao final **adiou a
+publicação**: ele vai encerrar todas as sessões e publicar depois, com calma. **Nada foi publicado,
+nada foi reiniciado, nada foi commitado nesta sessão.**
+
+### TRÊS CORREÇÕES DE PREMISSA, todas medidas contra a realidade
+
+1. **A máquina NOVA do Fernando (`192.168.1.234`) NÃO é o caminho.** Ela tem a **443 fechada**, não
+   recebe tráfego público, e ainda está sem `mod_proxy`, `mod_ssl`, `mod_rewrite`, sem certbot, com
+   `AllowOverride None` (então `.htaccess` também está fora) e sem sudo. Quem responde por
+   `soulan.com.br`, termina o TLS (Let's Encrypt) e **já conversa com a VM do EA todo dia** pelo
+   webhook do Pandapé é a máquina **ANTIGA, `192.168.1.174`**. Provado com
+   `curl --resolve soulan.com.br:443:192.168.1.174`. Como o NAT já entrega nela e o Apache separa os
+   sites por SNI, um subdomínio novo **não exige mudança de NAT, nem porta, nem firewall**.
+2. **O subcaminho `soulan.com.br/clientesportal` QUEBRA o Portal.** O Next não tem `basePath`, então
+   a página pede os arquivos a partir da raiz do site. Medido em navegador real: no subcaminho
+   **carregou 1 pedido e falharam 21** (todo o CSS, todo o JavaScript, as fontes), página morta
+   travada em "Abrindo..."; em endereço próprio, 22 de 23. Consertar isso no proxy exigiria reescrever
+   os pacotes de JavaScript em trânsito, que mudam de nome a cada publicação: gambiarra que quebra
+   sozinha e em silêncio. **O Portal precisa de subdomínio.**
+3. **Não eram 7 migrações, eram 18.** O migrador do drizzle compara **marca d'água de data, não
+   conteúdo** (`Number(lastDbMigration.created_at) < migration.folderMillis`). A `0116`, que cria
+   **4 das 10 tabelas do Portal**, tem data ABAIXO da marca de produção e **seria pulada em
+   silêncio**, sem erro nenhum.
+
+### O QUE ESTÁ PRONTO
+
+- **Tabelas do Portal EM PRODUÇÃO**: 82 para 91 tabelas públicas, **só adição**, integridade das
+  antigas provada contra o dump (`~/backups-ea/ea_automatic_pre-portal_20260929-170901.sql.gz`).
+  Aplicadas à mão, registrando no controle **só a `0116` com a data verdadeira dela**, para a marca
+  d'água **não subir** e não passar a pular migração das outras sessões. Marca intacta em
+  `1788133091611`.
+- **Quatro segredos próprios de produção** no `.env`, por append, arquivo em 600:
+  `PORTAL_LINK_PRIVATE_KEY`, `PORTAL_SESSION_PRIVATE_KEY`, `PORTAL_SESSION_PUBLIC_KEY` e
+  `PORTAL_LOG_PEPPER`. Impressões digitais **distintas** das da homologação, par de sessão gerado
+  junto e verificado nas duas pontas.
+- **LIMITE DE RITMO resolvido INTEIRAMENTE do nosso lado, sem nada para o Fernando** (condição do
+  diretor). Os **4 vetos** do `seguranca` fechados, **39 testes verdes**, e as **11 rotas do
+  candidato fora do balde global** (`@SkipThrottle()` conferido controller a controller pelo
+  coordenador). O `backend` ainda **ancorou a topologia** (o último endereço da cadeia tem de bater
+  com o Apache da barreira, senão nada é confiável: fail-closed) e criou um **contador sem dado
+  pessoal**, que é o que vai permitir distinguir um abusador de quarenta candidatos legítimos
+  barrados atrás do mesmo IP de operadora.
+- **Variáveis de produção gravadas** (só passam a valer na publicação): `PORTAL_LINK_BASE_URL`,
+  `ALLOWED_ORIGINS` com o host público, `PORTAL_RITMO_SALTOS_CONFIAVEIS=2` e
+  `PORTAL_RITMO_PROXY_ESPERADO=192.168.1.174`.
+- **Caddy** (`~/ea-proxy/Caddyfile`, **validado e NÃO recarregado**): passou a confiar só no Apache
+  da barreira (`trusted_proxies`), e o log deixou de gravar **IP e User-Agent em claro**, que era o
+  veto 3b. Backup do arquivo ao lado.
+- **VHOST provado em Apache de verdade**: **20 caminhos liberados, 16 barrados com 403**, travessia
+  de caminho barrada, e a tela do Portal renderizada em navegador de celular através dele (prova
+  visual conferida pelo coordenador). Artefatos em `~/ea-bridge-fernando/portal-soulan.conf` e
+  `LEIA-ME-FERNANDO-PORTAL.md`, com o endereço já preenchido.
+- **Release candidato construído e limpo** em `~/apps/ea-release-portal` (`b8ee451`), typecheck
+  verde, `.env` por **symlink** e o `.env.production` do frontend copiado (esse arquivo **não vem do
+  git** e quebraria o botão do WhatsApp do Portal em silêncio). **Ele ainda NÃO inclui o limitador**,
+  que está solto no working tree.
+
+### AS CINCO DECISÕES DO DIRETOR
+
+1. **Endereço: `portal.soulan.com.br`.** Já preenchido no vhost e no leia-me do Fernando.
+2. **Publicar: SIM, a `main` inteira, mas NÃO AGORA.** O diretor encerra as sessões e publica depois.
+   **Motivo técnico registrado: NÃO EXISTE RECORTE.** O `devops` provou em quatro rodadas de
+   typecheck que **464 dos 466 arquivos de código** dos 9 commits são obrigatórios. A cascata começa
+   no `packages/shared-types/src/index.ts`, que é **arquivo único**: o Portal obriga a trazê-lo, e
+   ele passa a exigir `pretensaoSalarial` e `reprovadoPeloCliente`, que só existem no código da
+   Central de Vagas, que puxa status de vaga, motivos de descarte e pré-admissão do funil; em
+   paralelo a importação por planilha traz a dependência `xlsx`, que obriga o `pnpm-lock.yaml` novo,
+   que recusa o `package.json` antigo do frontend, que obriga o frontend inteiro. Só ficam de fora
+   `docs/`, `ai-service` e `vt-online`. **Publicar o Portal é publicar junto** a Central de Vagas, a
+   importação de candidatos por planilha e a ingestão do Digai, todas já commitadas na `main`.
+3. **Migração `0134` (acesso por e-mail): NÃO aplicar.** Fica com a sessão dela, que segue bloqueada
+   pelo correio. Provado em cópia que aplica limpo, o que é o que aquela sessão precisa saber.
+4. **Limite de ritmo: resolver do nosso lado**, sem pedir nada ao Fernando. **FEITO** (acima). A
+   sugestão de `mod_evasive` foi **retirada** do pedido ao Fernando.
+5. **As 410 pessoas reais na homologação: EXPURGADAS.** Não é pendência, foi executado nesta sessão.
+
+### O EXPURGO DA HOMOLOGAÇÃO (decisão 5, EXECUTADO)
+
+O `.env` da homologação afirmava, na linha 1, ser "clone ANONIMIZADO. Nenhum dado pessoal real", e
+**a afirmação era falsa**. `candidatos` estava anonimizada de fato (2.696 linhas, nomes
+"Candidato NNN", zero CPF+nome em comum com produção), mas **`as_candidatos` tinha 410 linhas de PII
+REAL** (nome, telefone, e-mails de gmail/hotmail/outlook/yahoo), com `anonimizado_em` **nulo em 410
+de 410**, enquanto a mesma tabela em **produção tinha ZERO linhas**: eram ~380 pessoas que **só
+existiam na homologação**. Foi isso que **vetou** apontar o endereço público para a 3120, que era o
+plano original da OST, porque o Portal **lê e escreve** nessa tabela por rota `@Public()`.
+
+Executado: **410 linhas apagadas**, mais 8 `as_candidaturas` e 1 `portal_acesso_travas` que caíam
+junto (2 FKs em cascata, 4 restritivas, então o expurgo exige ordem). Backup em
+`~/backups-ea/homolog_as_candidatos_pre-expurgo_20260929-173856.sql`, modo 600, **a apagar quando não
+for mais necessário**, porque carrega a PII. O cabeçalho do `.env` da homologação foi **reescrito**
+explicando o caso, para não enganar de novo. **A lição que sobrevive ao expurgo: tabela nova que
+entra na homologação por carga NÃO nasce anonimizada.** Medir antes de tratar a base como livre de
+PII.
+
+### A SEQUÊNCIA PARA QUANDO RETOMAR, passo a passo
+
+1. **Commitar o limitador com recorte nominal.** `portal.module.ts` e `.env.example` carregam hunks
+   de outras frentes (GI, Digai, porta de e-mail), e `portal-acesso-email.controller.ts` está
+   untracked: **commit por hunk**, nunca `git add .` (§A.14).
+2. **Reconstruir o release incluindo o limitador** (o `~/apps/ea-release-portal` atual **não o tem**).
+3. **Trocar os serviços** (`ea-backend`, `ea-frontend`).
+4. **Recarregar o Caddy**, para valer o mascaramento de IP no log.
+5. **Validação visual** (§A.13).
+
+**O release atual (`~/apps/ea-release-ingestao`, `d845232`) fica INTACTO como rollback.**
+
+### O QUE FALTA DEPOIS DE PUBLICAR
+
+- **O pedido ao Fernando**, pronto em `docs/PEDIDO-FERNANDO-PORTAL-PUBLICO.md`: registro **DNS `portal`
+  apontando para `187.102.148.222`** no **Registro.br**, copiar o `portal-soulan.conf` na máquina
+  **`.174`**, e o **certbot**. Nada de firewall, nada de NAT, nada de porta nova.
+- **O correio:** o diretor pediu ao Fernando a chave do SendGrid (só envio) e um remetente
+  institucional (`admissao@soulan.com.br`). Aguardando.
+- **A prova ponta a ponta do limite por IP**, que só é possível depois que o Apache estiver na
+  frente: hoje, sem a barreira, a cadeia tem um salto só e o balde por IP fica **inerte, de
+  propósito** (fail-closed). Isso **não é defeito**, é o comportamento correto, e agora aparece no
+  contador.
+
+### AVISO DE VIZINHANÇA (as sessões estão se cruzando no mesmo checkout)
+
+Durante o gate de outra sessão, o typecheck ficou **vermelho com 18 erros vindos de `src/portal/`**,
+corrigidos na rodada seguinte. No mesmo sentido, testes desta frente acusaram falhas em
+`portal-dados-gi.montador.spec.ts` e em `digai-polling.backend.spec.ts` que **não eram desta frente**:
+eram arquivos sendo escritos por outras sessões **durante** a execução, e ficaram verdes ao rodar de
+novo. Com 5 sessões no mesmo checkout, **suíte inteira vermelha não é prova de regressão própria**:
+confira o autor e o relógio antes de acusar.
+
+### AGENTES ACIONADOS E VEREDITOS (§A.34/§A.38)
+
+| agente | veredito |
+|---|---|
+| `seguranca` (1ª rodada, sobre o MAPA, antes da construção) | **3 VETOS**: allowlist incompleta (faltavam as 3 rotas de `acesso-email` e o `/portal/sol.svg`, que o Next recusa otimizar), sem limite por IP, e **proibido apontar o endereço público para a homologação**. Aprovou o token no fragmento |
+| `devops` | proxy provado em Apache real; subcaminho **reprovado** com prova visual; **recorte impossível**, 464 de 466 arquivos obrigatórios |
+| `backend` (1ª rodada) | 18 migrações, não 7; tabelas e segredos em produção; `OriginGuard` exigiria o host público no `ALLOWED_ORIGINS` |
+| `seguranca` (2ª rodada, sobre o LIMITADOR) | **4 VETOS**, o mais grave sendo 6 rotas `@Public()` que seguiam dividindo cota com os consultores (o coordenador reconferiu por medida) |
+| `backend` (2ª rodada) | os 4 vetos fechados, 39 testes verdes, âncora de topologia e contador sem PII |
+
+A **validação visual ficou com o coordenador** e não foi delegada (§A.39 passo 6): conferi a tela do
+Portal renderizada pelo Apache real e a página morta do subcaminho.
 
 ---
 
@@ -18397,69 +18847,6 @@ harness do Playwright e pela revisao visual do coordenador. Recomendacao: **nao 
 
 ---
 
-## 30/09/2026: A&S, precedência da ingestão, fila de divergências e os 7 ajustes da Central De Vagas
-
-**Publicado em produção (`770e6a2`), junto da Central De Ajuda, num build e num restart só.**
-Migrations 135 → 138. Contagens intactas: admissões 3011 → 3011, usuários 39, concessões de menu
-498 → 498 (nenhuma concedida, §A.23), menus 46 → 47 (registro no boot, que não é concessão). Rotas
-`/api/health`, `/login`, `/as/vagas`, `/admin/divergencias-ingestao` e `/ajuda` em 200.
-
-### O que mudou de comportamento
-
-O EA passa a **vencer o ATS** no que o time preencheu a mão, e a divergência vai para uma **fila**
-em vez de ser sobrescrita em silêncio. Foi a investigação pedida pelo diretor que achou o motivo:
-a varredura **sobrescrevia o avanço manual do time, cegamente e sem aviso**, e isso era bloqueante
-para ligar o Pandapé.
-
-Os sete ajustes da Central De Vagas e o item 4 (SLA regressiva com Previsão De Entrega nova,
-reabertura de ENTREGUE para ABERTA com os candidatos no começo do funil, e ENTREGUE congelando a
-contagem só na regra da SLA) estão descritos no commit e em `docs/GUIA-VALIDACAO-PRECEDENCIA-E-FILA.md`.
-
-### O que os agentes acharam, e é por isso que eles foram acionados
-
-| agente | veredito |
-|---|---|
-| `seguranca` | **VETOU** com 3 bloqueios, todos conferidos pelo coordenador e consertados: campo de divergência em prosa que o expurgo anula; menu que se auto-concedia a 3 MASTERs no primeiro boot; adoção do ATS por um caminho que INSERE em vez de atualizar. Depois: APROVADO COM RESSALVA |
-| `tester` | provou **por mutação** que uma regra do contrato passava por ACIDENTE: apagar os carimbos da entrega, que é o dano que a regra dizia impedir, deixava os 16 testes verdes. Matou 5 de 5 mutantes onde a suíte do autor matava 1 |
-| `arquiteto` | corrigiu uma premissa minha: eu havia dito que não existia SLA no sistema, porque grepei só o backend. Ela vive em `apps/frontend/src/lib/as-vaga-sla.ts` |
-
-### Três armadilhas da publicação, e duas teriam derrubado o boot
-
-1. **O journal do Drizzle no release omite o 0134 de propósito.** Copiá-lo do repo leva a entrada de
-   uma migration cujo `.sql` não está versionado, e o migrator lê todo arquivo listado antes de
-   filtrar por data: o backend não sobe. O journal foi montado por programa, com asserção.
-2. **Um import da frente de e-mail estava no meio dos imports dos tipos novos**, em `tables.ts`.
-   Copiar o arquivo inteiro levaria símbolo inexistente; descartar o hunk inteiro tiraria o que os
-   tipos novos precisam. Só a edição do hunk resolve.
-3. **Dez arquivos pareciam misturar duas frentes, e oito não misturavam nada:** são byte a byte
-   iguais entre o release e a 3120, o que prova que a mudança deles é inteira da outra frente.
-
-### Duas lições de MEDIÇÃO que valem além desta frente
-
-**Acento não fica literal no bundle do Next: vira `\xe9`.** A primeira prova no artefato deu ZERO
-para "Célula de atendimento" e eu quase reportei um rótulo faltando. O canário salvou: `Admissão`,
-que existe aos montes, também deu zero, o que provou que a medição estava errada, não o artefato.
-Com `C\xe9lula` o rótulo aparece em 8 lugares, em `rotulo:` e em `ariaLabel:`. **Todo zero em string
-acentuada é suspeito até um canário acentuado provar o contrário.**
-
-**O worktree de prova pegou um defeito que nenhum gate pegaria.** Materializar a árvore do commit e
-compilar ali sozinha revelou que o `portal-ritmo.spec.ts` de HEAD importava um controlador de uma
-frente não commitada: **a `main` não compilava em clone limpo**. O defeito era meu, de uma sessão
-anterior, e eu o havia consertado e depois **excluído o conserto do commit** por classificá-lo como
-de outra frente. Sem o worktree, o push levaria a `main` quebrada de novo.
-
-### Validação cruzada, que não é da própria sessão
-
-A sessão da Central De Ajuda rodou os cinco roteiros dela contra a 3120 e os cinco passaram. Os
-roteiros apontam os elementos por papel e nome acessível, então um renomeio que alcançasse mais que
-o rótulo teria acusado. É **prova de presença**, complementar à minha, que é de ausência. Um print
-dela (`abrir-uma-vaga-nova/02-passo-a-vaga.png`) fotografou os quatro rótulos novos juntos no
-formulário de edição, inclusive os dois que a minha prova visual não tinha alcançado.
-
-### O que NÃO foi ligado, por decisão do diretor
-
-Filtro de entrada de 90 dias: **configurado e DESLIGADO**. Digai: **inerte**, token fora do `.env`.
-G.I: **inerte**. Porta de e-mail do Portal: **não subiu** (31 caminhos fora do pacote).
 ## 30/09/2026, CENTRAL DE AJUDA: 37 para 184 pecas, PUBLICADA EM PRODUCAO, e um DEFEITO anotado para depois
 
 ### O DEFEITO, e ele e o item que o Rike pediu para ficar registrado
@@ -18610,6 +18997,95 @@ credencial no historico do git) e a de A&S (que segue com a publicacao do backen
 Commit `50e46ea`, recorte nominal por blob: so a §A.45 do CLAUDE.md, o arquivo da Esteira e o
 teste. Nada de ingestao, Digai, Portal ou Central De Ajuda entrou.
 
+## 30/09/2026, busca por nome no modal da FILA DEGRADADA (Diagnostico)
+
+**O pedido.** O diretor procurava um candidato na lista de jobs falhados olhando UM POR UM e pediu
+uma caixa de pesquisa por nome dentro do modal.
+
+**A investigacao antes de construir (§A.27) achou dois defeitos que a caixa sozinha nao resolveria,
+e os dois foram MEDIDOS:**
+1. **A lista nao tinha o nome.** Mostrava "Candidato do Pandape <id>"; o nome so vinha depois de um
+   clique por linha, que era exatamente o um-por-um a eliminar. Decisao do diretor: resolver todos
+   ao abrir o modal.
+2. **A lista estava CORTADA, nao paginada.** O backend devolvia 50 por fila e a producao tem **132**
+   falhados: **82 candidatos invisiveis**, sem a tela dizer. Decisao do diretor: subir o teto.
+
+**A fabrica operou distribuida (§A.39):** `seguranca` auditou o MAPA antes da primeira linha (§A.40),
+`backend` e `frontend` construiram em paralelo e o `tester` escreveu cobertura a partir do requisito,
+fora do caminho critico.
+
+**O veto da auditoria, e os dois achados que uma tarefa fatiada perderia:**
+- o cache de nomes do Pandape NAO era injetavel no Diagnostico, e o conserto obvio criaria uma
+  **segunda instancia**: o cache que o worker preenche nunca seria lido e toda abertura iria 100% a
+  API. Modulo folha nos IMPORTS, e um teste prova a instancia unica;
+- **o caminho HTTP nao tinha freio nenhum.** Com `removeOnFail` em 5.000, uma abertura podia valer
+  ate 5.000 requisicoes na cota compartilhada com o webhook do G.Infor que alimenta a FOLHA. Entra um
+  balde de **150 req/5min**, global, que RECUSA em vez de enfileirar.
+
+**A auditoria se RETRATOU de uma exigencia propria, e isso vale registrar:** ela pedira baixar o
+limiter da fila do Pandape de 500 para 350; ao medir, viu que aqueles tetos sao de **JOB** e o novo e
+de **REQUISICAO**, moedas diferentes. Nao se mexeu no arquivo da outra frente. Achado colateral,
+repassado a sessao dona: a conta "500 + 250 = 750/5min" documentada naquele arquivo **mistura
+unidades** e so se sustenta porque o consumo real e muito menor que o teto.
+
+**O `tester` devolveu 77 testes e NOVE lacunas.** Cinco foram fechadas, e a mais importante repete a
+origem desta OST: **o corte da lista era silencioso**. Agora, quando a lista corta, a tela diz quantos
+ficaram fora. Quatro ficaram registradas como proposta (§A.31), entre elas a dupla leitura do Redis
+por abertura e o teto da lista (500) empatado com o teto do cache de nomes (500).
+
+**Prova visual (§A.13) na 3120, em cinco estados**, com 14 jobs falhados **sinteticos** semeados
+(§A.43, ids de 12 digitos escolhidos para nao colidirem com id real do ATS) e os nomes injetados na
+**fronteira da rede**: build real, dado inventado, **nenhum nome de pessoa real dentro de imagem**,
+que foi exigencia da auditoria e confirmada pela sessao dona da regra.
+
+**Publicado em producao**, release `ea-release-portal` trazido para a `main` (`45b7878`), backend e
+frontend reconstruidos, os dois servicos reiniciados. **Provado no artefato:** a rota
+`POST /api/diagnostico/filas/nomes` aparece mapeada no log do Nest, o chunk do Diagnostico carrega a
+frase unica da frente, e o canario da frente anterior segue de pe (zero `type:"password"` no chunk da
+Esteira). Gate: frontend 1715/1715, backend 7507 verdes, com 1 vermelho de arquivo NAO RASTREADO de
+outra sessao, que a sessao dona consertou em seguida.
+
+### PUBLICACAO EM PRODUCAO, 30/09/2026 as 16h48
+
+O diretor validou na 3120 as duas frentes de artigo e o scroll da pagina, e mandou subir. Commit
+`b6e9397`, pushado, release avancado de `45b7878` para ele, frontend de producao rebuildado e
+reiniciado. **Backend NAO reiniciado, de proposito**: o unico arquivo de backend do commit e um
+arnes solto, com guarda de `require.main`, que nada importa e que recusa banco de producao pelo
+nome. Derrubar o backend por causa dele seria custo sem beneficio. A ressalva honesta, levantada
+pela sessao vizinha e registrada aqui porque nao muda a decisao mas muda o que a proxima pessoa
+encontra: **o fonte do release fica um commit a frente do `dist` do backend**, entao quem buildar o
+backend em seguida publica aquele arquivo junto sem ter decidido. Sendo arnes inerte, o custo e zero.
+
+**A prova foi no ARTEFATO SERVIDO, nunca no fonte** (a regua que este dia produziu). No chunk da
+Ajuda que esta no ar: `Mostrar Todos` presente, `Recolher` presente. No CSS servido:
+`scrollbar-width:none`, a barra oculta do menu. E a conferencia de regressao que importava: o chunk
+da Esteira continua com **ZERO** campo de senha, ou seja, a reversao do iFractal nao foi desfeita
+pela publicacao.
+
+**O recorte do commit foi conferido por varredura ANTES de commitar** (§A.14): 239 arquivos, todos
+da Central De Ajuda mais os tres ajustes de tela, e **zero** arquivo de outra sessao. Havia muito
+trabalho nao commitado de outras frentes no mesmo working tree, inclusive os renomeios da Central De
+Vagas, e nada disso foi levado.
+
+### O QUE FICA PENDENTE, e por que NAO foi feito agora
+
+Uma frente vizinha renomeia rotulos da vaga ("Nome De Divulgacao" -> "Nome Da Vaga", "Natureza" ->
+"Tipo De Vaga", "Sazonalidade" -> "Tipo De Processo", "Linha De Servico" -> "Celula De Atendimento",
+e "Mover No Funil Em Massa" -> "Mover Etapa Em Massa"). **Os artigos NAO foram corrigidos, e hoje
+eles estao CERTOS**: producao tem os rotulos antigos, porque aquele renomeio nao esta commitado. O
+manual e a tela concordam.
+
+**A inversao acontece quando aquela frente publicar.** O combinado esta em
+`docs/CENTRAL-DE-AJUDA-SOUTALENT-DECISOES.md`, secao 9, com as duas armadilhas que fariam alguem
+"consertar" o que esta certo: o modal INDIVIDUAL continua "Mover No Funil", e a tela de catalogo
+continua "Linhas De Servico" de proposito, porque nome de menu e decisao do diretor.
+
+Ja foi feito o que nao dependia daquela publicacao: o roteiro que apontava a janela pelo TITULO foi
+reancorado no seletor de etapa de destino, que e **o que aquela janela faz** e nao como ela se chama.
+Funciona contra o build antigo e contra o novo, conferido tres vezes.
+
+---
+
 ## 30/09/2026, noite — Central De Ajuda: o manual acompanha os renomeios de A&S, e uma afirmação falsa minha cai (commit `a9bf6ed`)
 
 **Frente:** Central De Ajuda. **Quem executou:** coordenador, direto (§A.38: tarefa de conteúdo e
@@ -18673,3 +19149,313 @@ link de volta. Comportamento correto.
 
 ---
 
+## 30/09/2026: A&S, precedência da ingestão, fila de divergências e os 7 ajustes da Central De Vagas
+
+**Publicado em produção (`770e6a2`), junto da Central De Ajuda, num build e num restart só.**
+Migrations 135 → 138. Contagens intactas: admissões 3011 → 3011, usuários 39, concessões de menu
+498 → 498 (nenhuma concedida, §A.23), menus 46 → 47 (registro no boot, que não é concessão). Rotas
+`/api/health`, `/login`, `/as/vagas`, `/admin/divergencias-ingestao` e `/ajuda` em 200.
+
+### O que mudou de comportamento
+
+O EA passa a **vencer o ATS** no que o time preencheu a mão, e a divergência vai para uma **fila**
+em vez de ser sobrescrita em silêncio. Foi a investigação pedida pelo diretor que achou o motivo:
+a varredura **sobrescrevia o avanço manual do time, cegamente e sem aviso**, e isso era bloqueante
+para ligar o Pandapé.
+
+Os sete ajustes da Central De Vagas e o item 4 (SLA regressiva com Previsão De Entrega nova,
+reabertura de ENTREGUE para ABERTA com os candidatos no começo do funil, e ENTREGUE congelando a
+contagem só na regra da SLA) estão descritos no commit e em `docs/GUIA-VALIDACAO-PRECEDENCIA-E-FILA.md`.
+
+### O que os agentes acharam, e é por isso que eles foram acionados
+
+| agente | veredito |
+|---|---|
+| `seguranca` | **VETOU** com 3 bloqueios, todos conferidos pelo coordenador e consertados: campo de divergência em prosa que o expurgo anula; menu que se auto-concedia a 3 MASTERs no primeiro boot; adoção do ATS por um caminho que INSERE em vez de atualizar. Depois: APROVADO COM RESSALVA |
+| `tester` | provou **por mutação** que uma regra do contrato passava por ACIDENTE: apagar os carimbos da entrega, que é o dano que a regra dizia impedir, deixava os 16 testes verdes. Matou 5 de 5 mutantes onde a suíte do autor matava 1 |
+| `arquiteto` | corrigiu uma premissa minha: eu havia dito que não existia SLA no sistema, porque grepei só o backend. Ela vive em `apps/frontend/src/lib/as-vaga-sla.ts` |
+
+### Três armadilhas da publicação, e duas teriam derrubado o boot
+
+1. **O journal do Drizzle no release omite o 0134 de propósito.** Copiá-lo do repo leva a entrada de
+   uma migration cujo `.sql` não está versionado, e o migrator lê todo arquivo listado antes de
+   filtrar por data: o backend não sobe. O journal foi montado por programa, com asserção.
+2. **Um import da frente de e-mail estava no meio dos imports dos tipos novos**, em `tables.ts`.
+   Copiar o arquivo inteiro levaria símbolo inexistente; descartar o hunk inteiro tiraria o que os
+   tipos novos precisam. Só a edição do hunk resolve.
+3. **Dez arquivos pareciam misturar duas frentes, e oito não misturavam nada:** são byte a byte
+   iguais entre o release e a 3120, o que prova que a mudança deles é inteira da outra frente.
+
+### Duas lições de MEDIÇÃO que valem além desta frente
+
+**Acento não fica literal no bundle do Next: vira `\xe9`.** A primeira prova no artefato deu ZERO
+para "Célula de atendimento" e eu quase reportei um rótulo faltando. O canário salvou: `Admissão`,
+que existe aos montes, também deu zero, o que provou que a medição estava errada, não o artefato.
+Com `C\xe9lula` o rótulo aparece em 8 lugares, em `rotulo:` e em `ariaLabel:`. **Todo zero em string
+acentuada é suspeito até um canário acentuado provar o contrário.**
+
+**O worktree de prova pegou um defeito que nenhum gate pegaria.** Materializar a árvore do commit e
+compilar ali sozinha revelou que o `portal-ritmo.spec.ts` de HEAD importava um controlador de uma
+frente não commitada: **a `main` não compilava em clone limpo**. O defeito era meu, de uma sessão
+anterior, e eu o havia consertado e depois **excluído o conserto do commit** por classificá-lo como
+de outra frente. Sem o worktree, o push levaria a `main` quebrada de novo.
+
+### Validação cruzada, que não é da própria sessão
+
+A sessão da Central De Ajuda rodou os cinco roteiros dela contra a 3120 e os cinco passaram. Os
+roteiros apontam os elementos por papel e nome acessível, então um renomeio que alcançasse mais que
+o rótulo teria acusado. É **prova de presença**, complementar à minha, que é de ausência. Um print
+dela (`abrir-uma-vaga-nova/02-passo-a-vaga.png`) fotografou os quatro rótulos novos juntos no
+formulário de edição, inclusive os dois que a minha prova visual não tinha alcançado.
+
+### O que NÃO foi ligado, por decisão do diretor
+
+Filtro de entrada de 90 dias: **configurado e DESLIGADO**. Digai: **inerte**, token fora do `.env`.
+G.I: **inerte**. Porta de e-mail do Portal: **não subiu** (31 caminhos fora do pacote).
+
+---
+
+## 30/09/2026, EMERGÊNCIA: o link do formulário de VT não abria para ninguém
+
+**Sintoma.** Todo link de VT novo caía na tela "O endereco aberto nao trouxe a sua credencial de
+acesso". Links antigos seguiam abrindo.
+
+**Causa, medida no artefato.** O EA passou a emitir o link com o token no **fragmento** (`#t=`,
+`montarLinkVt`, commit `6f4aec2` de 25/09), e o `app.js` publicado no Firebase ainda lia **só a
+query** (`?t=`). O app recebia o endereço sem token nenhum. Quebrou quando o release entrou em
+produção hoje: `ea-release-portal/.../vt-link.service.js` gerado 15:13, backend reiniciado 15:17. O
+app do Firebase é publicado por fora da VM e não foi republicado junto com o release.
+
+**Descartado com medição:** app fora do ar (HTTP 200); segredo do VT trocado (a chave pública
+embarcada no app bate com a derivada da `VT_LINK_PRIVATE_KEY` de produção, e um token assinado agora
+passa na verificação); token expirado (TTL 30 dias); Caddy e mascaramento de IP (não tocam o caminho,
+o VT não passa pela VM).
+
+**Conserto.** Nenhuma linha nova: o `apps/vt-online/public/app.js` já estava commitado lendo o
+fragmento primeiro e a query como reserva. Faltava **publicar o hosting**, e a credencial do Firebase
+na VM estava vencida (`login:list` mente, lê só o configstore e diz que está logado). O diretor refez
+o login e o hosting subiu.
+
+**Provas.** 51 testes verdes (`vt-link-token`, `vt-link-ttl`, `portal-vt-link`,
+`portal-so-uma-porta-do-vt`). O `app.js` servido passou a ser idêntico ao do repositório. Prova
+visual com token sintético (CPF de família reservada, §A.43): o link com `#t=` abre a tela de
+identificação, sem erro de console, e o link antigo com `?t=` continua abrindo.
+
+**Nada da VM foi tocado**: só o hosting do Firebase, então não houve colisão com as outras sessões.
+
+**Aberto.** A publicação do app do Firebase não faz parte da publicação da VM. Enquanto os dois
+subirem separados, qualquer mudança no formato do link volta a quebrar do mesmo jeito.
+
+### 30/09/2026, a causa raiz do incidente do VT: a guarda do app publicado
+
+O conserto do link foi publicar o hosting. **A causa raiz é outra**: o app do VT sobe por fora da
+VM, então o repositório pode estar certo e o publicado velho, sem nada falhar. Teste offline não
+pega, porque o repositório estava CERTO. Só comparação contra o artefato servido detecta.
+
+**Construído** (agente `devops`, despachado com o mapa de alcance):
+- `scripts/verifica-app-vt.sh` (novo): baixa cada arquivo de `apps/vt-online/public/` do Firebase
+  Hosting, com anti-cache, e compara byte a byte. A lista vem do diretório, não é fixa no script,
+  então arquivo novo entra sozinho. Saídas: `0` bate, `1` diverge ou não está publicado (404/403),
+  `2` não deu para conferir (000, timeout, 5xx).
+- `scripts/deploy-local.sh`: passo `[6/6]` chama a guarda. Divergência reprova a publicação (mesmo
+  `ok` do health check); não conseguir conferir só avisa, porque falta de rede não pode reprovar
+  uma publicação correta. Os 5 passos existentes não mudaram de comportamento.
+- `apps/vt-online/README.md`: aviso no topo da seção de publicação.
+
+**Achado da consolidação, que o agente não tinha visto:** na primeira versão, arquivo que existe no
+repositório e nunca foi publicado devolvia 404 e caía em "não conferido" (saída 2, que só avisa),
+deixando a publicação concluir verde. É exatamente a classe do incidente. Devolvido ao `devops`, que
+passou 404 e 403 a contar como divergência.
+
+**Provas, rodadas pelo coordenador, não só relatadas:** tudo publicado = `0`; um byte alterado = `1`;
+arquivo a mais nunca publicado = `1` com "NAO ESTA PUBLICADO (HTTP 404)"; host inexistente = `2`.
+`bash -n` verde nos dois scripts. Provas feitas sobre cópia no scratchpad, repositório intocado.
+
+**Agentes:** `devops` construiu (duas rodadas). `seguranca` NÃO foi acionado, e a razão é que a
+frente não toca CPF, dado pessoal, auth, RBAC nem credencial: o script baixa arquivo estático
+público e não lê token nem `.env` (§A.38). `tester` NÃO foi acionado, frente pequena, três arquivos.
+
+**Fica proposto, fora do escopo (§A.31):** a guarda confere o Hosting, não a Cloud Function
+`enviarVt`. Função desatualizada continuaria invisível pelo mesmo mecanismo.
+
+### 30/09/2026, fechamento da sessão do incidente do VT
+
+**Como refazer o login do Firebase na VM, porque isto custou a maior parte do tempo do incidente.**
+A credencial da VM estava vencida e `firebase login:list` MENTE: ele lê só o configstore local e
+responde "Logged in as henrique.vieira@soulan.com.br" com a credencial morta. Quem diz a verdade é a
+publicação, que devolve "Your credentials are no longer valid". Não há service account do projeto
+`vt-online-soulan` na máquina, então o login é do diretor.
+
+O que NÃO funciona, e cada um custou uma rodada:
+- logar no Windows: o token fica no perfil daquela máquina, a VM continua vencida;
+- `login --reauth` direto: o ouvinte do retorno sobe na porta 9005 DA VM e o navegador está no
+  Windows, então o `localhost` do navegador não encontra ninguém (ERR_CONNECTION_REFUSED);
+- o CLI recusa rodar sem terminal ("Cannot run login in non-interactive mode");
+- matar o processo dono da sessão invalida o código: o fluxo do `auth.firebase.tools` passa a
+  responder "Não foi possível verificar o cliente".
+
+O que funcionou: rodar com terminal emulado e a entrada num FIFO, para o coordenador conseguir
+injetar o código depois:
+
+```
+mkfifo /tmp/fb.fifo; ( sleep 1800 > /tmp/fb.fifo & )
+nohup script -qfc "npx --yes firebase-tools@13 login --reauth" /dev/null < /tmp/fb.fifo > /tmp/fb.log 2>&1 &
+```
+
+Sem navegador, o CLI cai sozinho no fluxo de código do `auth.firebase.tools`. O diretor abre a URL
+que aparece no log, no navegador dele, e devolve o código; o coordenador escreve o código no FIFO e o
+login fecha. Depois disso a publicação do hosting roda normal.
+
+**Estado do repositório ao encerrar.** NADA foi commitado nesta sessão. O working tree tem 40
+entradas, a maioria de OUTRAS sessões (havia várias rodando em paralelo; a última commitada é
+`29d2801`, que não é desta frente). Desta sessão são só quatro, e as três primeiras formam um commit
+com recorte nominal (§A.14):
+
+- `scripts/verifica-app-vt.sh` (novo)
+- `scripts/deploy-local.sh` (passo 6)
+- `apps/vt-online/README.md` (aviso)
+- `DIARIO.md` (estas três entradas), **misturado com texto de outra sessão**, e foi por isso que o
+  commit não saiu: separar exige recorte por hunk e o diretor não decidiu qual caminho quer.
+
+**O que subiu para produção nesta sessão:** só o Firebase Hosting do app do VT. **Nenhum serviço da
+VM foi reiniciado**, nenhum código de backend ou frontend publicado, então não houve colisão com as
+outras sessões.
+
+**Aberto para a próxima sessão:**
+1. Commitar os três arquivos da frente, e decidir o recorte do `DIARIO.md`.
+2. Proposta não construída (§A.31): a guarda confere o Hosting, não a Cloud Function `enviarVt`.
+   Função desatualizada continua invisível pelo mesmo mecanismo deste incidente.
+3. A publicação do hosting continua sendo um passo MANUAL, feito com a credencial do diretor. A
+   guarda detecta o esquecimento, não o elimina.
+
+## 2026-10-01 — Portal Fase 1 (app proprio) + entrada e-mail-first (iii) + trava anti-vazamento [COMMIT 9b8c66b]
+
+**O que subiu (origin/main 9b8c66b, sobre cab5ab0):** app proprio do Portal (`apps/portal-app`, build
+Next separado so com `/portal`, basePath por variavel, rewrites nominais sem curinga), a entrada
+e-mail-first (desenho iii aprovado pelo diretor: EntradaSemLink abre no e-mail, "Ja tenho o link"
+secundario, aviso de manutencao no 503), a trava `portal-app-sem-vazamento.tester.spec` (9 asserts,
+provada que morde), e 7 simbolos do acesso-email no `shared-types`.
+
+**Por que app proprio:** a allowlist publica do Portal liberava `/_next/static/*`, o que publicaria o
+bundle INTEIRO do EA (texto de menu restrito incluido). Build separado conserta por construcao: o
+`.next/static` do app proprio nao contem chunk do EA (provado pelo manifest). `seguranca` APROVOU o
+nao vazamento (incl. path traversal); `seguranca` APROVOU a resposta uniforme do (iii) sem oraculo.
+
+**Validado na tela pelo diretor** (entrada e-mail-first + trilha da Sol via link, em aba anonima).
+**Prova de clone limpo** (`git write-tree` + tsc isolado): compila contra a shared-types COMMITADA,
+nao so o working tree.
+
+**FORA, publish-gate (nao commitado):** o backend do acesso-email e a migration `0134` (marca d'agua
+a reemitir acima de 1790646004719, senao o Drizzle a pula em silencio). A porta de e-mail fica meia na
+main, inerte (correio 503), ate destravar. Dependencias relacionadas: o defeito do `dados-gi` (cd) e o
+SendGrid parado no Fernando.
+
+**Frente registrada para depois:** `docs/FRENTE-PORTAL-SESSAO-VENCE-TOKEN.md` (sessao guardada vence o
+token novo; o candidato real veria "link nao e mais valido" sem motivo). **Proxima fase:** Fase 2, o
+tunel Tailscale Funnel (`portal.soulan.ts.net`), o diretor provisiona a conta.
+
+---
+
+## 02/10/2026 (madrugada): Pandapé: a varredura NUNCA cria admissão. E o 429 da Central de Candidatos
+
+Sessão "Diga ai e Pandapé". Duas frentes, operadas distribuídas (§A.39), com três sessões
+simultâneas no ar (Portal, GI) e restart de produção coordenado com as duas.
+
+### FRENTE 1, Pandapé: a varredura nunca cria admissão (EM PRODUÇÃO, commit `ab38a11`)
+
+**O defeito.** A varredura de A&S criou **259 pré-admissões** em produção. Investigação pedida pelo
+diretor, antes de religar: **254 daquelas pessoas JÁ ESTAVAM na esteira**, todas casadas por CPF (o
+cruzamento por nome não acrescentou ninguém). Dessas, **250 pelo webhook**. O webhook preencheu
+`cod_cliente` em 252 de 258; a varredura escreve **nulo por construção**.
+
+**A causa, e ela é uma distinção, não um bug de código:** "Contratados" no funil do Pandapé **não é**
+"enviado para admissão". A varredura lê a **ETAPA**; o webhook dispara na **AÇÃO** de enviar. Os 5
+que faltavam não ficaram de fora por falta de cliente: o webhook atendeu 43 pessoas das **mesmas duas
+vagas** e resolveu o cliente em 39. Para eles não era a hora; para a varredura, já era.
+
+**A regra do diretor, registrada como §A.47 (permanente):** *"O único gatilho que envia para admissão
+é o gatilho da esteira, e não o das ATS."*
+
+**O conserto.** Caminho REMOVIDO, não guardado: a ponte, o adaptador, o provider, `ponteDeveDisparar`
+e `domain/as-ponte-admissao.ts` inteiro, mais os quatro insumos que levavam até a borda da criação.
+Digai não precisou de corte (medido: zero ponte lá, e `situacaoDeNascimentoDigai` já recusa situação
+que consome posição).
+
+**Agentes e vereditos (§A.38):**
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o **MAPA antes do código** e o **código depois** | **VETOU 2x**, **APROVADO** |
+| `tester` | 30 travas escritas **antes** do conserto | 7/7 mutantes mortos |
+| `backend` | o corte | typecheck limpo, 1.395 testes verdes |
+
+**Três erros meus que a auditoria e o `tester` pegaram**, dois deles gate vermelho garantido:
+`SITUACOES_QUE_PEDEM_PONTE_PARA_ADMISSAO` **não** é a régua do caminho manual (é `ocupaPosicao`);
+apagar o arquivo da ponte alcançava uma spec de outra frente; e o mapa não listava 5 specs.
+
+**Um achado da auditoria que eu MEDI e DERRUBEI:** ela disse que as 259 nunca seriam expurgadas. A
+perna decisiva não é "vaga não encerrada", é o **papel** da vaga: as 60 vagas são `REVISAO`, que
+deixou de proteger por decisão anterior do diretor. Ela retirou o achado.
+
+**Provado em produção, após o religamento das 02:58:** entraram **15.868 pessoas** e **22.292
+candidaturas**, **56 delas na situação que antes criaria pré-admissão**, e as admissões ficaram em
+**3.021, ZERO criadas**. Webhook intocado e vivo.
+
+**Gate:** typecheck limpo nos arquivos da frente; suíte completa **438 de 442 arquivos verdes**, com
+os **4 vermelhos TODOS da frente do GI** (working tree de outra sessão, em conserto por ela).
+
+### FRENTE 2, Central de Candidatos: o 429 (NA HOMOLOGAÇÃO, aguardando validação do diretor)
+
+**A causa, exata.** A tela fazia **uma chamada POR VAGA** para montar as colunas de funil: 2 + 481 =
+**483 chamadas por carregamento**, contra um teto de **120 por 60s**. E `carregar` refazia tudo a cada
+filtro.
+
+**OS DOIS DEFEITOS QUE O DIRETOR RELATOU ERAM UM.** Quando o lote estourava, `setCandidaturas` nunca
+rodava, o estado ficava vazio e **TODA pessoa** aparecia como "Vaga Não Alocada", com vaga ou sem. A
+ficha é outra rota, uma chamada só, e mostrava a etapa certa. **A ficha estava certa; a lista estava
+cega.**
+
+**As duas candidatas.** "DEBORA LUCIA DE OLIVEIRA" **não existe** na base; as parecidas **têm** vaga e
+etapa CAPTACAO. "GIZELE ALVES" **existe** e é a **única pessoa em 59.961 sem candidatura**, logo o
+"Vaga Não Alocada" dela é legítimo.
+
+**O conserto.** `POST /as/candidatos/buscar` passou a devolver o funil da página, em **segunda
+consulta** por `candidato_id in (ids)`, **nunca por join** (join faria o `limite` cortar candidaturas
+em vez de pessoas). Projeção **mínima** de 8 campos, tipo novo `AsCandidaturaNaLista`. O laço de 481
+painéis saiu da tela, e ela ganhou um **terceiro estado**: ausente = "Funil Não Carregado"; `[]` =
+"Vaga Não Alocada".
+
+**O VETO que mudou o desenho:** eu havia reusado `AsCandidaturaItem`, que não tem CPF. A auditoria
+vetou com a razão escrita no próprio tipo: a autorização §A.6 de `motivoDescarte` e
+`pretensaoSalarial` está concedida **sobre a premissa de que esta rota não o usa**. E três dos
+**cinco** leitores da rota (meu mapa dizia **um**) chamam com `semCandidatura: true` para oferecer
+gente para alocação: **1.645 candidaturas desceriam, 100% com motivo de descarte**.
+
+**Medido:** o conserto reduz o dado pessoal no navegador de **95.312 para ~202 registros, 472x
+menos**, e zera os 2.997 motivos de descarte que desciam.
+
+**Prova visual (§A.13), na 3120:** **2 chamadas de dado**, **zero 429**, funil preenchido, e o KPI
+"Sem Vaga: 3" batendo **exatamente** com as 3 linhas "Vaga Não Alocada".
+
+### FALHA MINHA, registrada
+
+**Commitei e empurrei os hunks do backend da Frente 2 dentro do commit da Frente 1** (`ab38a11`, 115
+linhas). Fiz `git add` nominal de `candidatos.service.ts` para levar a mudança do Pandapé, e o arquivo
+já continha a frente do funil, editada minutos antes por outro agente. **A produção está limpa**
+(medido: zero `funilDaPagina` no dist no ar), porque a cópia para o release foi nominal e excluiu
+justamente aquele arquivo. **Não reescrevi histórico publicado.** A lição: o `git add` nominal é por
+ARQUIVO, e um arquivo pode conter duas frentes.
+
+### Documentos desta sessão
+
+`docs/AS-259-JA-ESTAO-NA-ESTEIRA.md`, `docs/MAPA-ALCANCE-VARREDURA-NAO-CRIA-ADMISSAO.md`,
+`docs/MAPA-CENTRAL-DE-CANDIDATOS-CARREGAMENTO.md`, `docs/ENTENDER-A-CENTRAL-DE-CANDIDATOS.md`.
+
+### Aberto para o diretor
+
+1. **Validar a Central de Candidatos na 3120** (é o gatilho da publicação em produção).
+2. **O resíduo das 259 candidaturas**: consomem posição e põem **19 vagas acima do teto**.
+3. **O elo `as_candidaturas.admissao_id`**: o webhook não o escreve, e ele é a primeira perna da
+   proteção de retenção. Ligar é a correção barata.
+4. **826 pessoas duplicadas** (mesma vaga, mesmo nome, uma com CPF e outra sem; 4.103 sem CPF, todas
+   do Pandapé). É da **ingestão**, frente própria.
