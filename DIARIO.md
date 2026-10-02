@@ -19550,3 +19550,95 @@ underscore e **não o usa**. O RBAC está correto (`MASTER`/`SUPER_ADMIN`). Regi
 `7107` fictício, semente do próximo preenchimento errado), nem as fixtures novas, e **a seção do mapa
 mediu o `.env` errado** (o de produção é o do `ea-release-portal`; a conclusão sobrevive, a citação
 não). Documentos: `docs/MAPA-GI-FECHAR-A-PONTE.md`, `docs/GI-VETO-DISPARO-ARMADO-RESOLVIDO.md`.
+
+---
+
+## 02/10/2026, tarde: O GI DISPARA PELO CAMINHO DO PRODUTO. Registro 29, sintético, provado campo a campo
+
+Continuação da frente do GI. O diretor decidiu as 4 pendências e mandou disparar o sintético. Operada
+distribuída (§A.39), com as sessões do Portal e do Pandapé no ar.
+
+### As 4 decisões do diretor, e o que cada uma virou
+
+1. **SEPARAR o resolvedor de cidade: FEITO** (`a97aa75`). Eram DOIS campos num resolvedor só, e só um
+   tem espaço de código provado. Agora: `GI_DEPARA_MUNICIPIOS_IBGE` alimenta **só** o nascimento
+   (IBGE, provado), e `GI_DEPARA_CIDADES` alimenta **só** a residência e **segue VAZIA**. A residência
+   continua saindo nula, que é o mesmo estado de antes: não se perde nada, e deixa-se de arriscar
+   gravar cidade errada na folha de um terceiro em silêncio.
+2. **O autor na trilha: NÃO precisa**, com a premissa corrigida na mão (o fornecedor carimba a
+   CREDENCIAL do EA, que é única, não a pessoa que clicou). Registrado e **encerrado** em
+   `docs/GI-VETO-DISPARO-ARMADO-RESOLVIDO.md`: auditoria futura tem a resposta lá.
+3. **Primeiro envio SINTÉTICO: DISPARADO.** Ver abaixo.
+4. **O carimbo x TTL: DESCONSIDERADO**, com um fato que nem eu nem a auditoria tínhamos: **o GI já tem
+   trava anti-duplicata por CPF**. A marca sumindo com o expurgo não cria duplicata, porque a trava é
+   do fornecedor. `expurgo.service.ts` **intocado**. Registrado como adendo em
+   `docs/MAPA-GI-4-CAMPOS-E-EXPURGO.md`.
+
+### O DISPARO: registro 29, e ele prova DUAS coisas de uma vez
+
+O `seguranca` **VETOU disparar pela produção** com um argumento medido que eu confirmei: das **58
+admissões vivas**, exatamente **1** passa todas as guardas, e é **pessoa real** com documento nulo.
+Armar a produção poria um gatilho irreversível ao lado dela. A §A.43 também fecha a porta de semear
+produção.
+
+**A saída foi uma quarta via, e ela elimina o risco em vez de mitigar:** processo **descartável** +
+banco **descartável**. O script instancia só as 4 classes do GI à mão, **sem subir o `AppModule`**,
+então **zero** dos 22 `onModuleInit`, **zero** worker BullMQ, **nenhum** Redis alcançável e **nenhuma**
+credencial de Pandapé, Clicksign, Google ou correio no ambiente. Isso veio de um furo que a auditoria
+achou e eu teria perdido: o prefixo do BullMQ é **constante em código** (`ea:bull`), então um processo
+com o Redis de produção alcançável **consumiria jobs reais** contra um banco vazio, e a produção
+perderia o job. O banco descartável não protegeria disso, porque o dano seria na fila.
+
+**Ensaio DESARMADO primeiro**, o caminho inteiro parando no passo 5 sem tocar a rede, e **inspeção do
+payload** antes do clique. Só então o disparo, **um**, sem laço.
+
+| campo | enviado | o GI devolveu |
+|---|---|---|
+| `codigoCliente` | **51525** (de `51525-TEMP.`) | **51525** |
+| `codigoEmpresa` / `codigoFilial` | 2 / 4 | **2 / 4** |
+| `codMunicipioNascto` | 3509502 | **3509502** |
+| **`codigoCidadeResid`** | **NULO** | **0** (o default dele) |
+| `cidadeNascimento` / `cidadeRG` / `cidadeExpedicao` / `cidadeResid` | CAMPINAS / SANTOS / OSASCO / SANTOS | **os quatro, nenhum trocado** |
+
+**Um envio provou as DUAS frentes:** o cadastro sintético levava o **sufixo de contrato** e o par
+**2/4**, então o `codigoCliente` chegando `51525` inteiro é a prova do sufixo na saída, e o
+`codigoCidadeResid` nulo é a prova da separação.
+
+**E a leitura de volta respondeu o ACHADO 0 de graça:** mandamos `cidadeResid` como TEXTO (`SANTOS`) e
+o GI devolveu `codigoCidadeResid = 0`, o default dele. **O fornecedor NÃO resolve o código a partir do
+texto.** Logo o campo exige mesmo um código do catálogo dele, que continua inobservável, e a decisão
+de deixá-lo nulo está certa pelo lado dele também, não só pelo nosso.
+
+**Desmontado (V4):** processo encerrado (a credencial vive só na memória dele), banco `ea_gi_sintetico`
+**dropado** e conferido, worktree removida.
+
+### Agentes e vereditos (§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o MAPA **antes** do código, o local do disparo, a credencial e o código | **VETOU 4** na 1a rodada, **VETOU produção** na 2a, **APROVOU** os 4 itens na 3a com C-A/C-B/C-C |
+| `tester` | 2 rodadas: os dois de/para e a trava da separação, escritas do REQUISITO | **68 testes**, 5 de 5 mutações mordendo, 1 equivalente declarado |
+| `backend` | a separação do resolvedor | typecheck limpo, 405 verdes, e **declarou** os 3 specs fora da lista que teve de tocar |
+| coordenador | alcance, sonda GET-only, pré-voo, ensaio desarmado, disparo, leitura de volta | 13 arquivos / 468 testes verdes |
+
+**O que a auditoria pegou e eu não tinha:** a fila compartilhada (acima), o reuso de CPF já enviado
+(que faria a trava anti-duplicata do GI responder e eu concluir "o envio falhou" sobre um envio que
+nunca foi tentado), e que `naturalidade` tem de ser a SIGLA da UF, senão o código sai nulo e parece
+regressão quando é o seed. **O que o `tester` pegou de si:** o spec dele da rodada anterior ficou
+**verde pela porta errada** depois da separação, validando o mapa IBGE pela env da residência.
+
+### Estado da ponte, e o que falta
+
+**Em produção:** sufixo no ar (`a33323e`), `GI_PARES_EMPRESA_FILIAL` ligada e provada, as 4
+credenciais instaladas (`0600`), `GI_API_URL` posta. **`GI_DISPARO_ARMADO` continua AUSENTE**, então a
+produção segue fechada, e o gatilho automático da auditoria é **estruturalmente inerte** (medido:
+nunca lê pessoa, nunca monta payload). **A separação (`a97aa75`) ainda NÃO foi publicada**: o build
+não concluiu sob carga 20 da máquina, com 31 `tsc` das três sessões.
+
+**Falta, e é decisão do diretor:** armar a produção (hoje uma única variável booleana separa o EA da
+folha do fornecedor), e o que fazer com a única admissão viva que passa as guardas levando documento
+nulo.
+
+**Gate:** 13 arquivos e 468 testes verdes no subconjunto do GI. Typecheck da árvore com **1** erro, e
+ele é de arquivo novo de **outra sessão** (`portal-conferencia-linha-vazia.tester.spec.ts`, variável
+não usada), zero em arquivo do GI. Avisado à sessão do Portal.
