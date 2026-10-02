@@ -4,7 +4,11 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
     "jsx": "preserve",
     "allowJs": true,
     "noEmit": true,
@@ -17,11 +21,25 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["../frontend/src/*"],
-      "@ea/shared-types": ["../../packages/shared-types/src/index.ts"]
+      "@/*": [
+        "../frontend/src/*"
+      ],
+      "@ea/shared-types": [
+        "../../packages/shared-types/src/index.ts"
+      ]
     },
     "isolatedModules": true
   },
-  "include": ["next-env.d.ts", "app/**/*.ts", "app/**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", ".next", "dist"]
+  "include": [
+    "next-env.d.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next-prod/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "dist"
+  ]
 }

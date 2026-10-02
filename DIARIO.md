@@ -19642,3 +19642,195 @@ nulo.
 **Gate:** 13 arquivos e 468 testes verdes no subconjunto do GI. Typecheck da árvore com **1** erro, e
 ele é de arquivo novo de **outra sessão** (`portal-conferencia-linha-vazia.tester.spec.ts`, variável
 não usada), zero em arquivo do GI. Avisado à sessão do Portal.
+
+## 02/10/2026 (tarde): a Central de Candidatos EM PRODUCAO, o dedup verde, e um alarme falso que quase virou conserto errado
+
+Sessao "Diga ai e Pandape". Tres sessoes simultaneas no ar (Portal, GI), operacao distribuida (§A.39).
+
+### FRENTE 1: o frontend da Central de Candidatos, PUBLICADO EM PRODUCAO (aguardando validacao)
+
+O conserto do 429 estava **pela metade em producao**: o backend tinha entrado de carona no `ab38a11`
+(a falha de recorte que eu registrei na madrugada), e o frontend, commitado em `a151931`, nunca foi
+publicado. Medido antes: zero ocorrencia de `Funil Nao Carregado` no bundle no ar. **Entao a tela
+em producao ainda fazia o laco de 483 chamadas e o 429 continuava lá.**
+
+Validacao em producao **por decisao do diretor**, e a razao e boa: o 429 so aparece com o volume de
+producao (76 mil candidatos) e a homologacao esta vazia, entao nao havia como reproduzir na 3120.
+
+Publicacao por **copia nominal de TRES arquivos** do `a151931` (`as/candidatos/page.tsx`,
+`lib/as-candidatos.ts`, `CandidatosDaVagaModal.tsx`) para a arvore de release, com backup do `.next`
+por hardlink antes. Typecheck verde, build verde, `ea-frontend` reiniciado as 17h21.
+
+**Provado no ARTEFATO SERVIDO, nao no fonte:** o chunk que o servidor entrega (`http 200`, 35 KB)
+carrega o canario `Funil N` (era zero antes), e o `Promise.all` do chunk caiu de **2 para 1**, que e
+o laco de 481 chamadas saindo. Producao intacta: 491 vagas e 3.029 admissoes antes e depois, os
+quatro servicos em 200.
+
+**O que mudou no que o diretor vai ver, e isso nao estava no commit:** hoje **nenhuma** das 76.694
+pessoas esta sem candidatura. Na madrugada era 1 em 59.961 (a Gizele Alves, que a varredura do
+Pandape atendeu). Entao o esperado e o KPI "Sem Vaga" perto de zero, e NAO uma lista cheia de "Vaga
+Nao Alocada". Guia: `docs/GUIA-VALIDACAO-CENTRAL-CANDIDATOS-PRODUCAO.md`.
+
+### FRENTE 2: o dedup por e-mail do Digai, VERDE e provado
+
+Era 6 vermelhos de 70, e **cinco deles eram UM defeito**: o banco fingido dos specs devolvia
+`[{id}]` sem `total` nem `passa_guarda`, defasado da projecao que a emenda E-7 criou, e o
+`inteiroDoBanco(undefined)` caia no ramo da ambiguidade. **O codigo estava certo e o duble estava
+velho.** O sexto era discordancia real, e virou decisao: a ambiguidade de e-mail passa a **registrar
+conflito** em vez de so avisar em log.
+
+Fechou em **453 verdes, zero vermelho** (`src/as/digai` + `domain/digai.spec`), e a area inteira de
+A&S em **3.695 verdes**. **Quatro mutacoes provadas**, cada uma matando so o seu teste.
+
+### O ALARME FALSO QUE QUASE VIROU CONSERTO ERRADO, e e a licao desta sessao
+
+Eu reportei ao diretor que a varredura do Digai estava **cortando por orcamento** e perdendo gente
+("um screening leu 105 de 615"). **Estava errado, e o meu proprio mapa sustentava a correcao errada.**
+
+O `lidos` do log nao e o que foi lido: e o `acumulados` calculado pela formula defeituosa
+`pagina * lidos`, em que `lidos` e o tamanho da **ULTIMA pagina**, a parcial. A auditoria provou com
+aritmetica, eu confirmei **6 de 6 exato no digito**, e o `backend` ampliou para **75 linhas de log e
+34 screenings, 75 de 75**. A pagina do fornecedor **e 100**, e os 34 screenings foram lidos **por
+inteiro**. Ninguem se perdeu. O "tamanho de pagina observado de 5, 9, 13, 18" que eu escrevi era a
+lista de tamanhos de **ultima pagina**.
+
+**O que a minha correcao teria feito:** 615/15 = **41 paginas** onde 7 bastam, estourando a janela,
+acabando o orcamento antes da listagem e **fabricando a perda que o alarme falso anunciava**. A
+auditoria vetou antes de uma linha ser escrita, o que e exatamente o que a §A.40 regra 1 existe para
+conseguir. **Nenhuma constante de teto foi tocada.** Conta do balde, medida: 308 paginas
+necessarias + 1 de listagem contra **1.350** requisicoes na janela de 15 min, **23%**.
+
+### AGENTES E VEREDITOS (§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o MAPA antes do codigo, e o CODIGO depois | **VETOU 3x**, **APROVADO** |
+| `backend` | os 6 testes, a decisao C, o aviso falso, 9 testes novos | 453 verdes, 4 mutacoes mortas |
+| coordenador | investigacao, publicacao do frontend, prova no artefato, coordenacao das 3 sessoes | - |
+
+**Tres erros meus que a auditoria pegou**, e dois mudaram decisao: o alarme falso da cota (acima);
+`as_ingestao_conflitos` **nao tem leitor nenhum** (eu escrevi "a fila de revisao" e nao existe fila,
+so insert e o delete do expurgo); e o preco da decisao C e maior do que eu assumi, porque a tabela
+tem `resolvido_em` e o unique **nao e parcial**, entao a linha ocupa a chave depois de resolvida.
+
+**Uma retratacao da auditoria, provocada por medicao do `backend`:** ela afirmou que a formula nova
+era conservadora; ele mostrou que nao e, e ela se retratou. Mas a medicao que fechou o caso foi dela:
+**20 cenarios, e as pessoas perdidas sao IDENTICAS nas duas formulas, 20 de 20.** A perda vem da
+cota, nao da formula; o que a formula nova destroi quando a pagina encolhe e so o **alarme**.
+Reverter devolveria 34 alarmes falsos por volta sem salvar ninguem.
+
+### O PORTAO DO DIGAI SEGUE FECHADO
+
+`DIGAI_INGESTAO_ATIVA` ausente do `.env` de producao, conferido. `as_candidatos` com origem DIGAI:
+**zero**. A escrita e inerte e **so o diretor liga**.
+
+### Documentos
+
+`docs/MAPA-DEDUP-VERDE-E-COTA-DIGAI.md` (com a EMENDA que registra o meu erro),
+`docs/GUIA-VALIDACAO-CENTRAL-CANDIDATOS-PRODUCAO.md`.
+
+### Nota de coordenacao: a outra publicacao do mesmo dia, e a minha frente conferida depois dela
+
+A sessao do Portal publicou em producao no fim da tarde, com horarios: `ea-backend` reiniciado as
+**18:00:18 UTC**, `ea-ai-service` as **18:00:46** (a avaliacao de **autenticidade** saiu de inerte e
+ficou LIGADA), e o cutover do tunel as **18:03:17**, quando o endereco publico passou a servir
+**producao** (3021) em vez da homologacao.
+
+**Conferi a minha frente DEPOIS da publicacao deles, e ela sobreviveu intacta:** os 3 arquivos do
+frontend seguem com o conserto, o chunk servido continua entregando o canario (`http 200`, os mesmos
+35.017 bytes), o backup do `.next` esta no lugar, e o `dist` que eles republicaram **ainda contem**
+`funilDaPagina`, ou seja a copia nominal deles nao reverteu a metade de backend da Central. Os tres
+servicos ativos e o ingress em 200.
+
+**Duas intervencoes minhas mudaram a frente deles, e vale registrar porque e o que a homologacao
+compartilhada (§A.32) existe para produzir:**
+1. **o volume vivo.** Eles iam publicar a autenticidade junto sem saber o tamanho. Com o numero da
+   minha frente (16.473 pessoas e 23.151 candidaturas escritas hoje pelo Pandape), a decisao virou
+   explicita e foi ao diretor com medida. No instante da publicacao o numero ja era **23.515**, e a
+   diferenca de 364 numa janela de 7 minutos e exatamente o argumento: o efeito nao e constante,
+   cresce a cada ciclo de 30 min da varredura;
+2. **provar no positivo.** Eles iam ler "0 documentos marcados" como sucesso. Zero marcados nao
+   distingue "o fio nao pegou nada" de "o fio nao existe". Com a prova no positivo, chamaram o
+   `ai-service` com um sintetico sem brasao e tiveram `autenticidadeSuspeita: true` com `status`
+   **VALIDADO**: as duas metades de uma vez, o fio ligou e a trava segurou. E o mesmo erro de
+   metodo que me custou o alarme falso da cota nesta mesma sessao, em espelho.
+
+**Lacuna que eles declaram e que me alcanca se a fila crescer:** nenhuma tela LE a marca de
+autenticidade. O conferente ve o documento em "Aguardando auditoria" com uma frase fixa de aviso, e
+o criterio especifico fica guardado na coluna, invisivel. Tela propria, proposta e nao construida.
+
+---
+
+## 02/10/2026, tarde: PORTAL DO CANDIDATO NO AR EM PRODUÇÃO, o bug V12 fechado e a autenticidade ligada
+
+**O endereço público `https://clientesportalsoulan.com.br` passou a servir PRODUÇÃO às 18:03:17 UTC.**
+Antes servia a homologação. Horários, para atribuição: `ea-backend` 18:00:18, `ea-ai-service` 18:00:46,
+cutover do túnel 18:03:17, e um segundo restart do backend às 18:20:54 por um achado da auditoria.
+
+### O que subiu
+
+- **O bug V12**, que era o motivo de o Portal não servir para nada: o documento confirmado pelo
+  candidato ficava preso em `AGUARDANDO_AUDITORIA`, que a tela chama "Em Análise", para sempre. O
+  veredito gravava a observação e **nunca o estado**. Agora passa por `decidirDestino`
+  (`domain/auditoria.ts:55`): VALIDADO sem suspeita vira `ENTREGUE` e a régua anda.
+- **A autenticidade**, que estava construída e **INERTE**. Eram TRÊS portões condicionais, e o terceiro
+  (`gemini.py:531`) ficava na SAÍDA: mexer só no prompt teria entregue a frente dormente do mesmo jeito.
+- **A migration `0142`** nos dois bancos, aditiva, zero documento afetado.
+
+### A PROVA NO POSITIVO, e por que ela é a lição da rodada
+
+A sessão do Pandapé avisou: "zero documento marcado é indistinguível de o fio não ligou, e os dois
+casos parecem iguais no log". Então a frente não foi dada por pronta pela ausência. Documento sintético
+de texto chapado, sem brasão nem selo, chamado direto no `ai-service`:
+
+    status: VALIDADO
+    autenticidadeSuspeita: true
+    autenticidadeMotivo: "ausencia de brasao/selo oficial e layout nao oficial"
+
+**Prova as DUAS metades de uma vez**, e a segunda é a que ninguém pensa em provar: o fio ligou, E a
+trava de não rebaixar o status funcionou. Um fio que liga e rebaixa documento bom reprovaria gente de
+verdade, calado, aparecendo só como fila crescendo sem motivo.
+
+### A frase que serve aos três defeitos desta rodada
+
+**O caminho errado não dá erro, dá silêncio.** Foram três, de frentes diferentes, com a mesma forma:
+- o `x-forwarded-for` com um elemento só não falha, ele PASSA, e o balde por IP simplesmente não roda;
+- "0 documentos marcados" parece sucesso e pode ser fio desligado;
+- a migration com `when` abaixo da marca d'água é pulada sem erro.
+
+### Três premissas do pedido que a medição derrubou
+
+1. **O `campos: []` NÃO é linha inútil, e "consertar" quebraria o Portal.** O pedido era não gravar
+   linha vazia. Medido: aquela linha é o PORTADOR do veredito de reprovação
+   (`portal-documentos.service.ts:387`), e é ela que abre a casa AJUSTAR (`:517`). Documento reprovado
+   tem zero campo no caso comum. Trocar o `||` por `&&` deixaria o candidato reprovado em "Em Análise"
+   para sempre, com tentativa de sobra. **O `||` ficou, e o teste que inverteu guarda o porquê.**
+2. **O limitador por IP do Portal foi DESLIGADO pelo cutover**, e isso é o oposto de um go-live sem
+   efeito colateral. A topologia no `.env` era a velha (Apache do Fernando, 2 saltos). Medido pela
+   auditoria: 18 POSTs em rajada, 400 dezoito vezes, zero 429. Sobrava o teto de superfície de 120/min
+   COMPARTILHADO: um laço de um IP derrubaria o atendimento de todos os candidatos. Consertado com
+   âncora própria no Caddy do GCP (`header_up X-Forwarded-For "{http.request.remote.host}, 169.254.255.1"`,
+   link-local reservada) e provado: **25 de 25 em 429**, com o motivo de falha sumindo do log.
+3. **O aviso de suspeita na observação ia carregar texto cru da IA.** A auditoria apontou o
+   acoplamento, e `autenticidadeMotivo` **saiu da assinatura** de `observacaoDoVeredito`: o aviso é
+   texto FIXO do EA, PII-free por construção, travado por canário.
+
+### O que fica ABERTO, e é decisão do diretor
+
+- **Documento pode terminar `ENTREGUE` com a marca de suspeita de pé.** A reauditoria limpa concede
+  ENTREGUE, a automação nunca limpa a marca (regra deliberada), e a régua lê ESTADO e nunca a MARCA.
+  Pior: a segunda passada **apaga o aviso** da observação e **mantém** a marca, então sobra o campo que
+  ninguém lê e sai a frase que o humano lê. Exposição medida hoje: **zero**. A uma reauditoria de
+  distância.
+- **`validar-humano` não tem `@Roles`**, e passou a ser a ÚNICA saída da trava de autenticidade: um
+  COMUM derruba a suspeita sozinho, e a trilha não registra que havia suspeita.
+- **O `src` de `~/apps/ea-release-portal` não contém o que está publicado** (8 commits atrás). Um
+  `pnpm build` ali reverte, em silêncio, as duas frentes publicadas hoje.
+
+### Fábrica
+
+`seguranca` auditou DUAS vezes, o MAPA antes da construção (§A.40) e o publicado depois, e vetou nas
+duas. O veto do mapa pagou-se sozinho: foi ele que achou o terceiro portão da autenticidade e o
+acoplamento de PII. `tester` entrou junto com a construção, achou o furo da marca e provou que o teste
+do V12 morde contra o HEAD. `ia` fechou o `ai-service`. `backend` achou e declarou a própria regressão,
+o que fez a tarefa 1 ser revertida em vez de publicada.

@@ -50,6 +50,12 @@ class AuditoriaRequest(_CamelModel):
     regras: list[RegraIn] = Field(default_factory=list)
     # Ausente na esmagadora maioria das auditorias: só o comprovante bancário o recebe.
     cadastro_bancario: CadastroBancarioIn | None = None
+    # SINAIS DE AUTENTICIDADE (frente de autenticidade). Lista separada das `regras` de propósito: as
+    # `regras` dirigem o STATUS (conformidade); estes sinais dirigem só `autenticidadeSuspeita`. É
+    # REFINO por tipo de documento, insumo do diretor (§A.9): VAZIO não desliga a autenticidade, que
+    # é SEMPRE avaliada pelo critério genérico do prompt (brasão, selo, timbre, layout de órgão
+    # emissor, print, montagem, formulário manuscrito, campo editado).
+    sinais_autenticidade: list[RegraIn] = Field(default_factory=list)
 
 
 class ResultadoAuditoria(_CamelModel):
@@ -62,6 +68,13 @@ class ResultadoAuditoria(_CamelModel):
     # Campos do cadastro que não conferem com o documento. Separado do `status` de propósito: é AVISO,
     # não reprovação (ver o comentário em shared-types). RÓTULOS, nunca valores (§A.6).
     divergencias_cadastro: list[str] = Field(default_factory=list)
+    # Suspeita de AUTENTICIDADE (frente de autenticidade). Separada do `status` pela mesma razão da
+    # divergência: um documento pode atender todas as regras de dado e ainda ser suspeito de forja. É
+    # SINAL para o backend puxar o humano, nunca reprovação. `False`/vazio é o caso normal; vem
+    # preenchido sempre que a IA desconfiar, com ou sem SINAIS DE AUTENTICIDADE por tipo. §A.6: o
+    # motivo descreve o CRITÉRIO visual ("selo oficial ausente"), nunca o dado lido.
+    autenticidade_suspeita: bool = False
+    autenticidade_motivo: str = ""
 
 
 # ── Portal do Candidato: o leitor (docs/DESENHO-PORTAL-CAMINHO-DO-ARQUIVO.md) ──────────────

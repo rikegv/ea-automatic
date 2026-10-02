@@ -57,7 +57,13 @@ import {
   type TipoDeReabertura,
 } from "../domain/portal-tentativas";
 import { motivoParaOCandidato, recusaParaOCandidato } from "../domain/portal-motivo-candidato";
-import { ESTADO_AGUARDANDO_AUDITORIA, limitarMotivo } from "../domain/auditoria";
+import {
+  decidirDestino,
+  ESTADO_AGUARDANDO_AUDITORIA,
+  limitarMotivo,
+  observacaoDoVeredito,
+  separarRegrasPorCategoria,
+} from "../domain/auditoria";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
 import { MOTIVO_POR_RECUSA, PortalLeitorService } from "./portal-leitor.service";
 import { admissaoOpaca } from "./portal-objeto";
@@ -1078,8 +1084,11 @@ export class PortalCredencialService {
           .where(eq(admissoes.id, credencial.admissaoId));
         if (!pessoa) throw new Error("candidato da admissao nao encontrado");
 
-        const regras = await this.db
-          .select({ descricaoRegra: regrasAuditoria.descricaoRegra })
+        const regrasDoTipo = await this.db
+          .select({
+            descricaoRegra: regrasAuditoria.descricaoRegra,
+            categoria: regrasAuditoria.categoria,
+          })
           .from(regrasAuditoria)
           .where(
             and(
@@ -1087,6 +1096,9 @@ export class PortalCredencialService {
               eq(regrasAuditoria.ativo, true),
             ),
           );
+        // §A.38: dois blocos. CONFORMIDADE dirige o veredito, como sempre; AUTENTICIDADE são sinais
+        // ortogonais que o leitor usa para apontar suspeita, sem rebaixar o status.
+        const { regras, sinaisAutenticidade } = separarRegrasPorCategoria(regrasDoTipo);
 
         const resposta = await this.leitor.ler({
           bucket: this.armazenamento.nomeDoBucket(),
@@ -1095,6 +1107,7 @@ export class PortalCredencialService {
           tipoDocumentoNome: tipoDocumento.nome,
           candidato: { nome: pessoa.nome, cpf: pessoa.cpf },
           regras,
+          sinaisAutenticidade,
         });
 
         // ── O CONFRONTO. Duas conferências independentes do MESMO objeto têm de concordar. ──
@@ -1205,36 +1218,69 @@ export class PortalCredencialService {
             registrar,
           );
 
-          // ══ O MOTIVO COMPLETO FICA PARA QUEM OPERA, E A RÉGUA É "COMPLETO PARA O TIME,
-          //    RECORTADO PARA O CANDIDATO" ═══════════════════════════════════════════════════════
+          // ══ O MOTIVO COMPLETO FICA PARA QUEM OPERA, E O ESTADO AGORA AVANÇA NO CAMINHO FELIZ ════
           //
           // O documento do Portal chegava à fila do time SEM MOTIVO NENHUM: `marcarEntregue` grava
           // só o estado, e nada no módulo escrevia `observacao`. O time recebia a pendência e não
-          // tinha o que dizer ao candidato ao solicitar o reenvio (item 5), que é justamente a
-          // conversa que aquele item existe para viabilizar. Na esteira o motivo sempre foi gravado
-          // aqui; no Portal, não era, e o comentário que dizia o contrário era instrução errada para
-          // quem viesse depois.
+          // tinha o que dizer ao candidato ao solicitar o reenvio (item 5). Na esteira o motivo
+          // sempre foi gravado aqui; no Portal, não era.
           //
           // O QUE VAI PARA CADA LADO: aqui vai o motivo INTEIRO da IA, como na esteira, porque quem
           // lê é consultor com crachá. Para o candidato vai a frase de lista fechada, redigida pelo
-          // EA (`motivoParaOCandidato`), justamente porque o texto do modelo pode carregar PII de
-          // terceiro e copia o critério interno da regra.
+          // EA (`motivoParaOCandidato`), que pode carregar PII de terceiro e copia o critério interno.
           //
-          // O ESTADO NÃO MUDA, de propósito: continua `AGUARDANDO_AUDITORIA`. Quem decide o estado
-          // do documento do Portal é a confirmação por metadado, e ela prova só que existe objeto do
-          // tamanho declarado (ver `marcarEntregue`). As duas guardas do `where` são as mesmas de
-          // sempre: nunca por cima de veredito humano, nunca por cima de documento já resolvido.
-          await this.db
-            .update(documentosAdmissao)
-            .set({ observacao: limitarMotivo(resposta.auditoria.motivo) })
-            .where(
-              and(
-                eq(documentosAdmissao.admissaoId, credencial.admissaoId),
-                eq(documentosAdmissao.tipoDocumentoId, credencial.tipoDocumentoId),
-                eq(documentosAdmissao.estado, ESTADO_AGUARDANDO_AUDITORIA),
-                sql`${documentosAdmissao.validadoPorId} is null`,
-              ),
-            );
+          // O ESTADO AGORA AVANÇA NO VALIDADO (o conserto acoplado): o documento ficava preso em
+          // AGUARDANDO_AUDITORIA mesmo com veredito VALIDADO, régua nunca fechava, contador 0. O
+          // VALIDADO passa por `decidirDestino` (§A.38): NÃO-SUSPEITO vira ENTREGUE (conta na régua);
+          // SUSPEITO de autenticidade NÃO é auto-aprovado, fica em AGUARDANDO_AUDITORIA com a marca
+          // `conferir_autenticidade` e vai para a conferência HUMANA. INCONFORME/PENDENTE seguem
+          // como SEMPRE: estado inalterado (fila do time / reenvio do candidato), só o motivo grava.
+          //
+          // AS DUAS GUARDAS DO `where` SÃO AS DE SEMPRE: nunca por cima de veredito HUMANO, nunca por
+          // cima de documento já resolvido (só promove o que `marcarEntregue` deixou em
+          // AGUARDANDO_AUDITORIA, que é a prova de que esta é a confirmação recém-chegada).
+          const observacaoVeredito = limitarMotivo(resposta.auditoria.motivo);
+          const guardaDoDocumento = and(
+            eq(documentosAdmissao.admissaoId, credencial.admissaoId),
+            eq(documentosAdmissao.tipoDocumentoId, credencial.tipoDocumentoId),
+            eq(documentosAdmissao.estado, ESTADO_AGUARDANDO_AUDITORIA),
+            sql`${documentosAdmissao.validadoPorId} is null`,
+          );
+          if (resposta.auditoria.status === "VALIDADO") {
+            const destino = decidirDestino("VALIDADO", resposta.auditoria.autenticidadeSuspeita);
+            // A automação só SOBE a marca, nunca a limpa (§A.38): só grava `conferir_autenticidade`
+            // quando é true. §A.6: o critério visual, nunca o dado lido.
+            const marcaAutenticidade = destino.conferirAutenticidade
+              ? {
+                  conferirAutenticidade: true as const,
+                  autenticidadeMotivo: limitarMotivo(resposta.auditoria.autenticidadeMotivo) || null,
+                }
+              : {};
+            // O AVISO DE SUSPEITA ENTRA NA `observacao`, e é o conserto de uma marca que era
+            // ESCRITA E NUNCA LIDA: nenhuma tela mostra `conferir_autenticidade`, então o documento
+            // suspeito chegava à fila como "Aguardando auditoria" exibindo o motivo do veredito de
+            // CONFORMIDADE, que diz que ele está bom. Sem suspeita, o texto sai BYTE A BYTE igual ao
+            // `observacaoVeredito` do outro ramo. A função é a MESMA do `auditoria.service`, e o aviso
+            // é TEXTO FIXO do EA: o critério cru da IA NÃO entra aqui, fica só em
+            // `autenticidade_motivo` (§A.6, PII-free por construção, não por confiança).
+            await this.db
+              .update(documentosAdmissao)
+              .set({
+                estado: destino.estado,
+                observacao: observacaoDoVeredito({
+                  motivo: resposta.auditoria.motivo,
+                  suspeita: destino.conferirAutenticidade,
+                }),
+                ...marcaAutenticidade,
+              })
+              .where(guardaDoDocumento);
+          } else {
+            // INCONFORME/PENDENTE: o estado NÃO muda (comportamento de sempre do Portal), só o motivo.
+            await this.db
+              .update(documentosAdmissao)
+              .set({ observacao: observacaoVeredito })
+              .where(guardaDoDocumento);
+          }
         }
 
         // ── O AUTO-PREENCHIMENTO, que é a segunda metade da resposta do leitor. ──

@@ -70,6 +70,9 @@ export class ValidacaoHumanaService {
     // O motivo exibido diz QUEM assumiu: é a leitura que o próximo consultor precisa ter na tela.
     const observacao = `Validado manualmente por ${nomeAutor}.`;
 
+    // §A.38: a validação HUMANA é a SAÍDA do suspeito. Aprovar à mão ZERA `conferir_autenticidade` e
+    // `autenticidade_motivo` (precedência humana sobre a IA: um humano olhou e decidiu que é via
+    // oficial). A reauditoria AUTOMÁTICA nunca limpa a marca; só o humano a tira.
     await this.db
       .insert(documentosAdmissao)
       .values({
@@ -77,6 +80,8 @@ export class ValidacaoHumanaService {
         tipoDocumentoId,
         estado: "ENTREGUE",
         observacao,
+        conferirAutenticidade: false,
+        autenticidadeMotivo: null,
         validadoPorId: user.id,
         validadoEm: agora,
       })
@@ -85,6 +90,8 @@ export class ValidacaoHumanaService {
         set: {
           estado: "ENTREGUE",
           observacao,
+          conferirAutenticidade: false,
+          autenticidadeMotivo: null,
           validadoPorId: user.id,
           validadoEm: agora,
           atualizadoEm: agora,

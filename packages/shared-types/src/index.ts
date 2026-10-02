@@ -412,6 +412,24 @@ export interface ResultadoAuditoria {
    * §A.6: RÓTULOS de campo ("agencia", "conta"), jamais os valores de qualquer um dos lados.
    */
   divergenciasCadastro?: string[];
+  /**
+   * AUTENTICIDADE suspeita: o documento aparenta NÃO ser via oficial (sem selo/brasão, layout fora do
+   * modelo, aparência de formulário/print/montagem, campos editados). Preenchido pela IA só quando ela
+   * desconfia, no molde de `divergenciasCadastro`.
+   *
+   * ORTOGONAL AO `status`, e é o ponto: um documento pode atender todas as regras de DADO e ainda ser
+   * suspeito de forjado. A IA NÃO rebaixa o `status` por causa dela. O que muda é o DESTINO: o backend
+   * (`decidirDestino`, domain/auditoria.ts) NÃO auto-aprova um VALIDADO suspeito, ele fica em
+   * AGUARDANDO_AUDITORIA com a marca "conferir autenticidade" e vai pra conferência HUMANA. É a rede
+   * embaixo do caminho feliz, que hoje não existe (§A.38, decisão do diretor).
+   *
+   * Opcional de propósito: o par do ai-service (Python) emite só quando há SINAIS DE AUTENTICIDADE
+   * cadastrados; sem eles, chega `undefined` e o comportamento é idêntico ao de hoje.
+   *
+   * §A.6: `autenticidadeMotivo` descreve o CRITÉRIO visual ("selo oficial ausente"), NUNCA o dado lido.
+   */
+  autenticidadeSuspeita?: boolean;
+  autenticidadeMotivo?: string;
 }
 
 /** Regra de auditoria configurável pelo admin (Master/Super Admin) por tipo de documento. */

@@ -39,6 +39,7 @@ const rotasPublicasDoPortal = [
 ];
 
 const nextConfig = {
+  distDir: process.env.PORTAL_DIST_DIR || ".next",
   reactStrictMode: true,
   // basePath so e declarado quando nao-vazio (Next exige comecar com "/" e nao terminar com "/").
   ...(basePath ? { basePath } : {}),

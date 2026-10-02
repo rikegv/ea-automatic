@@ -41,6 +41,12 @@ def auditar_documento(
     req: AuditoriaRequest, _: None = Depends(require_internal_token)
 ) -> ResultadoAuditoria:
     regras = [r.descricao_regra for r in req.regras if r.descricao_regra.strip()]
+    # SINAIS DE AUTENTICIDADE: lista separada das regras de conformidade, e é o REFINO por tipo de
+    # documento (insumo do diretor, §A.9). Vazia NÃO desliga a avaliação: o gemini avalia
+    # autenticidade SEMPRE, pelo critério geral.
+    sinais_autenticidade = [
+        s.descricao_regra for s in req.sinais_autenticidade if s.descricao_regra.strip()
+    ]
 
     # Sem régua de auditoria definida → não há critério; é escalada, não reprovação (§A.9).
     if not regras:
@@ -103,6 +109,8 @@ def auditar_documento(
             cadastro_bancario=(
                 req.cadastro_bancario.model_dump(exclude_none=True) if req.cadastro_bancario else None
             ),
+            # Vazio → None: o gemini então usa só o critério geral, sem o bloco de refino.
+            sinais_autenticidade=sinais_autenticidade or None,
         )
     except ErroVertex as erro:
         # OST B1 / Bloco 1: o Vertex já foi retentado com backoff quando o erro era transitório. Aqui
@@ -122,4 +130,7 @@ def auditar_documento(
         motivo=resultado["motivo"],
         campos_conferidos=resultado["camposConferidos"],
         divergencias_cadastro=resultado.get("divergenciasCadastro", []),
+        # SINAL de forja para o backend puxar o humano; NÃO entra no `valido`/`status` (§ autenticidade).
+        autenticidade_suspeita=resultado.get("autenticidadeSuspeita", False),
+        autenticidade_motivo=resultado.get("autenticidadeMotivo", ""),
     )

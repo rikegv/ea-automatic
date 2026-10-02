@@ -36,6 +36,7 @@ import {
   asContatoTipoEnum,
   candidaturaSituacaoEnum,
   cartaoVtEnum,
+  categoriaRegraAuditoriaEnum,
   clicksignStatusEnum,
   estadoDocumentoEnum,
   exigenciaEnum,
@@ -1281,6 +1282,14 @@ export const documentosAdmissao = pgTable(
       .references(() => tiposDocumento.id),
     estado: estadoDocumentoEnum("estado").notNull().default("PENDENTE"),
     observacao: text("observacao"),
+    // AUTENTICIDADE (§A.38, decisão do diretor). A IA valida DADO e REGRA, não autenticidade; quando
+    // ela desconfia de via NÃO oficial (sem selo, layout fora do modelo, aparência de montagem), o
+    // documento NÃO é auto-aprovado. `conferir_autenticidade` marca que ele espera conferência
+    // HUMANA, mesmo com veredito VALIDADO (ver `decidirDestino`, domain/auditoria.ts). A validação
+    // humana ZERA esta marca (precedência humana sobre a IA). §A.6: `autenticidade_motivo` descreve o
+    // CRITÉRIO visual ("selo oficial ausente"), NUNCA o dado lido.
+    conferirAutenticidade: boolean("conferir_autenticidade").notNull().default(false),
+    autenticidadeMotivo: text("autenticidade_motivo"),
     // VALIDAÇÃO HUMANA (OST B1, Blocos 3 e 4). Era a marcação que FALTAVA: até aqui todo write neste
     // estado passava pela IA, e a trava "a carga não reverte veredito humano" estava escrita mas era
     // inócua, porque não havia como saber o que foi decidido por gente. Preenchido = um consultor
@@ -1479,6 +1488,11 @@ export const regrasAuditoria = pgTable("regras_auditoria", {
     .notNull()
     .references(() => tiposDocumento.id, { onDelete: "cascade" }),
   descricaoRegra: text("descricao_regra").notNull(),
+  // CATEGORIA (§A.38): CONFORMIDADE (padrão) dirige o `status` do veredito, como sempre; AUTENTICIDADE
+  // é SINAL de via não oficial, ortogonal ao status. O backend separa as duas ao montar o contexto da
+  // IA (dois blocos). O conteúdo das regras de autenticidade é insumo do diretor (§A.9); aqui é só a
+  // coluna que as classifica.
+  categoria: categoriaRegraAuditoriaEnum("categoria").notNull().default("CONFORMIDADE"),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
   atualizadoEm,

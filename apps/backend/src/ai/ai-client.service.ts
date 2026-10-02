@@ -24,7 +24,17 @@ export interface AuditarDocumentoPayload {
   tipoDocumentoCodigo: string;
   tipoDocumentoNome: string;
   candidato: { nome: string; cpf: string };
+  /** Regras de CONFORMIDADE (categoria CONFORMIDADE): dirigem o `status` do veredito, como sempre. */
   regras: Array<{ descricaoRegra: string }>;
+  /**
+   * SINAIS DE AUTENTICIDADE (regras de categoria AUTENTICIDADE, §A.38). Bloco SEPARADO do `regras`
+   * porque é ortogonal ao `status`: a IA emite `autenticidadeSuspeita` quando o documento desconfia
+   * de via não oficial, sem rebaixar o veredito. Vazio NÃO desliga a avaliação: o ai-service avalia
+   * autenticidade SEMPRE, pelo critério geral (brasão, selo, timbre, layout oficial, aparência de
+   * print, de montagem ou de formulário manuscrito). Estes sinais são o REFINO por tipo de documento
+   * e são insumo do diretor (§A.9); sem eles, vale só o critério geral.
+   */
+  sinaisAutenticidade?: Array<{ descricaoRegra: string }>;
   /**
    * Dados bancários DIGITADOS, para a IA conferir contra o comprovante (melhorias EAC, item 8).
    * Ausente em quase toda auditoria: só o comprovante bancário o recebe, e só com os campos que o

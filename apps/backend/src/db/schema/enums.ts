@@ -112,6 +112,16 @@ export const estadoDocumentoEnum = pgEnum("estado_documento", [
   "AGUARDANDO_AUDITORIA",
 ]);
 
+/**
+ * CATEGORIA da regra de auditoria (§A.38, frente de autenticidade). CONFORMIDADE (padrão, como hoje)
+ * dirige o `status` do veredito; AUTENTICIDADE é SINAL de que o documento pode não ser via oficial, e
+ * é ORTOGONAL ao status: não reprova, muda o DESTINO (ver `decidirDestino`, domain/auditoria.ts).
+ */
+export const categoriaRegraAuditoriaEnum = pgEnum("categoria_regra_auditoria", [
+  "CONFORMIDADE",
+  "AUTENTICIDADE",
+]);
+
 /** Sinalizador de preenchimento da admissão (§A.3 / F5). Marca, nunca bloqueia (regra 5). */
 export const sinalizadorEnum = pgEnum("sinalizador_preenchimento", [
   "PENDENTE",

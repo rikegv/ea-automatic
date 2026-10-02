@@ -44,9 +44,11 @@ import { admissaoVivaParaRecuo, podeReabrirDocumento } from "../domain/reabertur
 import { clienteExigeIntegracao } from "../esteira/integracao-obrigatoria.repo";
 import { nascerCadastroEIntegracao } from "../esteira/nascimento-cadastro";
 import {
+  decidirDestino,
   ESTADO_AGUARDANDO_AUDITORIA,
-  estadoDocumentoDeAuditoria,
   limitarMotivo,
+  observacaoDoVeredito,
+  separarRegrasPorCategoria,
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { StagingService } from "../staging/staging.service";
@@ -324,13 +326,18 @@ export class AuditoriaService {
     const triagem = triarConjunto(arquivos.map((a, indice) => ({ ...a, indice })));
     const stagingAuditaveis = triagem.auditaveis.map((a) => stagingPaths[a.indice]);
 
-    // 2) Regras ATIVAS do tipo (critério de validade — texto, sem PII).
-    const regras = await this.db
-      .select({ descricaoRegra: regrasAuditoria.descricaoRegra })
+    // 2) Regras ATIVAS do tipo (critério de validade — texto, sem PII), separadas por CATEGORIA
+    //    (§A.38): CONFORMIDADE dirige o `status`, como sempre; AUTENTICIDADE são SINAIS ortogonais.
+    const regrasDoTipo = await this.db
+      .select({
+        descricaoRegra: regrasAuditoria.descricaoRegra,
+        categoria: regrasAuditoria.categoria,
+      })
       .from(regrasAuditoria)
       .where(
         and(eq(regrasAuditoria.tipoDocumentoId, tipoDocumentoId), eq(regrasAuditoria.ativo, true)),
       );
+    const { regras, sinaisAutenticidade } = separarRegrasPorCategoria(regrasDoTipo);
 
     // 3) DESACOPLAMENTO (BLOCO B): grava a COLETA ANTES de auditar, com motivo explicativo (BLOCO 2:
     //    o AGUARDANDO diz por que ainda não auditou). Se a IA cair, a coleta PERMANECE gravada.
@@ -405,7 +412,8 @@ export class AuditoriaService {
           tipoDocumentoNome: tipo.nome,
           candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
           ...(cadastroBancario ? { cadastroBancario } : {}),
-          regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
+          regras,
+          sinaisAutenticidade,
         });
       } catch (err) {
         // OST motivo verdadeiro / Bloco 1: o motivo passa a dizer a VERDADE para TODA família, não
@@ -419,14 +427,37 @@ export class AuditoriaService {
     }
 
     // 5) IA respondeu → grava o veredito (SÓ status + motivo, cap 500, sem PII — §A.3 regra 7 / §A.6).
-    const estado = estadoDocumentoDeAuditoria(resultado.status);
-    const observacao = limitarMotivo(resultado.motivo);
+    //    O DESTINO passa por `decidirDestino` (§A.38): um VALIDADO SUSPEITO de autenticidade NÃO é
+    //    auto-aprovado; fica em AGUARDANDO_AUDITORIA com a marca `conferir_autenticidade` e vai para a
+    //    conferência HUMANA. §A.6: `autenticidade_motivo` é o CRITÉRIO visual, nunca o dado lido.
+    const destino = decidirDestino(resultado.status, resultado.autenticidadeSuspeita);
+    const estado = destino.estado;
+    // A OBSERVAÇÃO CARREGA O AVISO DE SUSPEITA quando há suspeita, e sai IDÊNTICA quando não há
+    // (`observacaoDoVeredito`, domain/auditoria). A marca era escrita e nenhuma tela a lia: o
+    // consultor recebia o documento suspeito com o motivo do veredito de CONFORMIDADE, que diz que
+    // ele está bom. Mesma função no outro escritor (`portal-credencial.service`), para a frase não
+    // divergir por cópia. O aviso é TEXTO FIXO do EA: o critério cru da IA NÃO entra na `observacao`,
+    // continua só em `autenticidade_motivo` (§A.6, PII-free por construção, não por confiança).
+    const observacao = observacaoDoVeredito({
+      motivo: resultado.motivo,
+      suspeita: destino.conferirAutenticidade,
+    });
+    // A AUTOMAÇÃO SÓ SOBE A MARCA, NUNCA A LIMPA (§A.38): limpar `conferir_autenticidade` é privilégio
+    // do HUMANO (ver `validacao-humana.service`). Por isso o campo só entra no write quando é `true`;
+    // quando não há suspeita, o write NÃO toca a coluna (preserva uma marca anterior, não escreve
+    // false). §A.6: `autenticidade_motivo` é o CRITÉRIO visual, nunca o dado lido.
+    const marcaAutenticidade = destino.conferirAutenticidade
+      ? {
+          conferirAutenticidade: true as const,
+          autenticidadeMotivo: limitarMotivo(resultado.autenticidadeMotivo) || null,
+        }
+      : {};
     await this.db
       .insert(documentosAdmissao)
-      .values({ admissaoId, tipoDocumentoId, estado, observacao })
+      .values({ admissaoId, tipoDocumentoId, estado, observacao, ...marcaAutenticidade })
       .onConflictDoUpdate({
         target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
-        set: { estado, observacao, atualizadoEm: new Date() },
+        set: { estado, observacao, ...marcaAutenticidade, atualizadoEm: new Date() },
       });
 
     // 5.1) AS TENTATIVAS VELHAS SAEM AGORA, E SÓ SE ESTE VEREDITO FOI VALIDADO. Ver o bloco longo
@@ -876,16 +907,21 @@ export class AuditoriaService {
 
     await this.limparStagingDoTipo(admissaoId, tipo.codigo);
     const stagingPath = await this.staging.salvar(admissaoId, tipo.codigo, arquivo);
-    const regras = await this.db
-      .select({ descricaoRegra: regrasAuditoria.descricaoRegra })
+    const regrasDoTipo = await this.db
+      .select({
+        descricaoRegra: regrasAuditoria.descricaoRegra,
+        categoria: regrasAuditoria.categoria,
+      })
       .from(regrasAuditoria)
       .where(and(eq(regrasAuditoria.tipoDocumentoId, tipo.id), eq(regrasAuditoria.ativo, true)));
+    const { regras, sinaisAutenticidade } = separarRegrasPorCategoria(regrasDoTipo);
     const resultado = await this.ai.auditarDocumento({
       stagingPaths: [stagingPath],
       tipoDocumentoCodigo: tipo.codigo,
       tipoDocumentoNome: tipo.nome,
       candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
-      regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
+      regras,
+      sinaisAutenticidade,
     });
     return {
       tipoDocumentoId: tipo.id,
