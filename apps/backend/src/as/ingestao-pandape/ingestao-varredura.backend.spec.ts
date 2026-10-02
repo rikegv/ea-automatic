@@ -497,14 +497,30 @@ describe("o repositório da ingestão", () => {
 
 
   /*
-   * ─ O NASCIMENTO DA CANDIDATURA É DECLARADO, E É DELE QUE A PONTE DEPENDE ─────────────────────
+   * ─ O NASCIMENTO DA CANDIDATURA É DECLARADO, E HOJE É SÓ ISSO QUE ELE É ───────────────────────
    *
-   * `criada` é o ÚNICO ponto do sistema que afirma "esta linha nasceu agora", e a ponte para a
-   * admissão (`PortaPonteParaAdmissao`) só dispara com ele. Sem esta medição, apagar o campo aqui
-   * DESLIGARIA a admissão automática inteira em produção sem nada ficar vermelho: o ciclo trata
-   * `undefined` como "não é nascimento", que é o fail-closed certo e é também silencioso.
+   * `criada` é o ÚNICO ponto do sistema que afirma "esta linha nasceu agora", e `linhasAfetadas`
+   * NÃO serve de substituto: ele vale 1 no insert e também valia 1 no `update` que mudou algo, que
+   * são coisas opostas para quem lê.
    *
-   * `linhasAfetadas` NÃO SERVE de substituto: ele vale 1 no insert e no update que mudou algo.
+   * ┌─ ELE NÃO TEM LEITOR DE PRODUÇÃO DESDE 02/10/2026, E NENHUM CAMINHO CRIA ADMISSÃO DAQUI ────┐
+   * │ O TEXTO QUE ESTAVA AQUI DIZIA O CONTRÁRIO, e foi reescrito em vez de apagado porque era     │
+   * │ justamente o tipo de frase que entrega à próxima sessão uma justificativa escrita para       │
+   * │ religar o fio: ele afirmava que a ponte para a admissão disparava com este campo e que       │
+   * │ apagá-lo "desligaria a admissão automática inteira em produção". NÃO EXISTE ADMISSÃO          │
+   * │ AUTOMÁTICA PELA VARREDURA. "O único gatilho que envia para admissão é o gatilho da esteira,  │
+   * │ e não o das ATS": a ponte foi REMOVIDA, e com ela todo leitor deste campo.                   │
+   * │                                                                                             │
+   * │ O MOTIVO MEDIDO, para a frase antiga não voltar por outra porta: "Contratados" no funil do    │
+   * │ Pandapé não é "enviado para admissão". A varredura lia a ETAPA, o webhook dispara na AÇÃO de │
+   * │ enviar, e lendo a etapa a varredura criou 259 pré-admissões em produção, 254 delas de gente  │
+   * │ que já estava na esteira, sem o `cod_cliente` que o webhook preenche.                        │
+   * │                                                                                             │
+   * │ ELE FICA, e a decisão é do coordenador com a auditoria: é a resposta HONESTA do repositório   │
+   * │ sobre a própria escrita, e tirá-lo mexeria no contrato de `PortaBanco` por conta de uma       │
+   * │ frente que não é a dele. Esta medição guarda o sinal, e nada mais: quem a ler não deve        │
+   * │ concluir que existe algum caminho criando admissão a partir dela, porque não existe.          │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   it("a candidatura que NASCE devolve `criada`, e a que já existia devolve o contrário", async () => {
     /*
@@ -540,7 +556,6 @@ describe("o repositório da ingestão", () => {
           etapa: "APROVACAO",
           situacao: "ENVIADO_PARA_ADMISSAO",
           motivo_descarte: null,
-          admissao_id: null,
         },
       ],
     ]);
@@ -562,9 +577,9 @@ describe("o repositório da ingestão", () => {
      * OST de precedência REMOVEU o `update as_candidaturas` inteiro, porque o `is distinct from` dele
      * não era proteção, era o gatilho, e a pessoa que o time avançava voltava em até 30 minutos.
      *
-     * O QUE ESTE TESTE MEDE CONTINUA INTEIRO: candidatura que já existia NÃO é nascimento, e por isso
-     * o ATS não promove à admissão quem já está sendo trabalhado dentro do EA. O que mudou é que
-     * agora ela também não é ESCRITA.
+     * O QUE ESTE TESTE MEDE CONTINUA INTEIRO: candidatura que já existia NÃO é nascimento. Desde
+     * 02/10/2026 o ATS não promove à admissão NINGUÉM, nem quem nasce nesta volta: a varredura
+     * atualiza o funil e nada mais. E a linha também não é mais ESCRITA, pela trava de precedência.
      */
     expect(movida.linhasAfetadas).toBe(0);
     expect(movida.criada).toBe(false);

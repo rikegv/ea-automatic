@@ -10,8 +10,6 @@ import {
   type Escrita,
   type ResumoDoCiclo,
 } from "./ingestao-portas";
-import { desfechoDaIngestaoExterna } from "../../domain/as-ponte-admissao";
-import { ponteDeveDisparar } from "../../domain/as-precedencia-ingestao";
 import {
   projetarInscricao,
   projetarPasta,
@@ -142,9 +140,6 @@ export function novoResumo(): ResumoDoCiclo {
     etapasNaoMapeadas: [],
     conflitosParaRevisao: 0,
     divergencias: 0,
-    pontesParaAdmissao: 0,
-    pontesAdiadas: 0,
-    posicoesExcedidas: 0,
     erros: 0,
   };
 }
@@ -421,6 +416,11 @@ async function espelharVaga(
        * trilha. A auditoria pediu uma guarda na ponte; o desenho REMOVEU O CAMINHO, porque guarda
        * se perde numa refatoração (§A.33) e caminho que não existe não é percorrido por engano.
        *
+       * DESDE 02/10/2026 A PONTE CITADA ACIMA TAMBÉM NÃO EXISTE MAIS (a varredura não cria admissão:
+       * o gatilho é da esteira, e não das ATS), então aquele trecho de descida está fechado nas duas
+       * pontas. A razão de NÃO escrever cliente aqui NÃO depende disso e segue inteira: escrever
+       * reescreveria, a cada volta, o cliente que uma pessoa conferiu na liberação da vaga.
+       *
        * Há teste de fonte que falha se `cod_cliente` voltar a ser atribuído aqui, no `camposDoAts`
        * ou no `comparaAntes`.
        */
@@ -534,87 +534,38 @@ async function ingerirInscricao(
   if (candidatoId === null) return;
 
   /*
-   * A RÉGUA DA PONTE É DO DOMÍNIO, e não deste arquivo (`domain/as-ponte-admissao.ts`): a situação
-   * vem da LINHA do de/para, que é DADO editável, e a pergunta "isto pede admissão?" é regra. O
-   * precedente é o achado do `seguranca` na ingestão do Digai, em que um `??` sobre a situação da
-   * linha deixava o dado decidir o que só o código pode decidir.
+   * ─ A VARREDURA NÃO CRIA ADMISSÃO, E É AQUI QUE ELA DEIXOU DE CRIAR (02/10/2026) ─────────────
+   *
+   * A REGRA DO DIRETOR: "O ÚNICO GATILHO QUE ENVIA PARA ADMISSÃO É O GATILHO DA ESTEIRA, E NÃO DAS
+   * ATS." Esta volta escreve a ETAPA e a SITUAÇÃO do funil, e para aí. Quem abre pré-admissão é o
+   * webhook da esteira (`pandape/pandape-sync.service.ts`) e o envio manual do funil
+   * (`as/candidatos/candidatos.service.ts`, `registrarSaida`), cada um com o seu gesto explícito.
+   *
+   * ┌─ O MOTIVO É MEDIDO, E É ELE QUE IMPEDE DE RELIGAR O FIO ───────────────────────────────────┐
+   * │ "Contratados" no funil do Pandapé NÃO É "enviado para admissão". A varredura lê a ETAPA; o  │
+   * │ webhook dispara na AÇÃO de enviar, que é um gesto separado e POSTERIOR no Pandapé. Lendo a   │
+   * │ etapa, esta função criou 259 pré-admissões em produção, e 254 daquelas pessoas já estavam na │
+   * │ esteira, 250 delas pelo webhook. E o webhook é melhor no que importa: ele acerta o MOMENTO e  │
+   * │ preenche o `cod_cliente` (252 de 258), que a varredura gravava NULO por construção.          │
+   * │                                                                                             │
+   * │ ENTÃO NÃO FALTA NADA AQUI, e um "conserto" que retomasse a criação recriaria as 259: a        │
+   * │ candidatura que aparece contratada e que o webhook ainda não enviou simplesmente ESPERA. O    │
+   * │ funil fica certo, e a admissão nasce pelo gatilho da esteira, com cliente.                    │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A SITUAÇÃO VEM DIRETO DA LINHA DO DE/PARA (`lerLinhaDePara`, em `domain/as-etapa-externa.ts`),
+   * que é quem já recusa valor fora do vocabulário. Havia um invólucro de domínio aqui
+   * (`desfechoDaIngestaoExterna`) cuja única razão de existir era a SEGUNDA resposta, "isto pede
+   * admissão?"; sem ela o invólucro era identidade, e dois donos da mesma validação divergem na
+   * primeira correção de um só.
    */
-  const desfecho = desfechoDaIngestaoExterna(resolucao.situacao);
-  const gravada = await gravarCandidatura(deps, resumo, {
+  await gravarCandidatura(deps, resumo, {
     candidatoId,
     vagaId,
     etapa: resolucao.etapaCodigo,
-    situacao: desfecho.situacao,
+    situacao: resolucao.situacao,
     motivo: resolucao.motivoPadrao,
   });
-
-  /*
-   * ─ A PONTE, E A RÉGUA DO "QUANDO" É DOMÍNIO PURO ────────────────────────────────────────────
-   *
-   * ELA ERA UM `if` AQUI (`pedePonteParaAdmissao && gravada.criada`) e virou `ponteDeveDisparar`
-   * (`domain/as-precedencia-ingestao.ts`) na OST de precedência, porque a condição deixou de ser
-   * "nasceu" e passou a ter um segundo ramo, que é a RETENTATIVA da ponte adiada.
-   *
-   * ┌─ POR QUE RETENTAR FICOU SEGURO AGORA, E NÃO ANTES ───────────────────────────────────────┐
-   * │ Com a trava de precedência, o ATS NUNCA MAIS escreve `situacao` em candidatura existente.  │
-   * │ Logo (`ENVIADO_PARA_ADMISSAO` **e** `admissao_id` nulo) só pode ter vindo do INSERT desta   │
-   * │ própria ingestão, numa volta em que a ponte não se completou (CPF ausente, falha de rede).  │
-   * │ Antes da trava, esta MESMA condição seria um furo: o ATS escrevia a situação, e a            │
-   * │ retentativa abriria admissão a partir do valor que ele acabou de empurrar por cima de uma    │
-   * │ decisão humana. Item 6 é consequência do item 2, e não um ajuste independente.              │
-   * │                                                                                            │
-   * │ A IDEMPOTENCIA DE VERDADE CONTINUA NO ADAPTADOR, que lê `admissao_id` antes de escrever:    │
-   * │ esta régua só evita a chamada inútil por candidatura já ligada, 48 vezes por dia.           │
-   * └───────────────────────────────────────────────────────────────────────────────────────────┘
-   */
-  if (
-    ponteDeveDisparar({
-      desfechoPedePonte: desfecho.pedePonteParaAdmissao,
-      criada: gravada.criada,
-      situacaoNoEa: gravada.situacaoNoEa,
-      jaTemAdmissao: gravada.jaTemAdmissao,
-    })
-  ) {
-    await acionarPonte(deps, resumo, gravada.candidaturaId);
-  }
-}
-
-/**
- * A CHAMADA DA PONTE, com a falha CONTIDA aqui dentro.
- *
- * ┌─ POR QUE O `catch` É LOCAL, E NÃO O DO LAÇO DA PÁGINA ───────────────────────────────────────┐
- * │ A candidatura já foi gravada quando chegamos aqui: ela é o FATO, e a ponte é o EFEITO. Deixar  │
- * │ a exceção subir faria a linha da inscrição ser registrada como "falha ao ingerir a inscricao", │
- * │ que é mentira: a inscrição entrou. O erro é da ponte, e é com esse nome que ele tem de       │
- * │ aparecer para quem for procurar.                                                              │
- * └──────────────────────────────────────────────────────────────────────────────────────────────┘
- *
- * §A.6: o log leva o RÓTULO do motivo e a mensagem peneirada, nunca o CPF, nunca o nome e nunca o
- * id de pessoa. `SEM_CPF` diz que faltou o número; não diz qual nem de quem.
- */
-async function acionarPonte(
-  deps: DependenciasDaVarredura,
-  resumo: ResumoDoCiclo,
-  candidaturaId: string,
-): Promise<void> {
-  // AUSENTE NÃO CRIA ADMISSÃO: em produção a porta é sempre injetada, e o teste de outra
-  // propriedade não pode ganhar uma admissão de brinde por esquecer de montá-la.
-  if (!deps.ponteParaAdmissao) return;
-  try {
-    const r = await deps.ponteParaAdmissao.criar(candidaturaId);
-    if (r.feita) {
-      resumo.pontesParaAdmissao += 1;
-      if (r.posicaoExcedida) resumo.posicoesExcedidas += 1;
-      return;
-    }
-    // `JA_TEM_ADMISSAO` É O NORMAL DA REENTRADA, e não conta como adiada: nada ficou pendente.
-    if (r.motivo === "JA_TEM_ADMISSAO") return;
-    resumo.pontesAdiadas += 1;
-    deps.log.info("ponte para a admissao adiada", { motivo: r.motivo });
-  } catch (err) {
-    resumo.erros += 1;
-    deps.log.erro("falha ao criar a ponte para a admissao", { motivo: mensagemDoErro(err) });
-  }
 }
 
 /**
@@ -775,12 +726,7 @@ async function gravarCandidatura(
     situacao: string | null;
     motivo: string | null;
   },
-): Promise<{
-  candidaturaId: string;
-  criada: boolean;
-  situacaoNoEa?: string | null;
-  jaTemAdmissao?: boolean;
-}> {
+): Promise<void> {
   const valores: Record<string, unknown> = {
     candidato_id: dados.candidatoId,
     vaga_id: dados.vagaId,
@@ -809,20 +755,13 @@ async function gravarCandidatura(
    */
   resumo.divergencias += gravada.divergencias ?? 0;
   /*
-   * `criada` VEM DO ADAPTADOR, E O `?? false` É FAIL-CLOSED, não conveniência: adaptador que não
-   * distingue insert de update devolve `undefined`, e "não sei" cai para o lado de NÃO ser
-   * nascimento. Deduzir daqui (por `linhasAfetadas`, por exemplo) seria errado: aquele número valia
-   * 1 no insert e também no `update` que mudou algo, quando ainda havia `update`.
-   *
-   * `situacaoNoEa` e `jaTemAdmissao` SÃO O INSUMO DA RETENTATIVA DA PONTE, e sobem crus de propósito:
-   * quem decide o que fazer com eles é o domínio (`ponteDeveDisparar`), e não este arquivo.
+   * ESTA FUNÇÃO NÃO DEVOLVE MAIS NADA, e a ausência é o registro do corte de 02/10/2026: ela
+   * devolvia o id da candidatura, o `criada` e o par (`situacaoNoEa`, `jaTemAdmissao`), que eram o
+   * insumo da ponte da varredura para a admissão. A ponte saiu (o gatilho que envia para admissão é
+   * o da esteira, e não o das ATS), e com ela saiu todo leitor desses quatro valores. Devolvê-los
+   * sem leitor seria sinal morto apontando para a borda da criação de admissão, que é a armadilha
+   * exata do fio morto do cliente da vaga, algumas linhas acima neste mesmo arquivo.
    */
-  return {
-    candidaturaId: gravada.id,
-    criada: gravada.criada ?? false,
-    situacaoNoEa: gravada.situacaoNoEa,
-    jaTemAdmissao: gravada.jaTemAdmissao,
-  };
 }
 
 // ── LEITURA AUXILIAR ───────────────────────────────────────────────────────────────────────────

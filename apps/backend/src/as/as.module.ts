@@ -22,7 +22,6 @@ import { VagasRevisaoPropostaController } from "./vagas/vagas-revisao-proposta.c
 import { IngestaoDivergenciasController } from "./ingestao-pandape/ingestao-divergencias.controller";
 import { IngestaoDivergenciasService } from "./ingestao-pandape/ingestao-divergencias.service";
 import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
-import { IngestaoPonteParaAdmissao } from "./ingestao-pandape/ingestao-ponte-admissao";
 import { IngestaoRepositorio } from "./ingestao-pandape/ingestao-repositorio";
 import { IngestaoVarreduraService } from "./ingestao-pandape/ingestao-varredura.service";
 import { CandidatosController } from "./candidatos/candidatos.controller";
@@ -338,14 +337,11 @@ import { VagasService } from "./vagas/vagas.service";
     IngestaoRepositorio,
     IngestaoHttp,
     /*
-     * A PONTE PARA A ESTEIRA, e ela mora aqui pela mesma razao das outras tres pecas: ela consome o
-     * `CandidatosService` (o snapshot vaga + candidato) e o `AdmissoesService` (a pre-admissao do
-     * funil), e reusar as instancias deste modulo e o que impede um segundo escritor de admissao.
-     *
-     * ELA E INERTE COM A VARREDURA: quem a chama e o ciclo, e o ciclo so roda com
-     * `PANDAPE_VARREDURA_DATA_CORTE` configurada.
+     * NAO HA PROVIDER DE PONTE PARA A ESTEIRA, e a ausencia e deliberada (02/10/2026): "o unico
+     * gatilho que envia para admissao e o gatilho da esteira, e nao das ATS". A varredura atualiza o
+     * funil e nada mais. Quem cria admissao e o webhook (`pandape/pandape-sync.service.ts`) e o
+     * envio manual do funil (`candidatos.service.ts`, `registrarSaida`), cada um pelo seu gesto.
      */
-    IngestaoPonteParaAdmissao,
     IngestaoVarreduraService,
     /*
      * A FILA DE DIVERGENCIAS. Ela mora neste módulo porque consome as MESMAS instâncias de

@@ -19,6 +19,7 @@ import type {
   AsCandidatosPagina,
   AsCandidaturaEncerrada,
   AsCandidaturaItem,
+  AsCandidaturaNaLista,
   AsContatoItem,
   AsFalhaEmMassa,
   AsMotivoDescarte,
@@ -726,6 +727,19 @@ export class CandidatosService {
      */
     const total = Number(linhas[0]?.total ?? 0);
 
+    /*
+     * ┌─ O FUNIL VEM AQUI, EM SEGUNDA CONSULTA, E ISSO E O CONSERTO DO 429 ───────────────────────┐
+     * │ A Central de Candidatos montava as colunas de funil pedindo o PAINEL DE CADA VAGA, uma     │
+     * │ requisicao por vaga: 483 chamadas por carregamento contra um teto de 120 por 60s, e a tela │
+     * │ passou a responder 429 ao proprio time. Pior, ao estourar o estado de candidaturas ficava  │
+     * │ VAZIO e TODA pessoa aparecia como "Vaga Nao Alocada", com vaga ou sem.                     │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const funilPorPessoa = await this.funilDaPagina(
+      linhas.map((l) => l.id),
+      dto.semCandidatura === true,
+    );
+
     const itens: AsCandidatoListItem[] = linhas.map((l) => ({
       id: l.id,
       nome: l.nome,
@@ -738,6 +752,12 @@ export class CandidatosService {
       temCpf: Boolean(l.temCpf),
       candidaturasAtivas: Number(l.candidaturasAtivas ?? 0),
       criadoEm: l.criadoEm.toISOString(),
+      /*
+       * LISTA VAZIA E A RESPOSTA CERTA PARA QUEM NAO ESTA EM VAGA NENHUMA, e nao campo ausente: e
+       * assim que a tela pinta "Vaga Nao Alocada" por um FATO, em vez de por falha de carregamento.
+       * O campo some do objeto, e so ele, quando o funil nao foi pedido (ver `funilDaPagina`).
+       */
+      ...(funilPorPessoa ? { candidaturas: funilPorPessoa.get(l.id) ?? [] } : {}),
     }));
 
     return {
@@ -2723,9 +2743,14 @@ export class CandidatosService {
   }
 
   /**
-   * O SNAPSHOT DA PONTE A&S → ESTEIRA: candidato + vaga da candidatura, no formato que
+   * O SNAPSHOT DO ENVIO PARA A ESTEIRA: candidato + vaga da candidatura, no formato que
    * `AdmissoesService.criarPreAdmissaoDoFunil` consome. Leitura pura, usada só no ramo
    * `ENVIADO_PARA_ADMISSAO` de `registrarSaida`.
+   *
+   * VOLTOU A SER `private` EM 02/10/2026. Ela tinha sido tornada pública para a ponte da varredura
+   * do Pandapé reusar este mapeamento em vez de ter a própria cópia; a ponte foi removida (o único
+   * gatilho que envia para admissão é o da esteira, e não o das ATS) e sobrou um chamador só, aqui
+   * dentro. Visibilidade aberta sem chamador de fora é convite a um segundo escritor de admissão.
    *
    * O MAPEAMENTO vaga → folha é conservador: só o que a vaga SABE. Salário é o de fechamento (o
    * negociado) com o de abertura como recurso; escala vem do horário/escala; cliente e cargo podem vir
@@ -2733,7 +2758,7 @@ export class CandidatosService {
    * `cod_cliente` inventado. Setor, gestor BP e departamento a vaga não tem: chegam vazios e viram
    * pendência (regra 5). §A.6: nenhum CPF é logado; o CPF do substituído segue só como valor a gravar.
    */
-  async dadosDaPonteParaAdmissao(candidaturaId: string): Promise<
+  private async dadosDaPonteParaAdmissao(candidaturaId: string): Promise<
     | {
         candidato: {
           cpf: string | null;
@@ -3618,6 +3643,94 @@ export class CandidatosService {
    * simples. É alargamento de PARÂMETRO, então nenhuma das três chamadas antigas muda de
    * comportamento: `eq(...)` continua sendo um `SQL`.
    */
+  /**
+   * AS CANDIDATURAS DAS PESSOAS DESTA PAGINA, em UMA consulta, na projecao MINIMA da lista.
+   *
+   * ┌─ SEGUNDA CONSULTA, E NUNCA JOIN NA CONSULTA PAGINADA (emenda E-6 do mapa) ────────────────┐
+   * │ A busca conta com `count(*) over ()` e corta com `.limit(limite)` sobre LINHAS DE          │
+   * │ CANDIDATO. Resolver o funil por JOIN ali troca as duas coisas de uma vez: `total` passa a  │
+   * │ contar CANDIDATURAS e o `limite` passa a cortar CANDIDATURAS. Com o maximo medido em        │
+   * │ producao, 118 candidaturas numa unica pessoa, uma pagina de 200 poderia entregar DUAS       │
+   * │ PESSOAS, e o `truncado` mentiria na direcao contraria a que a Frente D consertou. Pior      │
+   * │ ainda com join INTERNO: quem nao tem candidatura nenhuma desapareceria da BUSCA, e quem     │
+   * │ procurasse por essa pessoa leria "nenhum candidato encontrado", que e uma resposta sobre a  │
+   * │ base, e cadastraria de novo alguem que ja existe.                                           │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NAO E `candidaturasPor`, E A DIFERENCA E DE §A.6, NAO DE REUSO: aquela leitura devolve
+   * `AsCandidaturaItem`, que carrega `motivoDescarte` (texto livre do consultor sobre a recusa) e
+   * `pretensaoSalarial` (dado financeiro), autorizados para superficies de UMA pessoa ou de UMA
+   * vaga. Esta rota e varredura de base, com 200 linhas por carga e cinco leitores. A projecao
+   * daqui e a lista FECHADA de `AsCandidaturaNaLista`, e campo novo nela e decisao de §A.6.
+   *
+   * SEM FILTRO POR STATUS DA VAGA, e isso e deliberado: `vagaCodigo` e `vagaNome` vem da propria
+   * consulta justamente porque a lista de `/as/vagas` e filtrada por status. Filtrar aqui apagaria
+   * da coluna a vaga encerrada ou em revisao, e trocaria o 429 por uma cegueira mais discreta.
+   *
+   * O JOIN COM `vagas` E INTERNO de proposito: `vaga_id` e `not null` com FK `restrict`, entao
+   * candidatura sem vaga nao existe no banco e um join externo cobriria um caso impossivel.
+   */
+  private async funilDaPagina(
+    ids: string[],
+    semCandidatura: boolean,
+  ): Promise<Map<string, AsCandidaturaNaLista[]> | null> {
+    /*
+     * ┌─ QUEM PEDE "SEM CANDIDATURA" NAO RECEBE FUNIL, e o campo nem aparece na resposta ─────────┐
+     * │ Tres dos cinco leitores desta rota chamam com `semCandidatura: true` para OFERECER gente   │
+     * │ para alocacao, e NENHUM deles mostra coluna de funil. A regra do filtro e a VIVACIDADE,    │
+     * │ entao quem aparece para eles pode ter candidatura MORTA: medido em producao, 1.645          │
+     * │ candidaturas desceriam, e a consulta extra seria trabalho jogado fora e dado a mais no     │
+     * │ navegador de uma superficie que nao o usa (§A.6, minimizacao).                             │
+     * │                                                                                            │
+     * │ E O CAMPO FICA AUSENTE, em vez de vir `[]`: ali vazio seria uma AFIRMACAO falsa ("esta     │
+     * │ pessoa nao esta em vaga nenhuma") sobre quem pode ter candidatura encerrada. Ausente quer   │
+     * │ dizer "nao foi pedido", que e o fato.                                                      │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    if (semCandidatura) return null;
+
+    const funil = new Map<string, AsCandidaturaNaLista[]>();
+    // PAGINA VAZIA NAO VAI AO BANCO: `in ()` seria uma consulta garantidamente sem resultado.
+    if (ids.length === 0) return funil;
+
+    const linhas = await this.db
+      .select({
+        id: asCandidaturas.id,
+        candidatoId: asCandidaturas.candidatoId,
+        vagaId: asCandidaturas.vagaId,
+        etapa: asCandidaturas.etapa,
+        situacao: asCandidaturas.situacao,
+        ultimoContatoEm: asCandidaturas.ultimoContatoEm,
+        vagaCodigo: vagas.codigo,
+        vagaNome: vagas.nomeDivulgacao,
+      })
+      .from(asCandidaturas)
+      .innerJoin(vagas, eq(vagas.id, asCandidaturas.vagaId))
+      .where(inArray(asCandidaturas.candidatoId, ids))
+      // A MAIS RECENTE PRIMEIRO, a mesma ordem de `candidaturasPor`: a tela mostra a primeira.
+      .orderBy(desc(asCandidaturas.alocadoEm));
+
+    for (const l of linhas) {
+      const dela = funil.get(l.candidatoId);
+      const item: AsCandidaturaNaLista = {
+        id: l.id,
+        candidatoId: l.candidatoId,
+        vagaId: l.vagaId,
+        vagaCodigo: l.vagaCodigo,
+        vagaNome: l.vagaNome,
+        etapa: l.etapa,
+        situacao: l.situacao,
+        // TEXTO ISO, e nunca o `Date` cru do driver: a tela espera texto, e o erro de um objeto
+        // atravessando apareceria so na renderizacao, longe daqui.
+        ultimoContatoEm: l.ultimoContatoEm ? l.ultimoContatoEm.toISOString() : null,
+      };
+      if (dela) dela.push(item);
+      else funil.set(l.candidatoId, [item]);
+    }
+
+    return funil;
+  }
+
   private async candidaturasPor(filtro: SQL | undefined): Promise<AsCandidaturaItem[]> {
     const linhas = await this.db
       .select({

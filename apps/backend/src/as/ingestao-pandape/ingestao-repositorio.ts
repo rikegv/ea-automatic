@@ -193,19 +193,18 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
    * │ omite um escritor real é pior que lista nenhuma: ela convence de que a busca terminou.        │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
-   * ┌─ CORREÇÃO DE 30/09/2026: ESTA JÁ NÃO É A ÚNICA PORTA DA INGESTÃO PARA O BANCO ─────────────┐
-   * │ A frase antiga dizia "e a ingestão não tem outra porta para o banco", e ela deixou de ser    │
-   * │ verdade quando a PONTE PARA A ADMISSÃO nasceu: `ingestao-ponte-admissao.ts` fala com o banco │
-   * │ por conta própria, para ler a candidatura e gravar `admissao_id`.                            │
+   * ┌─ 02/10/2026: ESTA VOLTOU A SER A ÚNICA PORTA DA INGESTÃO PARA O BANCO ─────────────────────┐
+   * │ Entre 30/09 e 02/10 houve uma segunda porta: a PONTE PARA A ADMISSÃO (`ingestao-ponte-       │
+   * │ admissao.ts`) falava com o banco por conta própria, para ler a candidatura e gravar          │
+   * │ `admissao_id`, e criava a pré-admissão pelo módulo de Admissões. ELA FOI REMOVIDA: o único   │
+   * │ gatilho que envia para admissão é o da esteira, e não o das ATS. A varredura escreve só o    │
+   * │ funil, e esta lista de SETE tabelas volta a ser a lista COMPLETA.                            │
    * │                                                                                             │
-   * │ Quem apontou foi o `seguranca`, e o motivo de corrigir em vez de deixar passar é o efeito    │
-   * │ prático: este é exatamente o comentário que um auditor futuro lê para decidir ONDE OLHAR.    │
-   * │ Documentação de trava descrevendo um mundo que acabou é pior que documentação nenhuma, porque │
-   * │ ela convence de que a busca terminou.                                                        │
-   * │                                                                                             │
-   * │ AS DUAS PORTAS DA INGESTÃO, hoje: esta lista de SETE tabelas, e a ponte, que escreve UMA     │
-   * │ coluna (`as_candidaturas.admissao_id`) e cria a pré-admissão pela porta pública do módulo de │
-   * │ admissão (`criarPreAdmissaoDoFunil`), a MESMA que o caminho manual do funil usa.             │
+   * │ A LIÇÃO DE 30/09 FICA REGISTRADA porque é ela que mantém esta lista confiável: quem apontou  │
+   * │ que a frase antiga tinha deixado de ser verdade foi o `seguranca`, e este é exatamente o     │
+   * │ comentário que um auditor futuro lê para decidir ONDE OLHAR. Documentação de trava que       │
+   * │ descreve um mundo que acabou é pior que documentação nenhuma, porque convence de que a busca  │
+   * │ terminou. Quem acrescentar um segundo escritor, corrige esta lista no mesmo commit.          │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async escrever(e: Escrita): Promise<ResultadoDaEscrita> {
@@ -381,12 +380,14 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
      * AQUI. O ciclo só conhece o lado do ATS: pedir a ele que decidisse a precedência exigiria uma
      * leitura a mais por inscrição, e a decisão ficaria longe do ponto que escreve.
      *
-     * `admissao_id` VEM NA MESMA IDA porque é insumo da retentativa da ponte (`ponteDeveDisparar`),
-     * e uma segunda consulta para uma coluna da linha que já está na mão seria desperdício por
-     * inscrição, 137 mil vezes.
+     * `admissao_id` SAIU DESTE SELECT EM 02/10/2026, e é a única coluna que saiu: ela vinha na mesma
+     * ida só para alimentar a retentativa da ponte da varredura para a admissão. A varredura deixou
+     * de criar admissão (o gatilho é o da esteira, e não o das ATS), a ponte foi removida, e ler uma
+     * coluna que ninguém mais consulta é o convite para o próximo leitor achar que falta um uso.
+     * As quatro que ficam são os valores que a TRAVA DE PRECEDÊNCIA compara, e essa trava não mudou.
      */
     const existentes = (await this.db.execute(sql`
-      select id, etapa, situacao, motivo_descarte, admissao_id
+      select id, etapa, situacao, motivo_descarte
         from as_candidaturas
        where candidato_id = ${candidatoId}::uuid and vaga_id = ${vagaId}::uuid
        order by criado_em desc
@@ -396,7 +397,6 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       etapa: string | null;
       situacao: string | null;
       motivo_descarte: string | null;
-      admissao_id: string | null;
     }[];
     const existente = existentes[0];
 
@@ -436,9 +436,9 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
           linhasAfetadas: 0,
           /*
            * O ID DEVOLVIDO É O DA CANDIDATURA QUE EXISTE, na vaga para onde a pessoa foi. Ela é a
-           * candidatura DESTA pessoa, só não é a desta vaga. `criada: false` é o que importa: a
-           * ponte não dispara, e `situacaoNoEa` fica indefinido de propósito (não sabemos, e não
-           * queremos saber, nada sobre a situação de uma linha que não é a desta escrita).
+           * candidatura DESTA pessoa, só não é a desta vaga. `criada: false` é o que importa: nada
+           * NASCEU nesta escrita, e nada se afirma sobre a situação de uma linha que não é a desta
+           * escrita.
            */
           id: transferida.candidaturaId,
           criada: false,
@@ -461,9 +461,13 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       const criada = linhas[0];
       if (!criada) throw new Error("A candidatura não devolveu linha.");
       /*
-       * `criada: true` É O ÚNICO PONTO DO SISTEMA QUE AFIRMA O NASCIMENTO DESTA LINHA, e é dele que
-       * a ponte para a admissão depende (`PortaPonteParaAdmissao`). Ele NÃO é dedutível de
-       * `linhasAfetadas`, que vale 1 aqui e também valia 1 no `update` que mudou algo.
+       * `criada: true` É O ÚNICO PONTO DO SISTEMA QUE AFIRMA O NASCIMENTO DESTA LINHA, e ele NÃO é
+       * dedutível de `linhasAfetadas`, que vale 1 aqui e também valia 1 no `update` que mudou algo.
+       *
+       * DESDE 02/10/2026 ELE NÃO TEM LEITOR: quem o lia era a ponte da varredura para a admissão,
+       * removida porque o gatilho que envia para admissão é o da esteira, e não o das ATS. Ficou
+       * porque é a resposta honesta do repositório sobre a própria escrita e tem cobertura própria;
+       * removê-lo é decisão do coordenador, e não efeito colateral de outra frente.
        */
       return { linhasAfetadas: 1, id: criada.id, criada: true, divergencias: 0 };
     }
@@ -510,18 +514,20 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
 
     /*
      * `linhasAfetadas: 0` É A VERDADE, e o ciclo a lê como "nada foi criado" (ele soma
-     * `candidaturasCriadas` por este número). `situacaoNoEa` e `jaTemAdmissao` são o insumo da
-     * RETENTATIVA da ponte, cuja régua é domínio puro (`ponteDeveDisparar`): agora que o ATS não
-     * escreve mais `situacao` aqui, `ENVIADO_PARA_ADMISSAO` com `admissao_id` nulo só pode ter
-     * vindo do INSERT desta própria ingestão, numa volta em que a ponte não se completou.
+     * `candidaturasCriadas` por este número).
+     *
+     * `situacaoNoEa` E `jaTemAdmissao` SAÍRAM DAQUI EM 02/10/2026. Eles eram o insumo da retentativa
+     * da ponte da varredura para a admissão, e só dela: devolver a situação atual e "já tem
+     * admissão?" existia para decidir se abria pré-admissão nesta volta. A varredura não cria mais
+     * admissão (o gatilho é o da esteira, e não o das ATS), então os dois ficaram sem leitor, e
+     * sinal morto que aponta para a borda da criação de admissão é a armadilha que esta frente
+     * inteira existe para fechar.
      */
     return {
       linhasAfetadas: 0,
       id: existente.id,
       criada: false,
       divergencias,
-      situacaoNoEa: existente.situacao,
-      jaTemAdmissao: existente.admissao_id !== null,
     };
   }
 

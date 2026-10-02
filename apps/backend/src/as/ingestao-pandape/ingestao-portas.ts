@@ -60,13 +60,15 @@ export interface Escrita {
  * O QUE UMA ESCRITA DEVOLVE, e o `criada` é o que separa NASCER de ANDAR.
  *
  * ┌─ POR QUE `linhasAfetadas` NÃO RESPONDE ISSO ─────────────────────────────────────────────────┐
- * │ Ele vale 1 no insert E no update que mudou algo, que são coisas opostas para quem lê. A ponte │
- * │ para a admissão dispara SÓ no nascimento da candidatura (ver `ponteParaAdmissao`), então ela  │
- * │ precisa do fato, e o fato só existe onde a escrita acontece: o repositório.                    │
+ * │ Ele vale 1 no insert E no update que mudou algo, que são coisas opostas para quem lê. O fato  │
+ * │ "esta linha nasceu agora" só existe onde a escrita acontece, ou seja no repositório, e é por  │
+ * │ isso que ele sobe declarado em vez de ser deduzido pelo chamador.                             │
  * │                                                                                              │
- * │ OPCIONAL DE PROPÓSITO: adaptador que não distingue os dois casos devolve `undefined`, e       │
- * │ `undefined` NÃO é nascimento. O caminho que não sabe cai para o lado de não criar admissão,    │
- * │ que é a direção fail-closed desta frente inteira.                                             │
+ * │ ELE NÃO TEM LEITOR DESDE 02/10/2026, e isso está escrito para ninguém tomar a ausência por    │
+ * │ defeito: quem o lia era a ponte da varredura para a admissão, removida porque o gatilho que   │
+ * │ envia para admissão é o da esteira, e não o das ATS. O campo ficou porque é a resposta honesta│
+ * │ do repositório sobre a própria escrita, e porque há cobertura medindo-a; se ele continuar sem │
+ * │ leitor, removê-lo é decisão do coordenador, não efeito colateral de outra frente.             │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export interface ResultadoDaEscrita {
@@ -83,19 +85,6 @@ export interface ResultadoDaEscrita {
    * contagem, a fila encheria sem nenhum log dizer que a volta encontrou discordância.
    */
   divergencias?: number;
-  /**
-   * A SITUACAO QUE A CANDIDATURA EXISTENTE TEM HOJE NO EA, e ela existe para a RETENTATIVA da ponte.
-   *
-   * Com a trava de precedência, o ATS nunca mais escreve `situacao` em linha existente, então
-   * (`ENVIADO_PARA_ADMISSAO` + `admissao_id` nulo) passou a ter uma origem só: o INSERT da própria
-   * ingestão, numa volta em que a ponte não se completou. A régua está em
-   * `domain/as-precedencia-ingestao.ts` (`ponteDeveDisparar`), e não num `if` do ciclo.
-   *
-   * `undefined` É "NAO SEI", e cai para o lado de NÃO criar admissão.
-   */
-  situacaoNoEa?: string | null;
-  /** A candidatura EXISTENTE já aponta para uma admissão? `undefined` vale como "não sei". */
-  jaTemAdmissao?: boolean;
 }
 
 export interface PortaBanco {
@@ -153,79 +142,6 @@ export interface PortaCicloDeVidaDaVaga {
 }
 
 /**
- * POR QUE A PONTE NÃO ACONTECEU, em lista FECHADA.
- *
- * Cada valor é uma AUSÊNCIA de dado, e nenhum deles é falha: o ciclo segue, a candidatura fica
- * gravada, e o caso vira CONTAGEM no resumo, para a lacuna ser visível em vez de invisível. Mesma
- * disciplina do "adiar em vez de inventar `cod_cliente`" (§A.5).
- *
- * §A.6: são RÓTULOS, e é por isso que eles podem ir ao log. `SEM_CPF` diz que faltou o número; ele
- * não carrega o número, nem parte dele, nem o nome de quem ficou sem.
- */
-export type MotivoDaPonteNaoFeita = "SEM_CPF" | "JA_TEM_ADMISSAO" | "CANDIDATURA_AUSENTE";
-
-/** O que a porta da ponte devolve. `feita: false` é resposta, nunca erro. */
-export type ResultadoDaPonte =
-  | {
-      feita: true;
-      /**
-       * A vaga passou do teto de posições DAQUELE lado com esta entrada?
-       *
-       * ┌─ A INGESTÃO NÃO TRAVA POR META INTERNA, E CONTA O EXCESSO ────────────────────────────┐
-       * │ O ATS é a fonte do FATO (a pessoa foi contratada lá), e recusar o fato porque a meta    │
-       * │ interna da vaga está cheia faria a base do EA divergir da realidade em silêncio: a      │
-       * │ pessoa existe, vai trabalhar, e não estaria aqui. Travar é decisão do diretor, não da   │
-       * │ ingestão. O que a ingestão devolve é a OCORRÊNCIA, para o resumo contá-la.              │
-       * └────────────────────────────────────────────────────────────────────────────────────────┘
-       */
-      posicaoExcedida: boolean;
-    }
-  | { feita: false; motivo: MotivoDaPonteNaoFeita };
-
-/**
- * ─ A PONTE DA CANDIDATURA PARA A ADMISSÃO, E ELA É DO NASCIMENTO ───────────────────────────────
- *
- * ┌─ POR QUE ELA É UMA PORTA, E NÃO UMA CHAMADA AO `AdmissoesService` ───────────────────────────┐
- * │ O ciclo não conhece Nest, não conhece Drizzle e não conhece a Esteira: ele conhece portas, e é │
- * │ essa fronteira que permite auditar a regra sem Postgres e sem o módulo de Admissões inteiro.   │
- * │ Chamar o service daqui arrastaria a Esteira para dentro do contrato do `tester`.               │
- * └──────────────────────────────────────────────────────────────────────────────────────────────┘
- *
- * ┌─ QUANDO ELA É CHAMADA, e a régua MUDOU em 30/09/2026 (OST de precedência) ───────────────────┐
- * │ ANTES: só no NASCIMENTO da candidatura. A restrição estava CERTA naquele mundo, e o motivo era │
- * │ medido: a varredura SOBRESCREVIA etapa e situação de candidatura existente (o                  │
- * │ `where ... is distinct from` do repositório existia para não empurrar `atualizado_em`, e não    │
- * │ para proteger o trabalho de ninguém: valor diferente era justamente o caso que ele autorizava).│
- * │ Disparar no update faria uma admissão nascer de um sinal do ATS que pode estar desfazendo o    │
- * │ avanço que o time fez aqui, e admissão criada é muito mais caro de desfazer que etapa trocada. │
- * │                                                                                               │
- * │ AGORA: nascimento OU a condição de RETENTATIVA. A trava de precedência foi implementada (o     │
- * │ diretor decidiu: o EA vence e a diferença vira fila de revisão), então o ATS NUNCA MAIS        │
- * │ escreve `situacao` em linha existente. Logo o par (`situacao = ENVIADO_PARA_ADMISSAO` **e**     │
- * │ `admissao_id` nulo) passou a ter UMA origem possível: o INSERT da própria ingestão, numa volta │
- * │ em que a ponte não se completou (CPF ausente, falha de rede). Retentar ali é o CONSERTO da     │
- * │ ponte adiada, e não um risco novo. A régua é domínio puro e tem UM dono:                       │
- * │ `ponteDeveDisparar`, em `domain/as-precedencia-ingestao.ts`.                                   │
- * │                                                                                               │
- * │ A ORDEM IMPORTA, e é por isso que este parágrafo é longo: a retentativa só ficou segura        │
- * │ PORQUE a trava entrou. Antes dela, esta MESMA condição seria um furo, porque o ATS era quem    │
- * │ escrevia a situação que a retentativa leria. O ATS continua NÃO PROMOVENDO À ADMISSÃO quem     │
- * │ está sendo trabalhado no EA: ele não consegue mais escrever a situação que promove.            │
- * └──────────────────────────────────────────────────────────────────────────────────────────────┘
- */
-export interface PortaPonteParaAdmissao {
-  /**
-   * Cria a pré-admissão da candidatura e aponta `as_candidaturas.admissao_id` para ela.
-   *
-   * IDEMPOTENTE POR `admissao_id`: a implementação LÊ a coluna antes e devolve `JA_TEM_ADMISSAO`
-   * quando ela já está preenchida. É o registro local do "já fiz", e ele é necessário porque o
-   * unique parcial da admissão (`uq_admissao_cpf_vaga_viva`) só protege enquanto o farol é VIVO:
-   * uma admissão que já foi concluída ou declinada sai do índice, e a segunda chamada nasceria.
-   */
-  criar(candidaturaId: string): Promise<ResultadoDaPonte>;
-}
-
-/**
  * ─ A PORTA DA PROPOSTA DE CLIENTE DA VAGA (de/para da planilha viva do time, 01/10/2026) ───────
  *
  * ┌─ POR QUE ELA É UMA PORTA PRÓPRIA, E NÃO UM RETORNO DE `clientePorVaga` ──────────────────────┐
@@ -248,7 +164,7 @@ export interface PortaPonteParaAdmissao {
  * │ primeiro exemplo, para facilitar", e o resumo do ciclo termina em log permanente.               │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * OPCIONAL NO TIPO, como o `cicloDeVida` e a `ponteParaAdmissao`, e pela mesma razão: o contrato do
+ * OPCIONAL NO TIPO, como o `cicloDeVida`, e pela mesma razão: o contrato do
  * `tester` não a declara, e o ciclo tem de continuar assinável como
  * `(deps: DependenciasDaIngestao) => Promise<ResumoDoCiclo>`. AUSENTE NÃO PROPÕE NADA, que é a
  * direção certa: a vaga continua nascendo sem cliente e caindo na revisão, exatamente como hoje.
@@ -324,15 +240,6 @@ export interface DependenciasDaVarredura extends DependenciasDaIngestao {
    */
   etapaInicial?: () => Promise<string>;
   /**
-   * A PONTE PARA A ADMISSÃO. OPCIONAL no tipo pela mesma razão do `cicloDeVida`: o contrato do
-   * `tester` não a declara, e o ciclo tem de continuar assinável como
-   * `(deps: DependenciasDaIngestao) => Promise<ResumoDoCiclo>`.
-   *
-   * AUSENTE NÃO CRIA ADMISSÃO, e isso é a direção certa: em produção ela é SEMPRE injetada
-   * (`ingestao-varredura.service.ts`), e a ausência só acontece em teste de outra propriedade.
-   */
-  ponteParaAdmissao?: PortaPonteParaAdmissao;
-  /**
    * O DE/PARA DE CLIENTE DA PLANILHA DO TIME. Em produção é sempre injetada; ausente, nada é
    * proposto e a vaga segue nascendo sem cliente, como nasce hoje. Ela NÃO devolve cliente nenhum.
    */
@@ -364,24 +271,7 @@ export interface ResumoDoCiclo {
    * discordâncias. §A.6: contagem, nunca o valor divergente.
    */
   divergencias: number;
-  /** Quantas pré-admissões a ponte criou nesta passada. */
-  pontesParaAdmissao: number;
-  /**
-   * Quantas pontes foram ADIADAS por falta de dado (hoje: CPF ausente ou inválido).
-   *
-   * ELA NÃO É ERRO, É LACUNA VISÍVEL. Sem este número, a inscrição que chega contratada e sem CPF
-   * ficaria gravada como candidatura e simplesmente não viraria admissão, sem ninguém saber que há
-   * um caso a resolver. Reentrega não repete a contagem por engano: candidatura que já existe não
-   * chama a ponte de novo.
-   */
-  pontesAdiadas: number;
-  /**
-   * Quantas vezes a ponte passou do teto de posições da vaga.
-   *
-   * A INGESTÃO NÃO TRAVA POR META INTERNA (ver `ResultadoDaPonte`): ela escreve o fato do ATS e
-   * CONTA a sobre-ocupação, para ela ficar visível em vez de invisível.
-   */
-  posicoesExcedidas: number;
+
   /**
    * ─ OS CINCO CONTADORES DA PROPOSTA DE CLIENTE (de/para da planilha, 01/10/2026) ──────────────
    *

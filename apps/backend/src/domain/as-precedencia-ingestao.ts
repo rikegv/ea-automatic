@@ -1,5 +1,4 @@
 import type { CampoDeDivergencia, EscopoDeDivergencia } from "@ea/shared-types";
-import { SITUACOES_QUE_PEDEM_PONTE_PARA_ADMISSAO } from "./as-ponte-admissao";
 
 /**
  * ─ A RÉGUA DE PRECEDÊNCIA DA INGESTÃO, COMO DOMÍNIO PURO ───────────────────────────────────────
@@ -29,7 +28,7 @@ import { SITUACOES_QUE_PEDEM_PONTE_PARA_ADMISSAO } from "./as-ponte-admissao";
  * │ Ela governa DOIS lados com formas de dado bem diferentes (a candidatura, por linha, e a vaga, │
  * │ por papel de status), e dois `if` escritos em dois lugares concordam por coincidência até o   │
  * │ dia em que alguém corrigir um só. Aqui a régua tem UM dono, UM teste puro e UM vocabulário.   │
- * │ É a mesma correção que o `seguranca` já cobrou em `as-ponte-admissao.ts` e em `domain/digai`. │
+ * │ É a mesma correção que o `seguranca` já cobrou na régua da ponte A&S e em `domain/digai`.     │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ §A.6, E A AFIRMACAO QUE ESTAVA AQUI ESTAVA ERRADA (veto do `seguranca`, 30/09/2026) ───────┐
@@ -169,52 +168,18 @@ export interface DivergenciaARegistrar {
   valorAts: string | null;
 }
 
-/**
- * ─ A RETENTATIVA DA PONTE PARA A ADMISSÃO, E ELA SÓ FICOU SEGURA AGORA ─────────────────────────
+/*
+ * ─ O QUE SAIU DAQUI EM 02/10/2026: `ponteDeveDisparar` ─────────────────────────────────────────
  *
- * A ponte disparava SÓ NO NASCIMENTO da candidatura, e a restrição estava CERTA enquanto a ingestão
- * sobrescrevia `situacao`: naquele mundo, uma candidatura existente podia virar
- * `ENVIADO_PARA_ADMISSAO` por sinal do ATS que estava DESFAZENDO o trabalho do time, e admissão
- * criada é muito mais caro de desfazer do que etapa trocada.
+ * A REGRA DO DIRETOR: "O ÚNICO GATILHO QUE ENVIA PARA ADMISSÃO É O GATILHO DA ESTEIRA, E NÃO DAS
+ * ATS." A varredura do Pandapé NUNCA cria admissão: ela atualiza o funil, e nada mais. A função que
+ * respondia "esta volta abre pré-admissão?" foi removida junto com a ponte que ela governava.
  *
- * ┌─ O QUE MUDOU, E POR QUE A CONDIÇÃO NOVA É PROVÁVEL EM VEZ DE ARRISCADA ─────────────────────┐
- * │ Com a trava de precedência, o ATS NUNCA MAIS escreve `situacao` em linha que já existe. Logo  │
- * │ o par (`situacao = ENVIADO_PARA_ADMISSAO` **e** `admissao_id` nulo) passou a ter UMA origem    │
- * │ possível: o INSERT da própria ingestão, numa volta em que a ponte não se completou (CPF        │
- * │ ausente, cliente não resolvido, falha de rede). Não existe mais o caminho em que o ATS         │
- * │ ressuscita aquela situação por cima de uma decisão humana.                                     │
- * │                                                                                               │
- * │ ANTES DA TRAVA ISTO SERIA UM FURO, e é a mesma condição: o ATS escrevia a situação, e a        │
- * │ retentativa abriria admissão a partir do valor que ele acabou de empurrar. A ordem importa:    │
- * │ item 6 é consequência do item 2, e não um ajuste independente.                                 │
- * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ * O MOTIVO É MEDIDO, e não de princípio: "Contratados" no funil do Pandapé NÃO É "enviado para
+ * admissão". A varredura lê a ETAPA; o webhook dispara na AÇÃO explícita de enviar. Lendo a etapa, a
+ * varredura criou 259 pré-admissões em produção, e 254 daquelas pessoas já estavam na esteira pelo
+ * webhook, que acerta o momento E preenche o `cod_cliente`, coisa que a varredura não fazia.
  *
- * A GUARDA DE IDEMPOTÊNCIA POR `admissao_id` CONTINUA SENDO A DE VERDADE, e mora no adaptador da
- * ponte (`ingestao-ponte-admissao.ts`), que a lê antes de qualquer escrita. Esta função só evita a
- * chamada inútil: sem ela, cada volta de 30 minutos pediria uma ponte por candidatura já ligada.
- *
- * FAIL-CLOSED EM TODO "NÃO SEI": adaptador que não sabe dizer se a linha nasceu (`criada`
- * indefinido) nem qual a situação atual dela cai para o lado de NÃO criar admissão.
+ * A TRAVA DE PRECEDÊNCIA (`decidirPrecedencia`, acima) NÃO foi tocada: ela continua inteira, e
+ * continua sendo o que impede o ATS de sobrescrever trabalho humano no funil.
  */
-export function ponteDeveDisparar(args: {
-  /** A linha de de/para resolvida pede pré-admissão? (`desfechoDaIngestaoExterna`) */
-  desfechoPedePonte: boolean;
-  /** A candidatura NASCEU nesta escrita? `undefined` vale como "não sei", e não como sim. */
-  criada?: boolean;
-  /** A situação que a candidatura EXISTENTE tem hoje no EA. `undefined` = não sei. */
-  situacaoNoEa?: string | null;
-  /** A candidatura EXISTENTE já aponta para uma admissão? `undefined` = não sei. */
-  jaTemAdmissao?: boolean;
-}): boolean {
-  if (!args.desfechoPedePonte) return false;
-  if (args.criada === true) return true;
-  if (args.jaTemAdmissao !== false) return false;
-  /*
-   * A LISTA É A MESMA DO OUTRO LADO, e não um literal escrito aqui: `SITUACOES_QUE_PEDEM_PONTE_PARA
-   * _ADMISSAO` já responde "esta situação pede pré-admissão?" para o valor que VEM do de/para, e a
-   * pergunta sobre o valor que ESTÁ no EA é a mesma pergunta. Duas listas concordariam até o dia em
-   * que alguém acrescentasse uma situação a uma só delas.
-   */
-  const noEa = args.situacaoNoEa ?? null;
-  return noEa !== null && (SITUACOES_QUE_PEDEM_PONTE_PARA_ADMISSAO as readonly string[]).includes(noEa);
-}

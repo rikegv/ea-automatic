@@ -1352,3 +1352,59 @@ teste. **Nenhuma credencial vazou.** A regra é preventiva, e chegou antes do da
 
 *(Decisão do diretor, 30/09/2026, sobre alerta levantado pela frente da Central De Ajuda. Complementa
 a §A.6 e é inseparável da §A.45.)*
+
+## A.47: O ÚNICO GATILHO QUE ENVIA PARA ADMISSÃO É O DA ESTEIRA, NÃO O DAS ATS (regra permanente)
+
+**Nem o Pandapé nem o Digai criam admissão.** As ATS alimentam o **funil**. Quem manda alguém para
+a admissão é a **esteira**, por um dos dois gatilhos dela: o **webhook** (na ação explícita de
+enviar para admissão) e o **envio manual do funil** (`registrarSaida`, com Master e trilha).
+
+**Nas palavras do diretor:** *"O ÚNICO GATILHO QUE ENVIA PARA ADMISSÃO É O GATILHO DA ESTEIRA, E NÃO
+DAS ATS."*
+
+**O FUNDAMENTO, e ele é a distinção que o defeito escondia: ETAPA não é AÇÃO.** "Contratados" no
+funil do Pandapé **não é** "enviado para admissão". São coisas diferentes no Pandapé: a etapa é onde
+a pessoa está, a ação é um gesto separado que alguém pratica. A varredura lia a **etapa** e concluía
+que a hora havia chegado; o webhook dispara na **ação**, que é quando ela chega de verdade.
+
+**O que foi MEDIDO em produção (01 a 02/10/2026), e é o que sustenta a regra:**
+- a varredura criou **259 pré-admissões**; **254 daquelas pessoas já estavam na esteira**, todas
+  casadas por **CPF** (o cruzamento por nome não acrescentou ninguém);
+- dessas, **250 entraram pelo webhook**, e as demais por cadastro manual;
+- o webhook **preencheu o `cod_cliente` em 252 de 258**; a varredura escreve **nulo por construção**;
+- os **5 que faltavam** não ficaram de fora por falta de cliente: o webhook atendeu **43 pessoas das
+  mesmas duas vagas** e resolveu o cliente em 39. Eles estavam no funil como contratados e **ainda
+  não tinham sido enviados**. Para o webhook, não era a hora; para a varredura, já era.
+
+**O webhook ganha nos três pontos que importam:** cobertura (250 de 254), cliente preenchido (onde a
+varredura escreve nulo) e **momento** do disparo. A varredura não acrescentava nada: criava fora de
+hora, sem cliente, para gente que o webhook já traz com cliente.
+
+**CONSEQUÊNCIA DE CÓDIGO, e ela é remoção, não guarda.** O caminho de criação de admissão **saiu** da
+varredura (`as/ingestao-pandape/`): a ponte, o adaptador, o provider e a régua `ponteDeveDisparar`
+foram removidos, não guardados. Guarda se desfaz numa refatoração; caminho removido não volta sozinho.
+A trava mora em **teste**: o ciclo completo sobre a etapa `contratados`/`admissao` assere **zero
+admissão criada**, e o cenário das 259 (situação `ENVIADO_PARA_ADMISSAO` com `admissao_id` nulo)
+assere que **não recria**.
+
+**O QUE NÃO SE TOCA, e confundir isto desliga o time inteiro:**
+`SITUACOES_QUE_PEDEM_PONTE_PARA_ADMISSAO` (`domain/as-ponte-admissao.ts`) é a régua do **envio
+manual do funil**, que é gatilho da esteira e **fica**. A regra tira o gatilho da ATS, não o da gente.
+
+**O QUE A VARREDURA CONTINUA FAZENDO, e isto não é "desligar a varredura":** ela grava a candidatura
+com a **etapa** e a **situação** que o de/para manda. O funil segue correto e atualizado. O que ela
+deixou de fazer é **criar admissão**.
+
+**Candidatura que a varredura vê em "Contratados" e o gatilho da esteira ainda não enviou: ela
+ESPERA, e ninguém se perde.** O funil registra onde a pessoa está; nada cria admissão. Quando o
+gatilho disparar, a admissão nasce por ele, com cliente.
+
+**LACUNA CONHECIDA, registrada para não ser descoberta como bug:** o webhook **não escreve**
+`as_candidaturas.admissao_id` (medido: `pandape/pandape-sync.service.ts` não toca a tabela). Logo o
+funil de A&S **não mostra o elo** com a admissão que o webhook criou, e é por isso que as 250
+aparecem com `admissao_id` nulo. A pessoa **não se perde** (está na esteira, com cliente), mas o elo
+do lado de A&S fica nulo. Isso **já era** o estado antes do conserto e não é efeito dele. Ligar os
+dois lados é frente própria, a decidir pelo diretor.
+
+*(Decisão do diretor, 02/10/2026, após a varredura duplicar 259 pré-admissões em produção. O
+coordenador mediu, o diretor deu a regra.)*

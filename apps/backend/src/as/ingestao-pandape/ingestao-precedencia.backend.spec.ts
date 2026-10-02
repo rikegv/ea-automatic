@@ -64,7 +64,7 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
   function comCandidatura(linha: Record<string, unknown>) {
     return bancoFingido([
       { quando: /from as_candidaturas\s*$|from as_candidaturas\n/, devolve: [] },
-      { quando: /select id, etapa, situacao, motivo_descarte, admissao_id/, devolve: [linha] },
+      { quando: /select id, etapa, situacao, motivo_descarte/, devolve: [linha] },
       { quando: /insert into as_ingestao_divergencias/, devolve: [{ id: "id-da-divergencia" }] },
     ]);
   }
@@ -75,7 +75,6 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
       etapa: "ENTREVISTA_CLIENTE",
       situacao: "ATIVO",
       motivo_descarte: null,
-      admissao_id: null,
     });
     const r = await repositorio(banco.db).escrever({
       tabela: "as_candidaturas",
@@ -102,7 +101,6 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
       etapa: "CAPTACAO",
       situacao: "ATIVO",
       motivo_descarte: null,
-      admissao_id: null,
     });
     const r = await repositorio(banco.db).escrever({
       tabela: "as_candidaturas",
@@ -138,7 +136,6 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
       etapa: "CAPTACAO",
       situacao: "ATIVO",
       motivo_descarte: "Frase que uma PESSOA digitou sobre este caso",
-      admissao_id: null,
     });
     const r = await repositorio(banco.db).escrever({
       tabela: "as_candidaturas",
@@ -184,7 +181,6 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
       etapa: "CAPTACAO",
       situacao: "ATIVO",
       motivo_descarte: null,
-      admissao_id: null,
     });
     const r = await repositorio(banco.db).escrever({
       tabela: "as_candidaturas",
@@ -195,27 +191,13 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
     expect(divergenciasEmitidas(banco.consultas)).toEqual([]);
   });
 
-  it("devolve o insumo da RETENTATIVA da ponte: a situação do EA e se já há admissão", async () => {
-    /*
-     * O QUE ISTO PROVA: o item 6. A ponte deixou de disparar só no nascimento, e a condição nova
-     * (`ENVIADO_PARA_ADMISSAO` com `admissao_id` nulo) depende destes dois campos subirem do
-     * adaptador. Sem eles, `ponteDeveDisparar` cai no fail-closed e a ponte adiada nunca é retentada.
-     */
-    const banco = comCandidatura({
-      id: CANDIDATURA,
-      etapa: "CAPTACAO",
-      situacao: "ENVIADO_PARA_ADMISSAO",
-      motivo_descarte: null,
-      admissao_id: null,
-    });
-    const r = await repositorio(banco.db).escrever({
-      tabela: "as_candidaturas",
-      acao: "upsert",
-      valores: { candidato_id: CANDIDATO, vaga_id: VAGA, etapa: "CAPTACAO" },
-    });
-    expect(r.situacaoNoEa).toBe("ENVIADO_PARA_ADMISSAO");
-    expect(r.jaTemAdmissao).toBe(false);
-  });
+  /*
+   * O QUE SAIU DAQUI EM 02/10/2026: a asserção de que a escrita devolvia `situacaoNoEa` e
+   * `jaTemAdmissao`. Aqueles dois campos eram o insumo da retentativa da ponte da varredura para a
+   * admissão, e saíram do repositório junto com a ponte: a varredura não cria admissão, porque o
+   * gatilho que envia para admissão é o da esteira, e não o das ATS. O que este arquivo mede, a
+   * trava de precedência, não foi tocado e segue medido inteiro nos casos acima e abaixo.
+   */
 
   it("a divergência é emitida com `on conflict` de INCREMENTO, e não com insert cego", async () => {
     const banco = comCandidatura({
@@ -223,7 +205,6 @@ describe("candidatura que JA EXISTE: o ATS não escreve, e a diferença vira div
       etapa: "ENTREVISTA_CLIENTE",
       situacao: "ATIVO",
       motivo_descarte: null,
-      admissao_id: null,
     });
     await repositorio(banco.db).escrever({
       tabela: "as_candidaturas",
@@ -254,7 +235,7 @@ describe("o candidato TRANSFERIDO para outra vaga não ganha candidatura nova", 
   it("NAO insere, e registra divergência de `vaga_do_candidato`", async () => {
     const banco = bancoFingido([
       // Não há candidatura em (candidato, ESTA vaga): a troca MOVEU a linha para a vaga nova.
-      { quando: /select id, etapa, situacao, motivo_descarte, admissao_id/, devolve: [] },
+      { quando: /select id, etapa, situacao, motivo_descarte/, devolve: [] },
       // Mas a TRILHA tem o evento de troca, com `vaga_de` apontando para esta vaga.
       {
         quando: /from as_candidatura_etapas/,
@@ -289,7 +270,7 @@ describe("o candidato TRANSFERIDO para outra vaga não ganha candidatura nova", 
     // O QUE ISTO PROVA: a guarda é cirúrgica. Sem este caso verde, a trava poderia estar recusando
     // TODA entrada nova, e o teste de cima ficaria verde do mesmo jeito.
     const banco = bancoFingido([
-      { quando: /select id, etapa, situacao, motivo_descarte, admissao_id/, devolve: [] },
+      { quando: /select id, etapa, situacao, motivo_descarte/, devolve: [] },
       { quando: /from as_candidatura_etapas/, devolve: [] },
       { quando: /insert into as_candidaturas/, devolve: [{ id: CANDIDATURA }] },
     ]);

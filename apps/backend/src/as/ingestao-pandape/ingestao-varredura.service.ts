@@ -16,7 +16,6 @@ import {
   type DependenciasDaVarredura,
   type ResumoDoCiclo,
 } from "./ingestao-portas";
-import { IngestaoPonteParaAdmissao } from "./ingestao-ponte-admissao";
 import { IngestaoDeParaCliente } from "./ingestao-depara-cliente.service";
 import { IngestaoRepositorio } from "./ingestao-repositorio";
 import {
@@ -89,7 +88,6 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
     private readonly repo: IngestaoRepositorio,
     private readonly http: IngestaoHttp,
     private readonly etapas: EtapasFunilService,
-    private readonly ponte: IngestaoPonteParaAdmissao,
     /**
      * O DE/PARA DE CLIENTE DA PLANILHA VIVA DO TIME (01/10/2026).
      *
@@ -97,9 +95,14 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
      * │ Em produção o Nest SEMPRE injeta: o provider está declarado no `AsModule` e a resolução é  │
      * │ por TIPO, que o `?` não apaga. O opcional existe porque um contrato JÁ VALIDADO            │
      * │ (`ingestao-inercia-e-liberacao.cobertura-independente.tester.spec.ts`) constrói este       │
-     * │ serviço com SEIS argumentos para provar que a varredura nasce inerte, e um sétimo           │
-     * │ obrigatório quebraria aquela prova por um motivo que não tem nada a ver com o que ela       │
-     * │ afirma. Ausente, nada é proposto e a vaga segue nascendo sem cliente, como nasce hoje.      │
+     * │ serviço com SEIS argumentos para provar que a varredura nasce inerte, e um argumento        │
+     * │ obrigatório a mais quebraria aquela prova por um motivo que não tem nada a ver com o que    │
+     * │ ela afirma. Ausente, nada é proposto e a vaga segue nascendo sem cliente, como nasce hoje.  │
+     * │                                                                                             │
+     * │ EM 02/10/2026 ESTE PARÂMETRO VIROU O SEXTO: o sexto era a ponte da varredura para a          │
+     * │ admissão, removida porque o gatilho que envia para admissão é o da esteira, e não o das     │
+     * │ ATS. O sexto argumento daquela prova de inércia passa a cair AQUI, e é inofensivo: a         │
+     * │ varredura inerte não chama esta porta, que é exatamente o que aquela prova afirma.          │
      * └──────────────────────────────────────────────────────────────────────────────────────────┘
      */
     private readonly propostaDeCliente?: IngestaoDeParaCliente,
@@ -264,13 +267,22 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       cicloDeVida: this.repo,
       etapaInicial: async () => (await this.etapas.etapaInicial()).codigo,
       /*
-       * A PONTE PARA A ESTEIRA. Ela e injetada SEMPRE, e quem decide se ela e acionada e o ciclo: so
-       * a candidatura que NASCE nesta volta com situacao de admissao chega ate aqui. Nao ha chave de
-       * ambiente propria de proposito: a chave da varredura inteira e a data de corte, e uma segunda
-       * chave criaria um estado em que a ingestao escreve situacao de contratado e nao abre admissao,
-       * que e exatamente o buraco que esta frente fechou.
+       * ─ NAO HA PONTE PARA A ESTEIRA AQUI, E A AUSENCIA E A REGRA (02/10/2026) ──────────────────
+       *
+       * "O UNICO GATILHO QUE ENVIA PARA ADMISSAO E O GATILHO DA ESTEIRA, E NAO DAS ATS." A varredura
+       * escreve a ETAPA e a SITUACAO do funil, inclusive a situacao de contratado, e NAO abre
+       * admissao. Esse estado nao e buraco: e o desenho que o diretor mandou construir.
+       *
+       * O TEXTO QUE ESTAVA AQUI DIZIA O CONTRARIO, e por isso ele foi reescrito em vez de apagado:
+       * ele chamava "escrever situacao de contratado sem abrir admissao" de buraco fechado, o que
+       * entregava a quem chegasse depois uma justificativa escrita para religar o fio.
+       *
+       * O MOTIVO MEDIDO: "Contratados" no funil do Pandape nao e "enviado para admissao". A varredura
+       * le a ETAPA; o webhook dispara na ACAO de enviar, que vem depois. Lendo a etapa, a varredura
+       * criou 259 pre-admissoes em producao, 254 delas de gente que ja estava na esteira, e sem o
+       * `cod_cliente` que o webhook preenche. Quem cria admissao e o webhook
+       * (`pandape/pandape-sync.service.ts`) e o envio manual do funil (`registrarSaida`).
        */
-      ponteParaAdmissao: this.ponte,
       /*
        * O DE/PARA DE CLIENTE. Ele NÃO devolve cliente nenhum ao ciclo: resolve as duas chaves da
        * planilha e grava a PROPOSTA em colunas inertes, devolvendo contagem para o resumo. Não há
@@ -288,8 +300,13 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       r.paginasLidas === 0 &&
       r.pessoasCriadas === 0 &&
       r.candidaturasCriadas === 0 &&
-      r.pontesParaAdmissao === 0 &&
-      r.pontesAdiadas === 0 &&
+      /*
+       * OS DOIS CONTADORES DE PONTE SAIRAM DESTA CONDICAO em 02/10/2026, junto com a ponte. Eles
+       * estavam aqui no mesmo papel dos outros: dizer que ALGO aconteceu. Hoje a volta e MUDA quando
+       * nao leu vaga, nao leu pagina, nao criou pessoa, nao escreveu candidatura, nao registrou
+       * divergencia e nao errou. Nenhum sinal ficou sem representante: tudo que a varredura ainda
+       * FAZ continua nomeado nesta lista, porque criar admissao deixou de ser coisa que ela faz.
+       */
       // A VOLTA QUE SO ENCONTROU DIVERGENCIA NAO E VOLTA MUDA: a trava de precedência pode ser a
       // ÚNICA coisa que aconteceu numa passada (nada novo, nada escrito, e 40 campos que o ATS
       // queria sobrescrever e não sobrescreveu), e calar isso tornaria a trava invisível no log.
@@ -302,9 +319,7 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       `Varredura (${etapa}): ${r.vagasVarridas} vaga(s), ${r.paginasLidas} pagina(s), ` +
         `${r.pessoasCriadas} pessoa(s) nova(s), ${r.candidaturasCriadas} candidatura(s) escrita(s), ` +
         `${r.conflitosParaRevisao} conflito(s) para revisao, ` +
-        `${r.divergencias} divergencia(s) de precedencia, ` +
-        `${r.pontesParaAdmissao} ponte(s) para admissao (${r.pontesAdiadas} adiada(s), ` +
-        `${r.posicoesExcedidas} acima do teto da vaga), ${r.erros} erro(s).`,
+        `${r.divergencias} divergencia(s) de precedencia, ${r.erros} erro(s).`,
     );
     /*
      * ─ A PROPOSTA DE CLIENTE DA PLANILHA, EM LINHA PRÓPRIA E SÓ QUANDO HOUVE ALGO ──────────────

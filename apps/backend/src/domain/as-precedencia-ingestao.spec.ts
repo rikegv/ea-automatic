@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  decidirPrecedencia,
-  ponteDeveDisparar,
-  valorDeComparacao,
-} from "./as-precedencia-ingestao";
+import { decidirPrecedencia, valorDeComparacao } from "./as-precedencia-ingestao";
 
 /**
  * ─ A REGUA DE PRECEDENCIA, MEDIDA COMO DOMINIO PURO ────────────────────────────────────────────
@@ -88,79 +84,12 @@ describe("a régua de precedência: dado o valor do EA e o do ATS", () => {
   });
 });
 
-describe("a régua do QUANDO a ponte para a admissão dispara", () => {
-  it("dispara no NASCIMENTO, quando o desfecho pede", () => {
-    expect(ponteDeveDisparar({ desfechoPedePonte: true, criada: true })).toBe(true);
-  });
-
-  it("NAO dispara quando o desfecho não pede, nem mesmo no nascimento", () => {
-    // O QUE ISTO PROVA: a ponte é do desfecho `ENVIADO_PARA_ADMISSAO`, e não de toda entrada nova.
-    // Sem esta recusa, a varredura abriria admissão para 137 mil inscritos.
-    expect(ponteDeveDisparar({ desfechoPedePonte: false, criada: true })).toBe(false);
-  });
-
-  it("RETENTA na candidatura que JA EXISTE com `ENVIADO_PARA_ADMISSAO` e sem admissão", () => {
-    /*
-     * O QUE ISTO PROVA, e é o item 6 do diretor resolvido de graça: com a trava de precedência, o ATS
-     * nunca mais escreve `situacao` em linha existente, então este par só pode ter vindo do INSERT da
-     * própria ingestão numa volta em que a ponte não se completou (CPF ausente, falha de rede).
-     * Antes da trava esta MESMA condição seria um furo, porque era o ATS quem escrevia a situação.
-     */
-    expect(
-      ponteDeveDisparar({
-        desfechoPedePonte: true,
-        criada: false,
-        situacaoNoEa: "ENVIADO_PARA_ADMISSAO",
-        jaTemAdmissao: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("NAO retenta quando a candidatura JA APONTA para uma admissão", () => {
-    // O QUE ISTO PROVA: a volta de 30 minutos não pede ponte por candidatura já ligada. A
-    // idempotência de verdade continua no adaptador (ele lê `admissao_id` antes de escrever); esta
-    // régua evita a chamada inútil, 48 vezes por dia, por pessoa.
-    expect(
-      ponteDeveDisparar({
-        desfechoPedePonte: true,
-        criada: false,
-        situacaoNoEa: "ENVIADO_PARA_ADMISSAO",
-        jaTemAdmissao: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("NAO retenta em candidatura existente com OUTRA situação", () => {
-    // O QUE ISTO PROVA: a retentativa é só do caso da ponte incompleta. Quem está ATIVO no funil do
-    // EA não vira admissão por sinal do ATS, que é a garantia que a régua antiga dava e que esta
-    // mantém inteira.
-    expect(
-      ponteDeveDisparar({
-        desfechoPedePonte: true,
-        criada: false,
-        situacaoNoEa: "ATIVO",
-        jaTemAdmissao: false,
-      }),
-    ).toBe(false);
-    expect(
-      ponteDeveDisparar({
-        desfechoPedePonte: true,
-        criada: false,
-        situacaoNoEa: "DESCARTADO",
-        jaTemAdmissao: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("é FAIL-CLOSED em todo `nao sei`", () => {
-    /*
-     * O QUE ISTO PROVA: adaptador que não sabe dizer se a linha nasceu, ou qual a situação dela, cai
-     * para o lado de NÃO criar admissão. É a direção da frente inteira: admissão criada por engano é
-     * muito mais caro de desfazer do que admissão que não nasceu numa volta.
-     */
-    expect(ponteDeveDisparar({ desfechoPedePonte: true })).toBe(false);
-    expect(
-      ponteDeveDisparar({ desfechoPedePonte: true, situacaoNoEa: "ENVIADO_PARA_ADMISSAO" }),
-    ).toBe(false);
-  });
-});
+/*
+ * ─ O QUE SAIU DESTE ARQUIVO EM 02/10/2026: as sete asserções de `ponteDeveDisparar` ────────────
+ *
+ * Elas mediam QUANDO a varredura abria pré-admissão (nascimento, retentativa, fail-closed). A
+ * varredura deixou de abrir pré-admissão em qualquer caso, porque o gatilho é da esteira e não das
+ * ATS, então a função saiu e as asserções saíram com ela. A régua de PRECEDÊNCIA, que é a outra
+ * propriedade deste arquivo e a que de fato protege o trabalho do time, continua medida acima,
+ * inteira e sem alteração.
+ */

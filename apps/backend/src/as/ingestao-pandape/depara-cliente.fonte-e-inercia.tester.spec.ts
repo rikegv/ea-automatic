@@ -220,11 +220,21 @@ const PODEM_FALAR = [
   "as/vagas/vagas-revisao",
 ];
 
-/** Quem NÃO PODE, nomeadamente, porque é por aqui que o dano se propaga. */
-const NAO_PODEM_FALAR = [
-  join(RAIZ_SRC, "as", "ingestao-pandape", "ingestao-ponte-admissao.ts"),
-  join(RAIZ_SRC, "as", "candidatos", "candidatos.service.ts"),
-];
+/**
+ * Quem NÃO PODE, nomeadamente, porque é por aqui que o dano se propaga.
+ *
+ * ┌─ UM ITEM SAIU EM 02/10/2026, E A SAÍDA É UM REFORÇO DA TRAVA, NÃO UMA RENÚNCIA ─────────────┐
+ * │ A lista citava `as/ingestao-pandape/ingestao-ponte-admissao.ts`, o adaptador que levava        │
+ * │ `vagas.cod_cliente` até `admissoes.cod_cliente`. AQUELE ARQUIVO FOI APAGADO: a varredura não   │
+ * │ cria admissão, porque o único gatilho que envia para admissão é o da esteira, e não o das ATS. │
+ * │ A propriedade que o item guardava passou a ser garantida de forma MAIS FORTE, pela ausência do │
+ * │ caminho inteiro: não há arquivo para ler a proposta, nem admissão para a proposta alcançar.    │
+ * │                                                                                               │
+ * │ O item não podia FICAR, e é por isso que ele saiu em vez de ser deixado para trás: com a       │
+ * │ asserção de existência abaixo, caminho que não existe é VERMELHO, de propósito.                │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const NAO_PODEM_FALAR = [join(RAIZ_SRC, "as", "candidatos", "candidatos.service.ts")];
 
 function arquivosTs(dir: string, achados: string[] = []): string[] {
   for (const nome of readdirSync(dir)) {
@@ -276,11 +286,36 @@ describe("nada no backend lê a proposta para decidir coisa alguma", () => {
     expect(fora, "a proposta vazou para arquivo fora da lista branca").toEqual([]);
   });
 
-  it("a ponte para a admissão e o service de candidatos NÃO citam a proposta", () => {
+  /*
+   * ─ A NÃO-VACUIDADE DOS CAMINHOS, e ela faltava (dívida fechada em 02/10/2026) ───────────────
+   *
+   * A asserção de ausência abaixo pula o que não existe (`if (!existsSync) continue`), e o pulo é
+   * CERTO: nomear um arquivo apagado não deve derrubar a suíte por acidente de ordem de frentes. O
+   * preço era que a lista podia ficar INTEIRA obsoleta por um rename e o teste seguir verde, sem
+   * sujeito nenhum, exatamente como o teste de não-vacuidade das MARCAS já previne do outro lado.
+   *
+   * ENTÃO O CAMINHO QUE NÃO EXISTE É VERMELHO AQUI, e não lá: quem mover ou apagar um dos arquivos
+   * nomeados é obrigado a vir decidir se o item ainda tem sujeito, em vez de perder a trava em
+   * silêncio. É a mesma disciplina da lista de SETE tabelas da ingestão: lista fail-closed que
+   * perde um item convence de que a busca terminou.
+   */
+  it("todo caminho da lista EXISTE, senão a asserção de ausência não tem sujeito", () => {
+    expect(NAO_PODEM_FALAR.length).toBeGreaterThan(0);
+    for (const caminho of NAO_PODEM_FALAR) {
+      expect(
+        existsSync(caminho),
+        `${caminho} não existe mais: a trava ficou sem sujeito. Reveja a lista NAO_PODEM_FALAR.`,
+      ).toBe(true);
+    }
+  });
+
+  it("o service de candidatos NÃO cita a proposta", () => {
     /*
-     * A ASSERÇÃO NOMINAL, que sobrevive a alguém editar a lista branca de cima: estes dois são o
-     * caminho MEDIDO pelo qual `vagas.cod_cliente` chega a `admissoes.cod_cliente`, e é ali que o
-     * valor passa a decidir régua documental e pasta do Drive.
+     * A ASSERÇÃO NOMINAL, que sobrevive a alguém editar a lista branca de cima: este é o caminho
+     * MEDIDO pelo qual `vagas.cod_cliente` chega a `admissoes.cod_cliente`, e é ali que o valor
+     * passa a decidir régua documental e pasta do Drive. ERAM DOIS: o outro era a ponte da
+     * varredura, apagada em 02/10/2026 (a varredura não cria admissão), e hoje o envio manual do
+     * funil é o único caminho de A&S que leva o cliente da vaga até a pré-admissão.
      */
     for (const caminho of NAO_PODEM_FALAR) {
       if (!existsSync(caminho)) continue;

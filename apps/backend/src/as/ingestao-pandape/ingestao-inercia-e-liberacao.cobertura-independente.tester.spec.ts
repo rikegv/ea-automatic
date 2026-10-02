@@ -86,16 +86,25 @@ function servicoDaVarredura(valorDaVariavel: string | undefined, apiAtiva = true
   };
   const http = { requisitar: explodir("http.requisitar") };
   const etapas = { etapaInicial: explodir("etapas.etapaInicial") };
-  // A PONTE PARA A ESTEIRA ENTRA NO MESMO MOLDE DAS OUTRAS PECAS: um duble que EXPLODE se for
-  // tocado. A varredura inerte nao pode abrir admissao nenhuma, e este duble e o que prova isso.
-  const ponte = { criar: explodir("ponte.criar") };
+  /*
+   * O DE/PARA DE CLIENTE ENTRA NO MESMO MOLDE DAS OUTRAS PECAS: um duble que EXPLODE se for tocado.
+   *
+   * ANTES DE 02/10/2026 ESTE SEXTO ARGUMENTO ERA A PONTE PARA A ESTEIRA, e o duble provava que a
+   * varredura inerte nao abria admissao. A PONTE FOI REMOVIDA ("o unico gatilho que envia para
+   * admissao e o gatilho da esteira, e nao o das ATS"), e o sexto parametro do construtor passou a
+   * ser `propostaDeCliente`. O duble antigo continuaria compilando (o `as never` apaga o vermelho) e
+   * seria injetado COMO A PORTA DO DE/PARA: um objeto com `criar()` respondendo no lugar de
+   * `IngestaoDeParaCliente`, inofensivo hoje e armadilha no dia em que alguem exercitar o ciclo
+   * aqui. Trocado pelo duble do dono certo do slot, com o nome do metodo que a porta realmente tem.
+   */
+  const propostaDeCliente = { resolverERegistrar: explodir("propostaDeCliente.resolverERegistrar") };
   const svc = new IngestaoVarreduraService(
     config as never,
     api as never,
     repo as never,
     http as never,
     etapas as never,
-    ponte as never,
+    propostaDeCliente as never,
   );
   return { svc, chavesLidas, toques };
 }
