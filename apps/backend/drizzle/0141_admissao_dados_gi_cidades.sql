@@ -1,0 +1,60 @@
+-- AS TRES CIDADES DA PESSOA, que o G.I pede e o EA nao tinha onde guardar (OST das 5 lacunas,
+-- 02/10/2026). Medicao e de/para em `docs/MAPA-GI-CLIENTE-E-CIDADES.md`.
+--
+-- ┌─ O QUE FALTAVA, E POR QUE SAO TRES COLUNAS E NAO UMA ──────────────────────────────────────────┐
+-- │ O DTO `TB_FuncionarioSelecaoAPI` tem TRES campos de cidade de pessoa, `maxLength` 30 cada, e    │
+-- │ eles sao de documentos DIFERENTES:                                                             │
+-- │   - `cidadeNascimento`  cidade de NASCIMENTO   (vizinha de `dataNascimento` e `sexo`)           │
+-- │   - `cidadeRG`          cidade do RG           (entre `orgaoRG` e `ufrg`)                       │
+-- │   - `cidadeExpedicao`   cidade da CTPS         (ao lado de `ufExpedicao`, a UF da CTPS)          │
+-- │                                                                                               │
+-- │ O contrato NAO tem `description` nesses campos, entao o de/para foi confirmado pela POSICAO no  │
+-- │ schema, que segue a ordem do formulario do fornecedor. **Isso importa porque a frente JA pagou  │
+-- │ uma colisao de nome** (o `tipoContrato` do G.I, que e o PRAZO `D`/`I` e nao o nosso             │
+-- │ `admissoes.tipo_contrato`): trocar cidade do RG por cidade da CTPS seria o mesmo erro, gravado  │
+-- │ num documento de identidade de pessoa real, calado.                                            │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ `naturalidade` NAO E CIDADE, E NAO E ISSO QUE ESTA MIGRATION CONSERTA ────────────────────────┐
+-- │ `admissao_dados_gi.naturalidade` ja existe e o campo do G.I correspondente tem `maxLength` 2:   │
+-- │ e a SIGLA DA UF de nascimento, com as 27 siglas na `description`                                │
+-- │ (`docs/GI-CATALOGOS-DA-DESCRIPTION.md`). Cidade e UF de nascimento sao campos DIFERENTES do     │
+-- │ fornecedor, e e por isso que `cidade_nascimento` nasce aqui em vez de alargar a coluna que ja   │
+-- │ existe. Alargar a `naturalidade` faria a UF e a cidade disputarem a mesma coluna, e o           │
+-- │ `codigoCurto(.., 2)` do envio ANULA o que nao cabe em 2: a cidade chegaria NULA ao G.I, que e    │
+-- │ exatamente o defeito que ja foi consertado uma vez naquele campo.                               │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ `varchar(120)`, E O CORTE EM 30 MORA NO ENVIO, NAO NA COLUNA ─────────────────────────────────┐
+-- │ 120 e o tamanho de `end_cidade`, que e a MESMA natureza de dado (nome de municipio brasileiro), │
+-- │ e duas larguras para o mesmo dado divergem no primeiro ajuste. O teto de 30 e do CONTRATO DO    │
+-- │ FORNECEDOR, nao do dado: ele e aplicado em `montarFuncionarioSelecao`, pelo mesmo `cortarTexto` │
+-- │ que ja corta `cidadeResid` em 60 e `cplEndereco` em 30, porque o G.I valida tamanho e **derruba │
+-- │ o envio INTEIRO com HTTP 400**. Guardar 120 preserva o nome completo do municipio no EA (que e   │
+-- │ o que a ficha e a conferencia do candidato mostram) e corta so na fronteira de saida.           │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ TODAS NULLABLE, SEM DEFAULT, E SEM BACKFILL ──────────────────────────────────────────────────┐
+-- │ NULL e "ninguem coletou ainda", e e o unico valor honesto: a extracao da IA **nao pedia cidade  │
+-- │ nenhuma** em RG, CTPS ou certidao de nascimento (levantado em                                   │
+-- │ `apps/ai-service/app/portal_extracao.py`), entao nao existe dado anterior a trazer. Nenhum      │
+-- │ `NOT NULL DEFAULT`, pelo mesmo motivo da 0140: default em coluna de dado de pessoa FALSEARIA    │
+-- │ coleta que ninguem fez. §A.16 preserva o historico.                                            │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ O QUARTO CAMPO, `codMunicipioNascto`, **NAO GANHA COLUNA**, e a ausencia e deliberada ─────────┐
+-- │ Ele e o CODIGO (IBGE) do municipio de nascimento, nao um texto coletado. Ele e DERIVADO no       │
+-- │ envio, pelo MESMO de/para que `codigoCidadeResid` ja usa (`GI_DEPARA_CIDADES`), a partir de      │
+-- │ `cidade_nascimento` + `naturalidade` (a UF). **UM de/para serve os DOIS campos.** Como aquele    │
+-- │ de/para esta VAZIO hoje, os dois codigos saem NULOS, e isso e fail-closed por desenho: nao se    │
+-- │ INVENTA codigo de municipio. Guardar o codigo numa coluna criaria uma segunda fonte da verdade  │
+-- │ para o mesmo dado, que divergiria do texto no primeiro ajuste.                                  │
+-- └───────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- §A.6: as tres colunas SAO dado pessoal, e moram na tabela que ja tem a politica inteira
+-- (`expurgar_em` com TTL, escrita so pela porta do Portal sob `PortalSessaoGuard`, nunca em log, nunca
+-- em superficie coletiva). Nenhuma delas e logada em caminho nenhum, e a allowlist
+-- (`domain/dados-gi-campos.ts`) e quem decide que a chave da IA pode virar coluna.
+ALTER TABLE "admissao_dados_gi" ADD COLUMN IF NOT EXISTS "cidade_nascimento" varchar(120);--> statement-breakpoint
+ALTER TABLE "admissao_dados_gi" ADD COLUMN IF NOT EXISTS "rg_cidade" varchar(120);--> statement-breakpoint
+ALTER TABLE "admissao_dados_gi" ADD COLUMN IF NOT EXISTS "ctps_cidade" varchar(120);

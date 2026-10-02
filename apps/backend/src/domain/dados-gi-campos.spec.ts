@@ -76,3 +76,44 @@ describe("filtrarCamposGi: allowlist fechada", () => {
     }
   });
 });
+
+describe("as TRES chaves de CIDADE (0141): a allowlist e o unico gate por NOME", () => {
+  /**
+   * ⚠️ SEM ESTAS TRÊS CHAVES AQUI, O VALOR MORRE EM SILÊNCIO. O caminho foi conferido ponta a ponta: o
+   * schema do Gemini monta o enum dinamicamente, o Pydantic de saída é genérico, o leitor do backend
+   * repassa a lista inteira e o frontend renderiza por rótulo. **O único lugar que filtra por nome de
+   * chave é o `CAMPOS_GI`.** É o modo de falha exato do `ctpsDataExpedicao`: o candidato vê o campo,
+   * confirma, e o `POST /portal/dados-gi` descarta sem ninguém ver.
+   *
+   * Os nomes são os que a extração emite, **exatamente**: `cidadeNascimento`, `cidadeRg`, `cidadeCtps`.
+   */
+  it("as tres chaves da extracao atravessam para a COLUNA certa, sem troca", () => {
+    const r = filtrarCamposGi({
+      cidadeNascimento: "Recife",
+      cidadeRg: "Campinas",
+      cidadeCtps: "Santos",
+    });
+    expect(r.update).toEqual({
+      cidadeNascimento: "Recife",
+      rgCidade: "Campinas",
+      ctpsCidade: "Santos",
+    });
+  });
+
+  it("cidade e TEXTO, nao UF: nome de municipio inteiro atravessa (nao e cortado em 2)", () => {
+    // Se o tipo fosse `uf`, "Recife" viraria "RE". A `naturalidade` é que é a sigla; a cidade é texto.
+    expect(filtrarCamposGi({ cidadeNascimento: "Vila Bela da Santissima Trindade" }).update)
+      .toEqual({ cidadeNascimento: "Vila Bela da Santissima Trindade" });
+    expect(CAMPOS_GI.cidadeNascimento.tipo).toBe("texto");
+    expect(CAMPOS_GI.cidadeRg.tipo).toBe("texto");
+    expect(CAMPOS_GI.cidadeCtps.tipo).toBe("texto");
+    // E a `naturalidade` NÃO foi alargada: ela continua sendo a UF, com as duas coisas convivendo.
+    expect(CAMPOS_GI.naturalidade.tipo).toBe("uf");
+  });
+
+  it("os ROTULOS da trilha distinguem as tres (§A.6: rotulo, nunca valor)", () => {
+    const r = filtrarCamposGi({ cidadeNascimento: "Recife", cidadeRg: "X", cidadeCtps: "Y" });
+    expect(new Set(r.rotulos).size).toBe(3);
+    expect(r.rotulos).toContain("Cidade de nascimento");
+  });
+});

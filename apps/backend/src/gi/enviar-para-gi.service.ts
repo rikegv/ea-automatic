@@ -67,6 +67,19 @@ export type GiEnvioMotivo =
    * fornecedor), e só para o `H`. §A.6: o motivo não carrega valor, nem salário nem horas.
    */
   | "GI_SALARIO_HORISTA_SEM_JORNADA"
+  /**
+   * RECUSA DURA: o **CLIENTE FINAL** não resolveu. ⚠️ Não é a empresa do Grupo Soulan
+   * (`GI_SEM_EMPRESA_FILIAL`, que vem de `cliente_vinculos`): é o TOMADOR, o `codigoCliente` do GI, que
+   * sai de `admissoes.cod_cliente` por de/para DIRETO (medido em 02/10/2026: `cod_cliente` é numérico em
+   * 244 de 251 clientes, e **243 dos 244 casam** com um `codigoCliente` real do GI, 99%).
+   *
+   * Dois caminhos chegam aqui: admissão **sem cliente** (a pré-admissão do Pandapé nasce assim) e
+   * `cod_cliente` **não numérico** (7 na base). Nos dois o campo é `int32` com **`default 0`** no
+   * fornecedor, e `0` **não é "vazio": é referência a cliente INEXISTENTE**, a mesma família do registro
+   * órfão já medido em empresa/filial. Destrava-se corrigindo o `cod_cliente` do cliente. §A.6: o motivo é
+   * código fechado e não carrega valor.
+   */
+  | "GI_CLIENTE_NAO_RESOLVIDO"
   | "GI_ENVIADO"
   | "GI_FALHA_ENVIO";
 
@@ -91,6 +104,11 @@ const MOTIVO_RECUSA_CONTRATACAO: Record<GiRecusaContratacao, string> = {
   // que parece quebrada. §A.6: nenhum valor, nem o salario nem as horas.
   GI_SALARIO_HORISTA_SEM_JORNADA:
     "GI: salario declarado por HORA e a jornada em horas nao esta informada (mensal e semanal, dados_vaga_folha.jornada_horas_mes/sem): envio RECUSADO, preencha a jornada.",
+  // A FRASE DIZ **CLIENTE FINAL** com todas as letras, porque "cliente" sozinho e lido como empresa do
+  // grupo e manda o time conferir `cliente_vinculos`, que e a outra recusa. §A.6: nenhum valor, nenhum
+  // nome de cliente, nenhum id de admissao.
+  GI_CLIENTE_NAO_RESOLVIDO:
+    "GI: o CLIENTE FINAL (tomador) nao resolveu a partir de admissoes.cod_cliente (ausente ou nao numerico): envio RECUSADO, nunca se envia 0.",
 };
 
 /**

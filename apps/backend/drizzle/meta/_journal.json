@@ -988,6 +988,13 @@
       "when": 1790646006719,
       "tag": "0140_dados_vaga_folha_salario_unidade",
       "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1790646007719,
+      "tag": "0141_admissao_dados_gi_cidades",
+      "breakpoints": true
     }
   ]
 }

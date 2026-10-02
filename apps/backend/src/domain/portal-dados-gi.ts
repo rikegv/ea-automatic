@@ -150,7 +150,13 @@ export interface PessoaParaGi {
   agencia?: string | null;
   conta?: string | null;
   nacionalidade?: string | null;
+  /** SIGLA DA UF de nascimento (`naturalidade` no GI, `maxLength` 2). NÃO é a cidade. */
   naturalidade?: string | null;
+  /**
+   * CIDADE de nascimento (`cidadeNascimento` no GI, `maxLength` 30). Campo DIFERENTE da `naturalidade`,
+   * e é dele que sai também o `codMunicipioNascto` (o código, pelo de/para). 0141.
+   */
+  cidadeNascimento?: string | null;
   nomeMae?: string | null;
   nomePai?: string | null;
   estadoCivil?: string | null;
@@ -159,10 +165,14 @@ export interface PessoaParaGi {
   rg?: string | null;
   rgOrgao?: string | null;
   rgUf?: string | null;
+  /** Cidade de emissão do RG (`cidadeRG` no GI, `maxLength` 30). 0141. */
+  rgCidade?: string | null;
   rgDataEmissao?: string | null;
   ctpsNumero?: string | null;
   ctpsSerie?: string | null;
   ctpsUf?: string | null;
+  /** Cidade de expedição da CTPS (`cidadeExpedicao` no GI, `maxLength` 30). 0141. */
+  ctpsCidade?: string | null;
   ctpsData?: string | null;
   pis?: string | null;
   tituloNumero?: string | null;
@@ -244,6 +254,26 @@ export interface ContratacaoGi {
   /** `int16` OBRIGATÓRIO no GI. Nulo aqui = NÃO RESOLVIDO, e o envio é RECUSADO (nunca `0`). */
   codigoEmpresa: number | null;
   codigoFilial: number | null;
+  /**
+   * ═══ O CLIENTE FINAL (`codigoCliente` do GI), E ELE **NÃO** É A EMPRESA DO GRUPO ═══
+   *
+   * ⚠️ NÃO CONFUNDIR com `codigoEmpresa`/`codigoFilial`, logo acima: aqueles são a empresa do **Grupo
+   * Soulan** que registra o vínculo (saem de `cliente_vinculos`). Este é o **CLIENTE FINAL**, o tomador,
+   * aquele para quem a pessoa vai trabalhar, e sai de `admissoes.cod_cliente`.
+   *
+   * DE/PARA DIRETO, SEM TABELA, e isto é MEDIDO (02/10/2026, `docs/MAPA-GI-CLIENTE-E-CIDADES.md`):
+   * `clientes.cod_cliente` é numérico em **244 dos 251** clientes, e **243 dos 244 casam com um
+   * `codigoCliente` real do GI** (cruzado com os 7.525 distintos do catálogo de centro de custo), **99%**.
+   * O único fora é `26360`, provável falso negativo da amostra (a lista do GI veio só de clientes COM
+   * centro de custo). Então não há de/para a materializar: o código é o mesmo nos dois lados.
+   *
+   * `int32` com **`default 0`** no GI, e é esse default que obriga a recusa: **`0` não é "vazio", é
+   * REFERÊNCIA A CLIENTE INEXISTENTE**, exatamente a família do registro órfão já medido em
+   * empresa/filial. Nulo aqui é marca interna de "NÃO RESOLVIDO" (cliente ausente, ou `cod_cliente` não
+   * numérico, que são 7 na base), e `recusaDaContratacaoGi` RECUSA com `GI_CLIENTE_NAO_RESOLVIDO`. Nunca
+   * se envia `0`, e nunca se "conserta" um código de cliente por palpite.
+   */
+  codigoCliente: number | null;
 }
 
 /** Contratação TODA nula: o default quando não se leu contratação nenhuma. Tudo nulo = tudo recusado. */
@@ -257,6 +287,7 @@ export const CONTRATACAO_GI_VAZIA: ContratacaoGi = {
   tipoContrato: null,
   codigoEmpresa: null,
   codigoFilial: null,
+  codigoCliente: null,
 };
 
 /**
@@ -689,6 +720,15 @@ export interface EntradaContratacaoGi {
   tipoContrato?: string | null;
   /** Os vínculos do cliente da admissão (`cliente_vinculos`), de onde saem empresa e filial. */
   vinculos?: VinculoEmpresaFilial[] | null;
+  /**
+   * `admissoes.cod_cliente`, a chave do CLIENTE FINAL no EA (`varchar`). Vira o `codigoCliente` (`int32`)
+   * do GI DIRETO, sem de/para (99% de casamento medido). Ausente, ou não numérico, resolve para NULO e o
+   * envio é RECUSADO: nunca `0`. Ver `codigoCliente` em `ContratacaoGi`.
+   *
+   * ⚠️ É O MESMO VALOR que `lerContratacao` já traz do banco para achar o vínculo do cliente: não se abre
+   * consulta nova para isto.
+   */
+  codCliente?: string | number | null;
 }
 
 /**
@@ -718,7 +758,52 @@ export function montarContratacaoGi(
     tipoContrato: prazoContratoGi(vinculo),
     codigoEmpresa: empresaFilial?.empresa ?? null,
     codigoFilial: empresaFilial?.filial ?? null,
+    // O CLIENTE FINAL, de/para DIRETO de `admissoes.cod_cliente` (medido, 99%). `0`, vazio, não numérico
+    // ou fora da faixa do `int32` caem para NULO, e a guarda do envio recusa: `0` seria referência a
+    // cliente inexistente, não campo vazio.
+    codigoCliente: codigoClienteInt32(e.codCliente),
   };
+}
+
+/**
+ * CLIENTE FINAL no formato do GI: inteiro de `int32`, **>= 1**.
+ *
+ * A RÉGUA É A DA EMPRESA, NÃO A DA FILIAL, e a diferença é deliberada: filial `0` é estabelecimento real
+ * no GI e PASSA, mas **cliente `0` é o `default` do campo**, isto é, o valor que a omissão produz. Aceitar
+ * `0` aqui seria aceitar exatamente o que a guarda existe para impedir.
+ *
+ * RECUSA texto, vazio, sinal e decimal: `cod_cliente` é `varchar` livre no EA e o campo do outro lado é
+ * tipado com `pattern`, então um valor que não casa derruba o envio INTEIRO com 400. Os **7 `cod_cliente`
+ * não numéricos** da base caem aqui, por desenho.
+ *
+ * ⚠️ O ZERO À ESQUERDA É **ABSORVIDO**, NÃO RECUSADO, e aqui a régua é a do `inteiroGi` e **NÃO** a do
+ * `inteiroNaFaixaInt16` (que recusa `"04"` em empresa/filial). O campo do outro lado é `int32`: `"00123"`
+ * e `"123"` são o MESMO cliente, então recusar por formatação reprovaria admissão LEGÍTIMA por um zero
+ * que não muda o número. É o oposto de `documentoNumerico`, onde o zero é dígito do documento.
+ *
+ * MEDIDO na produção em 02/10/2026, para que ninguém aperte isto depois: **ZERO** dos 251 clientes e
+ * **ZERO** das 3.021 admissões têm `cod_cliente` com zero à esquerda, e o maior código é `57460` (bem
+ * dentro do `int32`). A tolerância é defesa contra digitação futura, não remendo de dado existente.
+ *
+ * O QUE CONTINUA RECUSANDO, e é o que a guarda existe para pegar: `"0"`, `"000"`, vazio e não numérico.
+ * `0` é o `default` do campo no GI, isto é, o valor que a omissão produz, e ele é referência a cliente
+ * INEXISTENTE. Nunca se envia `0`.
+ */
+function codigoClienteInt32(v: unknown): number | null {
+  const t = typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : "";
+  // `0*[1-9]\d*`: absorve o zero à esquerda e recusa `"0"`/`"000"` (que não têm dígito significativo).
+  if (!/^0*[1-9]\d*$/.test(t)) return null;
+  const n = Number.parseInt(t, 10);
+  return n <= 2147483647 ? n : null;
+}
+
+/**
+ * A REDE DE RUNTIME do cliente, na fronteira do payload, no mesmo molde de `vinculoGiValido` e
+ * `tipoSalarioGiValido`: uma `ContratacaoGi` montada POR FORA de `montarContratacaoGi` chegaria com
+ * string, com `0` ou com decimal, e este é o único ponto por onde um valor alcança o fornecedor.
+ */
+function codigoClienteGiValido(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v > 0 && v <= 2147483647 ? v : null;
 }
 
 /**
@@ -738,7 +823,23 @@ export interface FuncionarioSelecao {
   smsdddCel: string | null;
   smsNroCel: string | null;
   nacionalidade: string | null;
+  /** SIGLA DA UF de nascimento (`maxLength` 2 no contrato). NÃO é a cidade: ver `cidadeNascimento`. */
   naturalidade: string | null;
+  /**
+   * CIDADE de nascimento (`maxLength` 30). Campo SEPARADO da `naturalidade` no contrato do GI, e
+   * confirmado pela POSIÇÃO no schema (vizinho de `dataNascimento` e `sexo`), porque o contrato não traz
+   * `description` nestes campos.
+   */
+  cidadeNascimento: string | null;
+  /**
+   * CÓDIGO (IBGE) do município de nascimento, `int`. DERIVADO, nunca coletado: sai do **MESMO de/para**
+   * que `codigoCidadeResid` usa (`GI_DEPARA_CIDADES`), aplicado a `cidadeNascimento` + `naturalidade` (a
+   * UF de nascimento). **UM de/para serve os DOIS campos de código de município.**
+   *
+   * ⚠️ O de/para está **VAZIO** hoje, então este campo e o `codigoCidadeResid` saem os DOIS nulos, e é
+   * fail-closed por desenho: não se INVENTA código de município. Preencher o de/para liga os dois juntos.
+   */
+  codMunicipioNascto: string | null;
   filiacaoNomeMae: string | null;
   filiacaoNomePai: string | null;
   estadoCivil: string | null;
@@ -746,6 +847,9 @@ export interface FuncionarioSelecao {
   grauInstrucao: string | null;
   rg: string | null;
   orgaoRG: string | null;
+  /** CIDADE de emissão do RG (`maxLength` 30). Fica entre `orgaoRG` e `ufrg` no schema, e é daí que o
+   * de/para foi confirmado: o contrato não descreve o campo. NÃO é a cidade da CTPS. */
+  cidadeRG: string | null;
   ufrg: string | null;
   dtExpedicaoRG: string | null;
   carteiraTrabalho: string | null;
@@ -755,6 +859,12 @@ export interface FuncionarioSelecao {
    * contrato (conferido no `openapi/v1.json` do GI, 29/09/2026) e era ignorado no envio.
    */
   ufExpedicao: string | null;
+  /**
+   * CIDADE de expedição da **CTPS** (`maxLength` 30). O nome do campo no GI não menciona CTPS, e por isso
+   * ele é o mais fácil de trocar pelo `cidadeRG`: o de/para vem da vizinhança com `ufExpedicao`, que é a
+   * UF da CTPS. Mesma classe de risco da colisão já paga pelo `tipoContrato` (ver `prazoContratoGi`).
+   */
+  cidadeExpedicao: string | null;
   dtExpedicaoCTPS: string | null;
   /**
    * O campo do PIS no GI é `pis` (contrato confirmado 25/09/2026), NÃO `pisNit` como constava antes.
@@ -884,6 +994,16 @@ export interface FuncionarioSelecao {
    */
   codigoEmpresa: number | null;
   codigoFilial: number | null;
+  /**
+   * CLIENTE FINAL (`int32`, **default `0`**). ⚠️ NÃO é a empresa do grupo (`codigoEmpresa`/`codigoFilial`):
+   * é o TOMADOR, e sai de `admissoes.cod_cliente` por de/para DIRETO (99% de casamento medido em
+   * 02/10/2026, `docs/MAPA-GI-CLIENTE-E-CIDADES.md`).
+   *
+   * Nulo é marca interna de "NÃO RESOLVIDO" e nunca um valor a enviar: `recusaDaContratacaoGi` recusa com
+   * `GI_CLIENTE_NAO_RESOLVIDO`, encostado no `POST`. **`0` nunca sai**, porque `0` não é vazio, é
+   * referência a cliente inexistente, a mesma família do registro órfão já medido em empresa/filial.
+   */
+  codigoCliente: number | null;
 }
 
 /**
@@ -1071,6 +1191,18 @@ export function montarFuncionarioSelecao(
     smsNroCel: numero,
     nacionalidade: codigoCurto(limpo(p.nacionalidade), 3),
     naturalidade: codigoCurto(limpo(p.naturalidade), 2),
+    // AS TRÊS CIDADES SÃO **TEXTO LIVRE**, cortadas em 30 por `cortarTexto`, o mesmo helper do nome e do
+    // endereço (o GI valida tamanho e derruba o envio INTEIRO com 400).
+    //
+    // ⚠️ **NUNCA `codigoCurto` AQUI**, e o caso que decide isso é real: "Vila Bela da Santíssima
+    // Trindade" tem **32 caracteres**. Por `codigoCurto` ela chegaria ao GI como NULO, ou seja, o MESMO
+    // nada de antes desta frente, calado, depois de toda a coleta ter sido construída para trazê-la.
+    // Cidade é TEXTO: truncar perde o final do nome, anular perde a cidade. `codigoCurto` existe para
+    // campo de CÓDIGO (`naturalidade`, `sexo`, `raca`), onde cortar INVENTARIA outro valor.
+    cidadeNascimento: cortarTexto(limpo(p.cidadeNascimento), 30),
+    // O CÓDIGO do município de nascimento, pelo MESMO de/para de `codigoCidadeResid`, com a UF vinda da
+    // `naturalidade` (que é a UF, não a cidade). De/para vazio: NULO, nunca inventado.
+    codMunicipioNascto: inteiroGi(depara.codigoCidade(p.cidadeNascimento, p.naturalidade)),
     filiacaoNomeMae: cortarTexto(limpo(p.nomeMae), 70),
     filiacaoNomePai: cortarTexto(limpo(p.nomePai), 70),
     estadoCivil: codigoCurto(limpo(p.estadoCivil), 1),
@@ -1078,11 +1210,13 @@ export function montarFuncionarioSelecao(
     grauInstrucao: codigoCurto(limpo(p.grauInstrucao), 1),
     rg: cortarTexto(limpo(p.rg), 20),
     orgaoRG: cortarTexto(limpo(p.rgOrgao), 15),
+    cidadeRG: cortarTexto(limpo(p.rgCidade), 30),
     ufrg: codigoCurto(limpo(p.rgUf), 2),
     dtExpedicaoRG: limpo(p.rgDataEmissao),
     carteiraTrabalho: cortarTexto(limpo(p.ctpsNumero), 10),
     serie: cortarTexto(limpo(p.ctpsSerie), 7),
     ufExpedicao: codigoCurto(limpo(p.ctpsUf), 2),
+    cidadeExpedicao: cortarTexto(limpo(p.ctpsCidade), 30),
     dtExpedicaoCTPS: limpo(p.ctpsData),
     // DOCUMENTO, igual ao CPF: preserva o zero à esquerda (não é campo de contagem).
     pis: documentoNumerico(limpo(p.pis)),
@@ -1120,6 +1254,10 @@ export function montarFuncionarioSelecao(
     tipoContrato: prazoGiValido(c.tipoContrato),
     codigoEmpresa: c.codigoEmpresa,
     codigoFilial: c.codigoFilial,
+    // O CLIENTE FINAL passa pela MESMA rede de runtime das outras quatro, e pelo mesmo motivo: esta é a
+    // fronteira do payload, e `0`/string/decimal vindos de uma `ContratacaoGi` montada por fora viram
+    // NULO aqui, para a guarda do `POST` recusar em vez de o fornecedor gravar cliente inexistente.
+    codigoCliente: codigoClienteGiValido(c.codigoCliente),
   };
 }
 
@@ -1129,7 +1267,8 @@ export type GiRecusaContratacao =
   | "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO"
   | "GI_SALARIO_INVALIDO"
   | "GI_SALARIO_SEM_UNIDADE"
-  | "GI_SALARIO_HORISTA_SEM_JORNADA";
+  | "GI_SALARIO_HORISTA_SEM_JORNADA"
+  | "GI_CLIENTE_NAO_RESOLVIDO";
 
 /**
  * A lista AUTORITATIVA de pares (empresa, filial) do GI, injetada. `false` = par não verificado.
@@ -1185,6 +1324,13 @@ export const NENHUM_PAR_EMPRESA_FILIAL: ParEmpresaFilialConhecido = () => false;
  *    exigir jornada delas seria inventar obrigação que o contrato não pede. Jornada informada numa
  *    unidade não-`H` É enviada de todo jeito: informada é sempre melhor que o `default 0`.
  *
+ *  - `GI_CLIENTE_NAO_RESOLVIDO`: o **CLIENTE FINAL** (`codigoCliente`, o tomador, NÃO a empresa do grupo)
+ *    não resolveu a partir de `admissoes.cod_cliente`. Ou a admissão está sem cliente (a pré-admissão do
+ *    Pandapé nasce assim), ou o `cod_cliente` não é numérico (**7 na base**). A régua é a MESMA da
+ *    empresa, não a da filial: **`0` recusa**, porque `0` é o `default` do campo no GI, isto é, o valor
+ *    que a omissão produz, e ele é referência a cliente INEXISTENTE. Destrava-se cadastrando/corrigindo o
+ *    `cod_cliente`, nunca mandando `0`. §A.6: o código não carrega o valor.
+ *
  * A ORDEM É DELIBERADA: o valor é conferido ANTES da unidade, e a unidade DECLARADA antes do insumo que
  * ela exige. Salário ausente/zero é problema do próprio número, e declarar a unidade de um número que
  * não serve não conserta nada; e distinguir "não declarou" de "declarou horista sem jornada" é o que faz
@@ -1227,6 +1373,13 @@ export function recusaDaContratacaoGi(
     const sem = payload.qtdeHorasSem;
     const horaValida = (v: number | null): boolean => typeof v === "number" && v > 0;
     if (!(horaValida(mes) && horaValida(sem))) return "GI_SALARIO_HORISTA_SEM_JORNADA";
+  }
+  // O CLIENTE FINAL vem POR ÚLTIMO de propósito: as recusas anteriores são as que o time já conhece e já
+  // sabe destravar, e pôr uma nova à frente delas trocaria o motivo que a tela mostra hoje em toda
+  // admissão incompleta. Régua de PRESENÇA DA RESOLUÇÃO mais piso 1, igual à da empresa: cliente `0` é o
+  // default do fornecedor, não um cliente.
+  if (!(typeof payload.codigoCliente === "number" && Number.isInteger(payload.codigoCliente) && payload.codigoCliente > 0)) {
+    return "GI_CLIENTE_NAO_RESOLVIDO";
   }
   return null;
 }
@@ -1449,6 +1602,7 @@ export interface CandidatoParaGi {
 export interface DadosGiParaPessoa {
   nacionalidade?: string | null;
   naturalidade?: string | null;
+  cidadeNascimento?: string | null;
   filiacaoNomeMae?: string | null;
   filiacaoNomePai?: string | null;
   estadoCivil?: string | null;
@@ -1457,10 +1611,12 @@ export interface DadosGiParaPessoa {
   rgNumero?: string | null;
   rgOrgaoEmissor?: string | null;
   rgUf?: string | null;
+  rgCidade?: string | null;
   rgDataEmissao?: string | null;
   ctpsNumero?: string | null;
   ctpsSerie?: string | null;
   ctpsUf?: string | null;
+  ctpsCidade?: string | null;
   ctpsData?: string | null;
   pis?: string | null;
   tituloNumero?: string | null;
@@ -1503,6 +1659,7 @@ export function montarPessoaParaGi(
     conta: c.conta ?? null,
     nacionalidade: d.nacionalidade ?? null,
     naturalidade: d.naturalidade ?? null,
+    cidadeNascimento: d.cidadeNascimento ?? null,
     nomeMae: d.filiacaoNomeMae ?? null,
     nomePai: d.filiacaoNomePai ?? null,
     estadoCivil: d.estadoCivil ?? null,
@@ -1511,10 +1668,12 @@ export function montarPessoaParaGi(
     rg: d.rgNumero ?? null,
     rgOrgao: d.rgOrgaoEmissor ?? null,
     rgUf: d.rgUf ?? null,
+    rgCidade: d.rgCidade ?? null,
     rgDataEmissao: d.rgDataEmissao ?? null,
     ctpsNumero: d.ctpsNumero ?? null,
     ctpsSerie: d.ctpsSerie ?? null,
     ctpsUf: d.ctpsUf ?? null,
+    ctpsCidade: d.ctpsCidade ?? null,
     ctpsData: d.ctpsData ?? null,
     pis: d.pis ?? null,
     tituloNumero: d.tituloNumero ?? null,

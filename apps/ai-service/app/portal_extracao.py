@@ -54,6 +54,11 @@ class CampoAlvo:
 _DATA = "data no formato AAAA-MM-DD"
 _DIGITOS = "somente dígitos, sem pontuação"
 _TEXTO = "texto exatamente como aparece no documento"
+# CIDADE É SÓ O NOME DA CIDADE, E ISSO É INSTRUÇÃO DE DESTINO, NÃO PREFERÊNCIA DE ESTILO: o campo
+# correspondente no G.I tem 30 caracteres, e "SAO PAULO - SP" gasta o espaço com uma informação que
+# já viaja em campo próprio (a UF é `naturalidade`/`rgUf`/`ctpsUf`, sigla de 2 letras). Documento
+# brasileiro escreve a cidade junto da UF quase sempre, então a instrução precisa ser explícita.
+_CIDADE = "somente o nome da cidade, sem a UF, sem sigla de estado e sem hífen"
 
 CAMPOS_POR_TIPO: dict[str, tuple[CampoAlvo, ...]] = {
     "RG": (
@@ -61,6 +66,8 @@ CAMPOS_POR_TIPO: dict[str, tuple[CampoAlvo, ...]] = {
         CampoAlvo("rgOrgaoEmissor", "Órgão emissor", _TEXTO),
         CampoAlvo("rgUf", "UF de emissão", "sigla de duas letras maiúsculas"),
         CampoAlvo("rgDataEmissao", "Data de emissão", _DATA),
+        CampoAlvo("cidadeRg", "Cidade de emissão do RG", _CIDADE),
+        CampoAlvo("cidadeNascimento", "Cidade de nascimento", _CIDADE),
         CampoAlvo("nomeCompleto", "Nome completo", _TEXTO),
         CampoAlvo("dataNascimento", "Data de nascimento", _DATA),
         CampoAlvo("nomeMae", "Nome da mãe", _TEXTO),
@@ -76,6 +83,7 @@ CAMPOS_POR_TIPO: dict[str, tuple[CampoAlvo, ...]] = {
         CampoAlvo("ctpsSerie", "Série", _TEXTO),
         CampoAlvo("ctpsUf", "UF", "sigla de duas letras maiúsculas"),
         CampoAlvo("ctpsDataExpedicao", "Data de expedição", _DATA),
+        CampoAlvo("cidadeCtps", "Cidade de expedição da CTPS", _CIDADE),
         CampoAlvo("pis", "PIS/PASEP", _DIGITOS),
         CampoAlvo("nomeCompleto", "Nome completo", _TEXTO),
         CampoAlvo("dataNascimento", "Data de nascimento", _DATA),
@@ -119,6 +127,9 @@ CAMPOS_POR_TIPO: dict[str, tuple[CampoAlvo, ...]] = {
         CampoAlvo("estadoCivil", "Estado civil", _TEXTO),
         CampoAlvo("nomeCompleto", "Nome completo", _TEXTO),
         CampoAlvo("dataNascimento", "Data de nascimento", _DATA),
+        # A CERTIDÃO É A FONTE MAIS CONFIÁVEL DA CIDADE DE NASCIMENTO: ela traz o município do
+        # registro por escrito, enquanto no RG a naturalidade depende do modelo e do estado.
+        CampoAlvo("cidadeNascimento", "Cidade de nascimento", _CIDADE),
         CampoAlvo("nomeMae", "Nome da mãe", _TEXTO),
         CampoAlvo("nomePai", "Nome do pai", _TEXTO),
     ),

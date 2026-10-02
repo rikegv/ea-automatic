@@ -62,6 +62,10 @@ export class GiLeitorService {
         dados: {
           nacionalidade: admissaoDadosGi.nacionalidade,
           naturalidade: admissaoDadosGi.naturalidade,
+          // A CIDADE de nascimento (0141). Campo SEPARADO da `naturalidade`, que é a SIGLA DA UF: no GI
+          // são `cidadeNascimento` (30) e `naturalidade` (2), e o código IBGE do município sai desta
+          // cidade + aquela UF, pelo de/para.
+          cidadeNascimento: admissaoDadosGi.cidadeNascimento,
           filiacaoNomeMae: admissaoDadosGi.filiacaoNomeMae,
           filiacaoNomePai: admissaoDadosGi.filiacaoNomePai,
           estadoCivil: admissaoDadosGi.estadoCivil,
@@ -70,10 +74,12 @@ export class GiLeitorService {
           rgNumero: admissaoDadosGi.rgNumero,
           rgOrgaoEmissor: admissaoDadosGi.rgOrgaoEmissor,
           rgUf: admissaoDadosGi.rgUf,
+          rgCidade: admissaoDadosGi.rgCidade,
           rgDataEmissao: admissaoDadosGi.rgDataEmissao,
           ctpsNumero: admissaoDadosGi.ctpsNumero,
           ctpsSerie: admissaoDadosGi.ctpsSerie,
           ctpsUf: admissaoDadosGi.ctpsUf,
+          ctpsCidade: admissaoDadosGi.ctpsCidade,
           ctpsData: admissaoDadosGi.ctpsData,
           pis: admissaoDadosGi.pis,
           tituloNumero: admissaoDadosGi.tituloNumero,
@@ -173,6 +179,11 @@ export class GiLeitorService {
       dataAdmissao: base.dataAdmissao,
       tipoContrato: base.tipoContrato,
       vinculos,
+      // O CLIENTE FINAL (`codigoCliente` do GI), REUSANDO o `cod_cliente` que esta consulta JÁ trazia
+      // para achar o vínculo: nenhuma consulta nova. ⚠️ É o TOMADOR, não a empresa do grupo (essa sai de
+      // `cliente_vinculos`, abaixo). De/para DIRETO, medido em 99% (`docs/MAPA-GI-CLIENTE-E-CIDADES.md`);
+      // não numérico ou ausente resolve para nulo e o envio é RECUSADO, nunca `0`.
+      codCliente: base.codCliente,
     });
   }
 

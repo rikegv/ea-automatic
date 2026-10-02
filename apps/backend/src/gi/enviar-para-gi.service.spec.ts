@@ -53,6 +53,11 @@ const CONTRATACAO_OK: ContratacaoGi = {
   tipoContrato: "D",
   codigoEmpresa: 1,
   codigoFilial: 4,
+  // CLIENTE FINAL resolvido (0141/02-10), pelo MESMO motivo que a unidade entrou aqui: a recusa do
+  // cliente é a última da ordem, e sem ele TODO cenário deste arquivo cairia em
+  // `GI_CLIENTE_NAO_RESOLVIDO` e passaria a provar outra coisa. ⚠️ É o TOMADOR
+  // (`admissoes.cod_cliente`), não a empresa do Grupo Soulan (`codigoEmpresa`).
+  codigoCliente: 4321,
 };
 
 function fakes(over: {

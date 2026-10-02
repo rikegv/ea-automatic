@@ -203,8 +203,9 @@ def test_nenhum_valor_extraido_vai_para_o_log(portal_ligado, monkeypatch, caplog
     registrado = "\n".join(caplog.messages) + "\n" + caplog.text
     for valor in (RG_LIDO, NOME_LIDO, MAE_LIDA):
         assert valor not in registrado
-    # O que se registra é quantidade e resultado: 3 de 8 campos lidos.
-    assert "3 de 8" in caplog.text
+    # O que se registra é QUANTIDADE, nunca valor: 3 campos lidos dos que o catálogo do RG pede. O
+    # total vem do catálogo, não escrito à mão: campo novo no RG não deve quebrar a régua de §A.6.
+    assert f"3 de {len(portal_extracao.campos_para('RG'))}" in caplog.text
 
 
 def test_valor_extraido_nao_vaza_nem_quando_a_ia_falha(portal_ligado, monkeypatch, caplog):
@@ -258,3 +259,38 @@ def test_com_campos_pedidos_o_prompt_lista_as_chaves_e_manda_nao_chutar():
     assert "CAMPOS PARA EXTRAIR" in prompt
     assert "rgNumero" in prompt
     assert "valor vazio e confianca 0" in prompt
+
+
+# ── 5. As três cidades do G.I ──────────────────────────────────────────────
+# O dado SEMPRE esteve nos documentos; o que faltava era a pergunta. Estes testes trancam as chaves
+# porque o modo de falha desta frente não é erro, é SILÊNCIO: chave que a extração emite com nome
+# diferente do que a allowlist do backend aceita (`domain/dados-gi-campos.ts`) é dado coletado que
+# morre sem log e sem ninguém notar, e foi exatamente o que aconteceu com `ctpsDataExpedicao`.
+# §A.6: tudo aqui olha o CATÁLOGO, nunca valor de documento, então não há PII em jogo.
+def test_as_tres_cidades_sao_pedidas_nos_documentos_que_as_trazem():
+    def chaves(tipo: str) -> set[str]:
+        return {a.campo for a in portal_extracao.campos_para(tipo)}
+
+    assert {"cidadeRg", "cidadeNascimento"} <= chaves("RG")
+    assert "cidadeCtps" in chaves("CTPS")
+    assert "cidadeNascimento" in chaves("CERTIDAO_NASC_CASAMENTO")
+
+
+def test_a_instrucao_da_cidade_proibe_a_uf_junto():
+    """O destino tem 30 caracteres: "SAO PAULO - SP" gasta o espaço com dado que já viaja à parte."""
+    pedidos = [
+        a
+        for tipo in ("RG", "CTPS", "CERTIDAO_NASC_CASAMENTO")
+        for a in portal_extracao.campos_para(tipo)
+        if a.campo.startswith("cidade")
+    ]
+    assert len(pedidos) == 4
+    for alvo in pedidos:
+        assert "sem a UF" in alvo.formato
+        assert "/" not in alvo.formato
+
+
+def test_cidade_do_rg_e_cidade_da_ctps_sao_chaves_DISTINTAS():
+    """Trocar uma pela outra seria a mesma colisão de nome que a frente já pagou com `tipoContrato`."""
+    assert "cidadeCtps" not in {a.campo for a in portal_extracao.campos_para("RG")}
+    assert "cidadeRg" not in {a.campo for a in portal_extracao.campos_para("CTPS")}

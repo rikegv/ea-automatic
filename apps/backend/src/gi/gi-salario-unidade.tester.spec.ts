@@ -80,6 +80,16 @@ function contratacaoCom(
     dataAdmissao: "2026-11-03",
     tipoContrato: "Temporário",
     vinculos: [{ tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "4", ativo: true }],
+    // O CLIENTE FINAL entrou aqui em 02/10/2026 pelo MESMO motivo que a unidade entrou na fixture do
+    // `gi-empresa-filial-failclosed`: `recusaDaContratacaoGi` passou a exigir o cliente resolvido, e sem
+    // ele a unidade deixava de ser a ÚNICA variável do experimento (todo cenário voltava
+    // `GI_CLIENTE_NAO_RESOLVIDO`). Nenhuma asserção foi afrouxada: é uma admissão COMPLETA, que é o único
+    // cenário em que a pergunta deste arquivo tem sentido.
+    //
+    // O VALOR É `"00123"` DE PROPÓSITO: o zero à esquerda é ABSORVIDO no cliente (`int32`, 123), ao
+    // contrário de empresa/filial (`int16`), que recusam `"04"`. A prova dessa assimetria tem casa
+    // própria: `gi/gi-cliente-e-cidades.tester.spec.ts`.
+    codCliente: "00123",
   });
 }
 
@@ -308,7 +318,10 @@ describe("a ORDEM: salario invalido, depois sem unidade, depois horista sem jorn
    *  3. `GI_SALARIO_HORISTA_SEM_JORNADA` é o último, e é o único que o time NÃO resolve sozinho.
    */
   function payload(salario: unknown, tipoSalario: unknown) {
-    return { codigoEmpresa: 1, codigoFilial: 4, salario, tipoSalario } as never;
+    // `codigoCliente` resolvido e DISTINTO de empresa e filial: as três recusas medidas aqui são as do
+    // SALÁRIO, e o cliente não resolvido abafaria todas elas (ele é a ÚLTIMA da ordem, então só aparece
+    // quando o resto passou). Ver a régua da ordem completa em `gi/gi-cliente-e-cidades.tester.spec.ts`.
+    return { codigoEmpresa: 1, codigoFilial: 4, codigoCliente: 12345, salario, tipoSalario } as never;
   }
 
   it("salario ZERO com unidade FALTANDO reporta o SALARIO, nao a unidade", () => {

@@ -49,6 +49,19 @@ export const CAMPOS_GI: Readonly<Record<string, CampoGiDef>> = {
   // que já normaliza para 2 letras maiúsculas e descarta o que não vira sigla. Antes era "texto", e
   // cidade digitada aqui chegava ao GI como NULO (`codigoCurto` anula o que não cabe em 2).
   naturalidade: { coluna: "naturalidade", rotulo: "Naturalidade", tipo: "uf" },
+  // A CIDADE de nascimento (0141), e ela é `texto`, NÃO `uf`: é o par da `naturalidade`, não um
+  // substituto dela. O GI tem os DOIS campos (`naturalidade`, 2, a sigla; `cidadeNascimento`, 30, o
+  // nome do município), e a chave aqui é a que a extração vai emitir.
+  //
+  // ⚠️ A CHAVE PRECISA EXISTIR AQUI ANTES DE A IA EMITIR, senão ela morre em SILÊNCIO: foi exatamente
+  // o que aconteceu com `ctpsDataExpedicao` (a IA emitia, a allowlist só conhecia `ctpsData`, e o
+  // valor era descartado sem ninguém ver). Estas três entram por isso, em par com a mudança da
+  // extração (`ai-service/app/portal_extracao.py`), que é outra camada.
+  cidadeNascimento: {
+    coluna: "cidadeNascimento",
+    rotulo: "Cidade de nascimento",
+    tipo: "texto",
+  },
   nomeMae: { coluna: "filiacaoNomeMae", rotulo: "Nome da mãe", tipo: "texto" },
   nomePai: { coluna: "filiacaoNomePai", rotulo: "Nome do pai", tipo: "texto" },
   // Grupo 2
@@ -59,11 +72,15 @@ export const CAMPOS_GI: Readonly<Record<string, CampoGiDef>> = {
   rgNumero: { coluna: "rgNumero", rotulo: "Número do RG", tipo: "texto" },
   rgOrgaoEmissor: { coluna: "rgOrgaoEmissor", rotulo: "Órgão emissor do RG", tipo: "texto" },
   rgUf: { coluna: "rgUf", rotulo: "UF do RG", tipo: "uf" },
+  // Cidade de emissão do RG (0141) -> `cidadeRG` no GI. `texto`, como a cidade do endereço.
+  cidadeRg: { coluna: "rgCidade", rotulo: "Cidade de emissão do RG", tipo: "texto" },
   rgDataEmissao: { coluna: "rgDataEmissao", rotulo: "Data de emissão do RG", tipo: "data" },
   // Grupo 3 (CTPS)
   ctpsNumero: { coluna: "ctpsNumero", rotulo: "Número da CTPS", tipo: "texto" },
   ctpsSerie: { coluna: "ctpsSerie", rotulo: "Série da CTPS", tipo: "texto" },
   ctpsUf: { coluna: "ctpsUf", rotulo: "UF da CTPS", tipo: "uf" },
+  // Cidade de expedição da CTPS (0141) -> `cidadeExpedicao` no GI.
+  cidadeCtps: { coluna: "ctpsCidade", rotulo: "Cidade de expedição da CTPS", tipo: "texto" },
   ctpsData: { coluna: "ctpsData", rotulo: "Data de expedição da CTPS", tipo: "data" },
   // Grupo 3 (PIS)
   pis: { coluna: "pis", rotulo: "PIS/PASEP", tipo: "texto" },

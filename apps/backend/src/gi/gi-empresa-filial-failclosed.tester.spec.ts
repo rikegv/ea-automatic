@@ -39,6 +39,12 @@ import {
  */
 
 const CPF_SINTETICO = "99988877766";
+
+/**
+ * O CLIENTE FINAL resolvido, sintético, e ESCOLHIDO para não colidir com nenhum código de empresa nem de
+ * filial deste arquivo. É o tomador, não a empresa do Grupo Soulan que emprega: três códigos distintos.
+ */
+const CLIENTE_RESOLVIDO = 12345;
 const PESSOA: PessoaParaGi = { nome: "Zarolina Trevisanto Quembe", cpf: CPF_SINTETICO };
 
 /** A contratação que o leitor devolveria, SEM empresa e SEM filial (o estado normal hoje). */
@@ -306,9 +312,41 @@ function vinculoCru(empresaCodigo: string | null, filial: string | null): Vincul
   return { tipoServico: "TEMPORARIO", empresaCodigo, filial, ativo: true };
 }
 
-/** Payload mínimo só com o que as guardas duras leem. */
-function payloadCom(empresa: unknown, filial: unknown, salario = 1500.5): FuncionarioSelecao {
-  return { codigoEmpresa: empresa, codigoFilial: filial, salario } as unknown as FuncionarioSelecao;
+/**
+ * Payload mínimo só com o que as guardas duras leem.
+ *
+ * ATUALIZADO em 01/10/2026, quando a UNIDADE do salário entrou na allowlist: `recusaDaContratacaoGi`
+ * passou a exigir `tipoSalario` declarado, e sem ele TODO cenário de par VÁLIDO deste arquivo voltava
+ * `GI_SALARIO_SEM_UNIDADE` ANTES de chegar à régua que esta casa mede (empresa e filial).
+ *
+ * ⚠️ NENHUMA ASSERÇÃO FOI AFROUXADA PARA ISSO. O default `"M"` é o de uma admissão COMPLETA, que é o
+ * único cenário em que a pergunta deste arquivo ("o par passa ou recusa?") tem sentido. A régua da
+ * unidade tem arquivo próprio, `gi-salario-unidade.tester.spec.ts`, e lá a exigência é a oposta (recusar
+ * quando ninguém declarou, e recusar o `H` por falta da jornada em horas). O parâmetro fica explícito
+ * para o teste de ORDEM poder passar `null` de propósito.
+ */
+function payloadCom(
+  empresa: unknown,
+  filial: unknown,
+  salario = 1500.5,
+  tipoSalario: "H" | "M" | null = "M",
+  codigoCliente: unknown = CLIENTE_RESOLVIDO,
+): FuncionarioSelecao {
+  return {
+    codigoEmpresa: empresa,
+    codigoFilial: filial,
+    salario,
+    tipoSalario,
+    // O CLIENTE FINAL entrou na fixture em 02/10/2026, com o MESMO fundamento do `tipoSalario` acima:
+    // `recusaDaContratacaoGi` passou a exigir o cliente resolvido, e sem ele TODO cenário de par VÁLIDO
+    // deste arquivo voltava `GI_CLIENTE_NAO_RESOLVIDO` em vez da régua que esta casa mede.
+    //
+    // ⚠️ NENHUMA ASSERÇÃO FOI AFROUXADA: o default é o de uma admissão COMPLETA, e ele é
+    // DELIBERADAMENTE distinto dos códigos de empresa e filial usados aqui (1, 7, 0, 4, 37, 43, 44), para
+    // que emitir um no lugar do outro apareça. A régua própria do cliente vive em
+    // `gi/gi-cliente-e-cidades.tester.spec.ts`, e lá a exigência é a oposta (recusar quando não resolve).
+    codigoCliente,
+  } as unknown as FuncionarioSelecao;
 }
 
 describe("EMPRESA e FILIAL tem reguas DIFERENTES: empresa 0 recusa, filial 0 PASSA", () => {
@@ -522,5 +560,17 @@ describe("O PAR, nao os campos: numericamente valido e INEXISTENTE no GI tem de 
   it("par conhecido mas SALARIO invalido ainda recusa (as guardas nao se anulam)", () => {
     expect(recusaDaContratacaoGi(payloadCom(1, 0, 0), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
     expect(recusaDaContratacaoGi(payloadCom(1, 0, -100), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
+  });
+
+  it("a ordem segue valendo com a UNIDADE no meio: empresa/filial e PAR vem ANTES do salario", () => {
+    // Acrescentar guardas de salário não pode reordenar as de cliente: "não resolvi o vínculo" e "o par
+    // não existe no GI" continuam sendo reportados antes de qualquer coisa do salário, inclusive quando o
+    // salário também está incompleto. Cada motivo manda o time a uma ação diferente.
+    expect(recusaDaContratacaoGi(payloadCom(null, null, 0, null), PAR_CONHECIDO)).toBe(
+      "GI_SEM_EMPRESA_FILIAL",
+    );
+    expect(recusaDaContratacaoGi(payloadCom(1, 37, 0, null), PAR_CONHECIDO)).toBe(
+      "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO",
+    );
   });
 });

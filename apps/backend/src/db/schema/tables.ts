@@ -2085,7 +2085,14 @@ export const admissaoDadosGi = pgTable(
       .references(() => admissoes.id, { onDelete: "cascade" }),
     // ── Grupo 1 (identidade que o EA não tem) e filiação ──
     nacionalidade: varchar("nacionalidade", { length: 120 }),
+    // ⚠️ `naturalidade` é a SIGLA DA UF de nascimento, NÃO a cidade: o campo do GI tem `maxLength` 2 e
+    // a `description` lista as 27 siglas. A CIDADE de nascimento é `cidadeNascimento`, logo abaixo, e
+    // são campos DIFERENTES do fornecedor (`naturalidade` x `cidadeNascimento`). Não unificar: o envio
+    // anula o que não cabe em 2 (`codigoCurto`), então cidade gravada aqui chegaria NULA ao GI.
     naturalidade: varchar("naturalidade", { length: 120 }),
+    // Cidade de NASCIMENTO (0141). `varchar(120)` igual a `end_cidade` (mesma natureza de dado); o teto
+    // de 30 é do contrato do GI e é aplicado na SAÍDA (`montarFuncionarioSelecao`), não aqui.
+    cidadeNascimento: varchar("cidade_nascimento", { length: 120 }),
     filiacaoNomeMae: varchar("filiacao_nome_mae", { length: 200 }),
     filiacaoNomePai: varchar("filiacao_nome_pai", { length: 200 }),
     // ── Grupo 2 (dados civis) ──
@@ -2096,10 +2103,15 @@ export const admissaoDadosGi = pgTable(
     rgNumero: varchar("rg_numero", { length: 30 }),
     rgOrgaoEmissor: varchar("rg_orgao_emissor", { length: 40 }),
     rgUf: varchar("rg_uf", { length: 2 }),
+    // Cidade de emissão do RG (0141) → `cidadeRG` no GI. Par da `rg_uf`, não da `cidade_nascimento`.
+    rgCidade: varchar("rg_cidade", { length: 120 }),
     rgDataEmissao: date("rg_data_emissao"),
     ctpsNumero: varchar("ctps_numero", { length: 30 }),
     ctpsSerie: varchar("ctps_serie", { length: 20 }),
     ctpsUf: varchar("ctps_uf", { length: 2 }),
+    // Cidade de expedição da CTPS (0141) → `cidadeExpedicao` no GI (nome do campo lá NÃO menciona CTPS;
+    // o de/para foi confirmado pela vizinhança de `ufExpedicao`, que é a UF da CTPS).
+    ctpsCidade: varchar("ctps_cidade", { length: 120 }),
     ctpsData: date("ctps_data"),
     pis: varchar("pis", { length: 20 }),
     tituloNumero: varchar("titulo_numero", { length: 20 }),

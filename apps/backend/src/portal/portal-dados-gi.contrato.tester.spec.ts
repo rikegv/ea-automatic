@@ -223,24 +223,51 @@ describe("R5: `montarFuncionarioSelecao` monta SO dado de pessoa, nunca arquivo/
 // REQUISITO 5b: A ALLOWLIST 2 (CONTRATACAO) ATRAVESSA, E CONTINUA SENDO FECHADA
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("R5b: os SEIS campos de contratacao atravessam pela porta NOMEADA, e so eles", () => {
+describe("R5b: os NOVE campos de contratacao atravessam pela porta NOMEADA, e so eles", () => {
   const SALARIO_SINTETICO = 2000;
+  /**
+   * ATUALIZADA em 01/10/2026: a UNIDADE do salário (`tipoSalario`) entrou como SÉTIMO campo, e o prazo
+   * do vínculo `4` (Temporário) passou de nulo para `D`. Os dois são o mesmo tipo de conserto: no GI
+   * `tipoSalario` tem `default "M"`, `tipoContrato` tem `default "I"` e a JORNADA tem `default 0`, então
+   * **nulo não deixa o campo vazio, grava o default do fornecedor**.
+   *
+   * A JORNADA (`qtdeHorasMes`/`qtdeHorasSem`, 0140) entra NULA porque a fixture é de MENSALISTA: ela é
+   * exigida só quando a unidade é `H`, e a régua de quem a exige vive em
+   * `gi/gi-salario-unidade.tester.spec.ts`. Os dois campos são OBRIGATÓRIOS e anuláveis no tipo de
+   * propósito: allowlist fechada obriga cada dublê a declarar o campo novo, em vez de ele entrar calado
+   * como `undefined`.
+   */
   const CONTRATACAO = {
     salario: SALARIO_SINTETICO,
+    tipoSalario: "M",
+    qtdeHorasMes: null,
+    qtdeHorasSem: null,
     dataAdmissao: "2026-11-03",
     vinculo: "4",
-    tipoContrato: null,
+    tipoContrato: "D",
     codigoEmpresa: 1,
     codigoFilial: 4,
+    // O CLIENTE FINAL (02/10/2026), DÉCIMO campo nomeado e o TOMADOR do serviço: `codigoEmpresa` e
+    // `codigoFilial` são a empresa do Grupo Soulan que EMPREGA, este é para quem o serviço é prestado.
+    // O valor é distinto dos outros dois de propósito, para que a troca de um pelo outro apareça.
+    codigoCliente: 12345,
   } as const;
 
-  it("os seis atravessam quando vem pela porta nomeada (o que o diretor autorizou)", () => {
+  it("os dez atravessam quando vem pela porta nomeada (o que o diretor autorizou)", () => {
     const f = montarFuncionarioSelecao({ cpf: CPF_SINTETICO }, undefined, { ...CONTRATACAO });
     expect(f.salario).toBe(SALARIO_SINTETICO);
+    expect(f.tipoSalario).toBe("M");
+    // A jornada não informada atravessa como NULO, nunca como `0`: zero é o default do fornecedor, e é
+    // ele que gravaria "valor por hora vezes ZERO horas".
+    expect(f.qtdeHorasMes).toBeNull();
+    expect(f.qtdeHorasSem).toBeNull();
     expect(f.dataAdmissao).toBe("2026-11-03");
     expect(f.vinculo).toBe("4");
+    expect(f.tipoContrato).toBe("D");
     expect(f.codigoEmpresa).toBe(1);
     expect(f.codigoFilial).toBe(4);
+    // E o TOMADOR chega com o valor DELE, não com o da empresa nem com o da filial.
+    expect(f.codigoCliente).toBe(12345);
     expect(f).toHaveProperty("tipoContrato");
   });
 

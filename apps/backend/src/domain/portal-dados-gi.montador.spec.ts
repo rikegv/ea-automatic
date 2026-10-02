@@ -546,6 +546,10 @@ describe("recusaDaContratacaoGi: as guardas duras, e a ordem delas", () => {
     tipoContrato: null,
     codigoEmpresa: 1,
     codigoFilial: 4,
+    // CLIENTE FINAL resolvido na fixture (0141/02-10): a recusa do cliente é a ÚLTIMA da ordem, e sem
+    // ele TODO cenário de par válido deste bloco voltaria `GI_CLIENTE_NAO_RESOLVIDO` em vez da régua que
+    // esta casa mede. ⚠️ Não confundir com `codigoEmpresa`: este é o TOMADOR.
+    codigoCliente: 4321,
   };
   const payload = (c: ContratacaoGi) => montarFuncionarioSelecao({ cpf: CPF }, undefined, c);
 
@@ -693,6 +697,10 @@ describe("montarFuncionarioSelecao: a contratacao entra SO pelo terceiro paramet
     tipoContrato: "D",
     codigoEmpresa: 1,
     codigoFilial: 4,
+    // O CLIENTE FINAL (0141/02-10). ⚠️ NÃO é `codigoEmpresa` (empresa do Grupo Soulan): é o TOMADOR,
+    // vindo de `admissoes.cod_cliente` por de/para direto. A fixture o traz RESOLVIDO porque toda esta
+    // casa mede OUTRAS réguas, e sem ele a recusa do cliente chegaria antes delas.
+    codigoCliente: 4321,
   };
 
   it("os sete campos saem no payload", () => {
@@ -1465,5 +1473,211 @@ describe("A MIGRATION 0140 e o CODIGO dizem a MESMA coisa, provado contra o .sql
       expect(SQL, `a 0140 cria ${c}`).toContain(`ADD COLUMN IF NOT EXISTS "${c}"`);
     }
     expect(/ADD COLUMN IF NOT EXISTS "[^"]+" [^;]*not null/i.test(SQL)).toBe(false);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// OS CINCO CAMPOS QUE FALTARAM na conferência dos três registros do GI (02/10/2026)
+// Medição e de/para: `docs/MAPA-GI-CLIENTE-E-CIDADES.md`.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("as TRES cidades da pessoa: cada uma do SEU documento, e nenhuma trocada", () => {
+  /**
+   * ⚠️ O RISCO DESTE BLOCO NÃO É O CAMPO FALTAR, É ELE IR NO LUGAR DO VIZINHO. O contrato do GI não traz
+   * `description` nestes campos, então o de/para veio da POSIÇÃO no schema, e a frente JÁ PAGOU uma
+   * colisão de nome igual (o `tipoContrato` do GI, que é o PRAZO `D`/`I` e não o nosso `tipo_contrato`).
+   * Cidade do RG gravada como cidade da CTPS é documento de identidade errado na folha, sem erro nenhum.
+   *
+   * Os três valores são DISTINTOS de propósito: valor igual nos três faria a troca passar.
+   */
+  const PESSOA: PessoaParaGi = {
+    cidadeNascimento: "Recife",
+    naturalidade: "PE",
+    rgCidade: "Campinas",
+    rgUf: "SP",
+    ctpsCidade: "Santos",
+    ctpsUf: "SP",
+  };
+
+  it("cada cidade sai no SEU campo do GI, sem troca entre RG, CTPS e nascimento", () => {
+    const f = montarFuncionarioSelecao(PESSOA);
+    expect(f.cidadeNascimento).toBe("Recife");
+    expect(f.cidadeRG).toBe("Campinas");
+    expect(f.cidadeExpedicao).toBe("Santos");
+    // E as UFs seguem nos campos delas: `naturalidade` é a UF de NASCIMENTO (maxLength 2), não a cidade.
+    expect(f.naturalidade).toBe("PE");
+    expect(f.ufrg).toBe("SP");
+    expect(f.ufExpedicao).toBe("SP");
+  });
+
+  it("as chaves EXISTEM mesmo sem dado, e saem nulas (payload de formato fixo)", () => {
+    const f = montarFuncionarioSelecao({});
+    for (const chave of ["cidadeNascimento", "cidadeRG", "cidadeExpedicao", "codMunicipioNascto"]) {
+      expect(Object.keys(f), chave).toContain(chave);
+    }
+    expect(f.cidadeNascimento).toBeNull();
+    expect(f.cidadeRG).toBeNull();
+    expect(f.cidadeExpedicao).toBeNull();
+  });
+
+  it("TRUNCA em 30, NAO anula: municipio de 32 caracteres existe de verdade", () => {
+    /**
+     * ESTE É O TESTE QUE TRAVA O HELPER CERTO. `cortarTexto` trunca; `codigoCurto` ANULA o que não cabe.
+     * "Vila Bela da Santíssima Trindade" tem **32 caracteres**, e por `codigoCurto` chegaria ao GI como
+     * NULO: o MESMO nada de antes desta frente, calado, depois de toda a coleta ter sido construída para
+     * trazer a cidade. Cidade é TEXTO, não código: truncar perde o final do nome, anular perde a cidade.
+     */
+    const LONGO = "Vila Bela da Santissima Trindade";
+    expect(LONGO.length).toBe(32);
+    const f = montarFuncionarioSelecao({ cidadeNascimento: LONGO, rgCidade: LONGO, ctpsCidade: LONGO });
+    for (const v of [f.cidadeNascimento, f.cidadeRG, f.cidadeExpedicao]) {
+      expect(v).not.toBeNull();
+      expect(v).toHaveLength(30);
+      expect(v).toBe(LONGO.slice(0, 30));
+    }
+  });
+
+  it("montarPessoaParaGi traz as tres colunas novas de `admissao_dados_gi`", () => {
+    const p = montarPessoaParaGi(
+      { nome: "Candidato Sintetico" },
+      { cidadeNascimento: "Recife", rgCidade: "Campinas", ctpsCidade: "Santos" },
+    );
+    expect(p.cidadeNascimento).toBe("Recife");
+    expect(p.rgCidade).toBe("Campinas");
+    expect(p.ctpsCidade).toBe("Santos");
+  });
+});
+
+describe("codMunicipioNascto: UM de/para serve os DOIS codigos de municipio", () => {
+  /** De/para sintético que só conhece dois municípios, cada um na SUA UF. */
+  const DEPARA: DeParaGi = {
+    codigoCidade: (nome, uf) =>
+      nome === "Recife" && uf === "PE" ? "2611606" : nome === "Sao Paulo" && uf === "SP" ? "3550308" : null,
+  };
+
+  it("sai do MESMO de/para de `codigoCidadeResid`, com a UF vinda da `naturalidade`", () => {
+    const f = montarFuncionarioSelecao(
+      { cidadeNascimento: "Recife", naturalidade: "PE", cidade: "Sao Paulo", uf: "SP" },
+      DEPARA,
+    );
+    expect(f.codMunicipioNascto).toBe("2611606");
+    // E o de residência continua resolvendo pelo endereço, no mesmo payload: são dois campos, um de/para.
+    expect(f.codigoCidadeResid).toBe("3550308");
+  });
+
+  it("de/para VAZIO (o estado de hoje): os DOIS codigos saem NULOS, nunca inventados", () => {
+    const f = montarFuncionarioSelecao({
+      cidadeNascimento: "Recife",
+      naturalidade: "PE",
+      cidade: "Sao Paulo",
+      uf: "SP",
+    });
+    expect(f.codMunicipioNascto).toBeNull();
+    expect(f.codigoCidadeResid).toBeNull();
+  });
+
+  it("cidade de nascimento sem a UF nao resolve codigo (nao se chuta o municipio)", () => {
+    const f = montarFuncionarioSelecao({ cidadeNascimento: "Recife" }, DEPARA);
+    expect(f.cidadeNascimento).toBe("Recife");
+    expect(f.codMunicipioNascto).toBeNull();
+  });
+
+  it("o codigo sai SEM zero a esquerda (campo de contagem, padrao inteiro do contrato)", () => {
+    const f = montarFuncionarioSelecao(
+      { cidadeNascimento: "X", naturalidade: "SP" },
+      { codigoCidade: () => "0355030" },
+    );
+    expect(f.codMunicipioNascto).toBe("355030");
+  });
+});
+
+describe("codigoCliente: o CLIENTE FINAL, de/para DIRETO, e `0` NUNCA sai", () => {
+  const BASE = { salario: "1500.50", tipoContrato: "Temporário" } as const;
+
+  it("`cod_cliente` numerico vira `codigoCliente` DIRETO, sem tabela de de/para", () => {
+    expect(montarContratacaoGi({ ...BASE, codCliente: "26360" }).codigoCliente).toBe(26360);
+    expect(montarContratacaoGi({ ...BASE, codCliente: 4321 }).codigoCliente).toBe(4321);
+    // Espaço em volta é do `varchar` do EA, não do dado.
+    expect(montarContratacaoGi({ ...BASE, codCliente: " 777 " }).codigoCliente).toBe(777);
+  });
+
+  it("`0`, vazio, ausente e NAO NUMERICO resolvem para NULO (os 7 da base caem aqui)", () => {
+    for (const cru of ["0", "00", "000", "", "   ", "ABC", "12A", "1.5", "-1", "+1", null, undefined]) {
+      expect(montarContratacaoGi({ ...BASE, codCliente: cru }).codigoCliente, String(cru)).toBeNull();
+    }
+  });
+
+  it("ZERO A ESQUERDA e ABSORVIDO, nao recusado: `00123` e o MESMO cliente que `123`", () => {
+    /**
+     * A régua aqui é a do `inteiroGi` (campo de CONTAGEM), **não** a do `inteiroNaFaixaInt16` (que recusa
+     * `"04"` em empresa/filial): o campo do outro lado é `int32`, e recusar por formatação reprovaria
+     * admissão LEGÍTIMA por um zero que não muda o número. Oposto de `documentoNumerico` (CPF/PIS), onde
+     * o zero é dígito do documento.
+     *
+     * MEDIDO em 02/10/2026: nenhum dos 251 clientes e nenhuma das 3.021 admissões tem zero à esquerda, e
+     * o maior código é 57460. A tolerância é defesa contra digitação futura, não remendo de dado atual.
+     */
+    expect(montarContratacaoGi({ ...BASE, codCliente: "00123" }).codigoCliente).toBe(123);
+    expect(montarContratacaoGi({ ...BASE, codCliente: "0057460" }).codigoCliente).toBe(57460);
+    // E o que NÃO tem dígito significativo continua recusando: `0` é o default do fornecedor.
+    expect(montarContratacaoGi({ ...BASE, codCliente: "000" }).codigoCliente).toBeNull();
+  });
+
+  it("acima do teto do `int32` resolve para NULO (o GI recusaria o envio inteiro)", () => {
+    expect(montarContratacaoGi({ ...BASE, codCliente: "2147483647" }).codigoCliente).toBe(2147483647);
+    expect(montarContratacaoGi({ ...BASE, codCliente: "2147483648" }).codigoCliente).toBeNull();
+  });
+
+  it("NAO e a empresa do grupo: cliente final e empresa/filial sao campos INDEPENDENTES", () => {
+    const c = montarContratacaoGi({
+      ...BASE,
+      codCliente: "4321",
+      vinculos: [{ tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "4", ativo: true }],
+    });
+    expect(c.codigoCliente).toBe(4321);
+    expect(c.codigoEmpresa).toBe(1);
+    expect(c.codigoFilial).toBe(4);
+  });
+
+  it("REDE DE RUNTIME no payload: `0`, string e decimal vindos de fora caem para NULO", () => {
+    const forcado = (v: unknown) =>
+      montarFuncionarioSelecao({}, undefined, {
+        ...CONTRATACAO_GI_VAZIA,
+        codigoCliente: v as number | null,
+      }).codigoCliente;
+    expect(forcado(4321)).toBe(4321);
+    for (const v of [0, -1, 1.5, "4321", "0", null, undefined, true]) {
+      expect(forcado(v), String(v)).toBeNull();
+    }
+  });
+
+  it("cliente NAO resolvido RECUSA o envio, e o motivo e o do CLIENTE, nao o da empresa", () => {
+    const PAR = (e: number, f: number) => e === 1 && f === 4;
+    const completo: ContratacaoGi = {
+      salario: 2000,
+      tipoSalario: "M",
+      qtdeHorasMes: null,
+      qtdeHorasSem: null,
+      dataAdmissao: "2026-11-03",
+      vinculo: "4",
+      tipoContrato: "D",
+      codigoEmpresa: 1,
+      codigoFilial: 4,
+      codigoCliente: 4321,
+    };
+    const recusa = (c: ContratacaoGi) =>
+      recusaDaContratacaoGi(montarFuncionarioSelecao({}, undefined, c), PAR);
+    expect(recusa(completo)).toBeNull();
+    expect(recusa({ ...completo, codigoCliente: null })).toBe("GI_CLIENTE_NAO_RESOLVIDO");
+    // `0` é o DEFAULT do campo no GI: referência a cliente inexistente, não campo vazio.
+    expect(recusa({ ...completo, codigoCliente: 0 })).toBe("GI_CLIENTE_NAO_RESOLVIDO");
+    // E a ORDEM: a recusa do cliente é a ÚLTIMA, para não trocar o motivo que o time já conhece.
+    expect(recusa({ ...completo, codigoCliente: null, codigoEmpresa: null })).toBe(
+      "GI_SEM_EMPRESA_FILIAL",
+    );
+    expect(recusa({ ...completo, codigoCliente: null, salario: 0 })).toBe("GI_SALARIO_INVALIDO");
+    expect(recusa({ ...completo, codigoCliente: null, tipoSalario: null })).toBe(
+      "GI_SALARIO_SEM_UNIDADE",
+    );
   });
 });
