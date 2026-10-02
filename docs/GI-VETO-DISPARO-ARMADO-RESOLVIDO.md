@@ -17,10 +17,28 @@ O `_autorId` chega do `@CurrentUser()` (`enviar-para-gi.controller.ts:32`, rota 
 `FuncionarioSelecao`, em `marcarEnviado`), e **nao carimba QUEM**. A objecao era de trilha: envio para
 a folha de um terceiro e acao de consequencia, e trilha sem autor nao responde "quem mandou".
 
-## A decisao do diretor, por escrito
+## A decisao do diretor, por escrito, e ela foi tomada INFORMADA
 
-**O GI carimba quem enviou do lado dele.** A autoria existe, e mora no sistema de destino, que e o
-sistema de registro daquele dado. O EA nao duplica o carimbo.
+**O GI carimba quem enviou do lado dele. Nao precisa de dois carimbos.** (Diretor, 02/10/2026.)
+
+### A ressalva que ele ouviu ANTES de decidir, e manteve a decisao
+
+A auditoria mediu e levantou que o carimbo do fornecedor nao e da PESSOA: o EA autentica com **uma
+credencial de servico unica** (`gi-api.service.ts`, um `GI_LOGIN`/`GI_SENHA` so), entao o que o GI
+registra do outro lado e **a credencial do EA**, nao o MASTER que clicou. Do nosso lado nao ha trilha:
+o autor chega no parametro e nao e usado.
+
+**O diretor foi informado disso, por escrito, e decidiu assim mesmo: nao precisa.** Isso encerra o
+ponto. Auditoria futura que levantar a autoria do disparo tem a resposta aqui: **nao e achado, e
+decisao do diretor tomada com a medicao na mao.** O `seguranca` registra e segue.
+
+O que continua de pe, e nao foi dispensado por esta decisao: a rota e restrita a `MASTER`/`SUPER_ADMIN`
+sob o guard global, e cada tentativa deixa o DESFECHO no log por MOTIVO, sem PII.
+
+### O fundamento original
+
+A autoria existe, e mora no sistema de destino, que e o sistema de registro daquele dado. O EA nao
+duplica o carimbo.
 
 Isso e coerente com o resto da frente: a credencial do EA no GI e **uma**, a rota e restrita a
 `MASTER`/`SUPER_ADMIN`, e o desfecho de cada tentativa fica no log do EA por MOTIVO

@@ -352,8 +352,15 @@ describe("as TRES cidades TRUNCAM em 30 e NUNCA ficam nulas: o caso e Vila Bela 
 });
 
 describe("codMunicipioNascto: CODIGO pelo de/para, nulo quando nao resolve, nunca inventado", () => {
-  /** O de/para injetado, no mesmo molde do que `codigoCidadeResid` já usa. */
-  const DE_PARA_MT: DeParaGi = { codigoCidade: (nome) => (nome?.startsWith("Vila Bela") ? "5105150" : null) };
+  /**
+   * O de/para injetado. ⚠️ O NASCIMENTO SAI DO MAPA **IBGE** (`codigoMunicipioIbge`), separado do mapa
+   * de cidades do GI em 02/10/2026: são dois espaços de código, e aqui o de residência fica vazio de
+   * propósito, para provar que ele não alcança `codMunicipioNascto`.
+   */
+  const DE_PARA_MT: DeParaGi = {
+    codigoCidade: () => null,
+    codigoMunicipioIbge: (nome) => (nome?.startsWith("Vila Bela") ? "5105150" : null),
+  };
 
   it("resolve pelo de/para a partir da cidade de nascimento, e NAO pela de residencia", () => {
     const f = payloadDe(

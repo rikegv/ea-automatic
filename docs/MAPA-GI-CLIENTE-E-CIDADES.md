@@ -56,9 +56,15 @@ payload, nessa ordem.
 *(O precedente que o diretor citou, a data da CTPS, era diferente: ali a IA EMITIA `ctpsDataExpedicao`
 e a allowlist só aceitava `ctpsData`, então a chave morria fora da lista. Aqui a IA nem emite.)*
 
-**O `codMunicipioNascto` é o único que NÃO sai de documento:** é código IBGE, e precisa do mesmo
-de/para que `codigoCidadeResid` já usa (`GI_DEPARA_CIDADES`, hoje **vazio**, então aquele campo
-também sai nulo). Um de/para serve os dois.
+**O `codMunicipioNascto` é o único que NÃO sai de documento:** é código IBGE.
+
+> **ATUALIZADO EM 02/10/2026, e o que estava escrito aqui foi DESFEITO de propósito.** Este parágrafo
+> dizia que ele usava "o mesmo de/para que `codigoCidadeResid` já usa" e que "um de/para serve os
+> dois". **Não serve.** Medição posterior mostrou que os dois campos são de espaços de código
+> DIFERENTES: o de nascimento é IBGE (provado contra a produção do fornecedor) e o de residência é
+> desconhecido e hoje inmedível. Por decisão do diretor os dois foram SEPARADOS:
+> `GI_DEPARA_MUNICIPIOS_IBGE` alimenta só o nascimento, e `GI_DEPARA_CIDADES` segue vazia para a
+> residência. Ver `docs/MAPA-GI-FECHAR-A-PONTE.md`, seção 0.
 
 ## 4. Alcance
 

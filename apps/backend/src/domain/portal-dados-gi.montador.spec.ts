@@ -75,6 +75,8 @@ describe("montarFuncionarioSelecao: formatos e telefone", () => {
 describe("montarFuncionarioSelecao: de/para de codigo (nunca inventa)", () => {
   const dePara: DeParaGi = {
     codigoCidade: (nome, uf) => (nome === "Sao Paulo" && uf === "SP" ? "7107" : null),
+    // De/para IBGE VAZIO: este bloco mede só o código de RESIDÊNCIA, e os dois mapas são separados.
+    codigoMunicipioIbge: () => null,
   };
 
   it("sem de/para: nome preenchido, codigo nulo", () => {
@@ -139,6 +141,7 @@ describe("montarFuncionarioSelecao: zero a esquerda, contagem x documento", () =
   it("codigo de cidade do de/para sai sem zero a esquerda", () => {
     const f = montarFuncionarioSelecao({ cidade: "Santos", uf: "SP" }, {
       codigoCidade: () => "0712",
+      codigoMunicipioIbge: () => null,
     });
     expect(f.codigoCidadeResid).toBe("712");
   });
@@ -1548,21 +1551,48 @@ describe("as TRES cidades da pessoa: cada uma do SEU documento, e nenhuma trocad
   });
 });
 
-describe("codMunicipioNascto: UM de/para serve os DOIS codigos de municipio", () => {
-  /** De/para sintético que só conhece dois municípios, cada um na SUA UF. */
+describe("codMunicipioNascto: DOIS de/para SEPARADOS, um por espaco de codigo", () => {
+  /**
+   * ⚠️ ESTE BLOCO MEDIA O CONTRARIO ATE 02/10/2026 ("UM de/para serve os DOIS codigos"), e a separacao
+   * e decisao do diretor. `codMunicipioNascto` e IBGE (PROVADO: o GI guardou `3509502`, Campinas, no
+   * registro 27 da rodada 4) e `codigoCidadeResid` e o catalogo interno do GI, de espaco DESCONHECIDO e
+   * hoje inmedivel. Com um mapa so, preencher o IBGE mandaria a cidade de RESIDENCIA num codigo de
+   * outro espaco, calado, para a folha de um terceiro. Os testes abaixo travam a separacao: cada campo
+   * le o SEU resolvedor, e o do outro nao o alcanca.
+   */
   const DEPARA: DeParaGi = {
-    codigoCidade: (nome, uf) =>
-      nome === "Recife" && uf === "PE" ? "2611606" : nome === "Sao Paulo" && uf === "SP" ? "3550308" : null,
+    /** Catalogo do GI (residencia): so conhece Sao Paulo, e com um codigo de OUTRO espaco. */
+    codigoCidade: (nome, uf) => (nome === "Sao Paulo" && uf === "SP" ? "7107" : null),
+    /** IBGE (nascimento): so conhece Recife. */
+    codigoMunicipioIbge: (nome, uf) => (nome === "Recife" && uf === "PE" ? "2611606" : null),
   };
 
-  it("sai do MESMO de/para de `codigoCidadeResid`, com a UF vinda da `naturalidade`", () => {
+  it("sai do de/para IBGE, com a UF vinda da `naturalidade`", () => {
     const f = montarFuncionarioSelecao(
       { cidadeNascimento: "Recife", naturalidade: "PE", cidade: "Sao Paulo", uf: "SP" },
       DEPARA,
     );
     expect(f.codMunicipioNascto).toBe("2611606");
-    // E o de residência continua resolvendo pelo endereço, no mesmo payload: são dois campos, um de/para.
-    expect(f.codigoCidadeResid).toBe("3550308");
+    // E a residencia resolve pelo OUTRO mapa, no mesmo payload: dois campos, DOIS de/para.
+    expect(f.codigoCidadeResid).toBe("7107");
+  });
+
+  it("O MAPA DE CIDADES DO GI NAO ALCANCA O NASCIMENTO (e vice-versa)", () => {
+    // A regressao que este teste pega: alguem volta a apontar `codMunicipioNascto` para `codigoCidade`.
+    const soCatalogoGi: DeParaGi = { codigoCidade: () => "7107", codigoMunicipioIbge: () => null };
+    const soIbge: DeParaGi = { codigoCidade: () => null, codigoMunicipioIbge: () => "2611606" };
+    const a = montarFuncionarioSelecao(
+      { cidadeNascimento: "Recife", naturalidade: "PE", cidade: "Recife", uf: "PE" },
+      soCatalogoGi,
+    );
+    expect(a.codMunicipioNascto).toBeNull();
+    expect(a.codigoCidadeResid).toBe("7107");
+    const b = montarFuncionarioSelecao(
+      { cidadeNascimento: "Recife", naturalidade: "PE", cidade: "Recife", uf: "PE" },
+      soIbge,
+    );
+    expect(b.codMunicipioNascto).toBe("2611606");
+    expect(b.codigoCidadeResid).toBeNull();
   });
 
   it("de/para VAZIO (o estado de hoje): os DOIS codigos saem NULOS, nunca inventados", () => {
@@ -1585,7 +1615,7 @@ describe("codMunicipioNascto: UM de/para serve os DOIS codigos de municipio", ()
   it("o codigo sai SEM zero a esquerda (campo de contagem, padrao inteiro do contrato)", () => {
     const f = montarFuncionarioSelecao(
       { cidadeNascimento: "X", naturalidade: "SP" },
-      { codigoCidade: () => "0355030" },
+      { codigoCidade: () => null, codigoMunicipioIbge: () => "0355030" },
     );
     expect(f.codMunicipioNascto).toBe("355030");
   });

@@ -647,6 +647,9 @@ const DE_PARA_COM_ZERO_A_ESQUERDA: DeParaGi = {
   // 3550308 é São Paulo; um município de código curto do IBGE sai com zero à esquerda no cadastro
   // antigo do GI, e é esse o caso que interessa.
   codigoCidade: () => "0350",
+  // O mapa IBGE é SEPARADO do de cidades desde 02/10/2026 (dois espaços de código, duas envs). Aqui ele
+  // devolve o mesmo valor só para exercitar o zero à esquerda nos DOIS campos de município.
+  codigoMunicipioIbge: () => "0350",
   // NÃO há `codigoBanco` aqui, e a ausência é a régua: o de/para de banco saiu junto com os campos
   // `codigoBcoFolha`/`codigoBcoPagar` (decisão do diretor). Se alguém devolver a chave ao tipo
   // `DeParaGi`, este literal volta a aceitá-la e o teste do ponto 5 é quem denuncia.

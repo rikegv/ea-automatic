@@ -968,12 +968,18 @@ export interface FuncionarioSelecao {
    */
   cidadeNascimento: string | null;
   /**
-   * CÓDIGO (IBGE) do município de nascimento, `int`. DERIVADO, nunca coletado: sai do **MESMO de/para**
-   * que `codigoCidadeResid` usa (`GI_DEPARA_CIDADES`), aplicado a `cidadeNascimento` + `naturalidade` (a
-   * UF de nascimento). **UM de/para serve os DOIS campos de código de município.**
+   * CÓDIGO **IBGE** do município de nascimento, `int`. DERIVADO, nunca coletado: sai do de/para **IBGE**
+   * (`codigoMunicipioIbge`, env `GI_DEPARA_MUNICIPIOS_IBGE`), aplicado a `cidadeNascimento` +
+   * `naturalidade` (a UF de nascimento).
    *
-   * ⚠️ O de/para está **VAZIO** hoje, então este campo e o `codigoCidadeResid` saem os DOIS nulos, e é
-   * fail-closed por desenho: não se INVENTA código de município. Preencher o de/para liga os dois juntos.
+   * ⚠️ **NÃO é o mesmo de/para de `codigoCidadeResid`, e os dois foram SEPARADOS em 02/10/2026.** Este
+   * campo é IBGE e isso está PROVADO contra a produção do fornecedor: o GI guardou `3509502` (Campinas)
+   * no registro 27 da rodada 4, que é exatamente o código da tabela pública do IBGE, e é o padrão do
+   * eSocial. O `codigoCidadeResid` tem espaço de código **DESCONHECIDO** (ver o comentário lá). Enquanto
+   * UM mapa só alimentava os dois, preencher o IBGE mandaria a cidade de RESIDÊNCIA num código de outro
+   * espaço, em silêncio, para a folha de um terceiro.
+   *
+   * Sem a env, NULO: não se INVENTA código de município (fail-closed).
    */
   codMunicipioNascto: string | null;
   filiacaoNomeMae: string | null;
@@ -1151,7 +1157,30 @@ export interface FuncionarioSelecao {
  * aqueles campos são a conta pagadora da EMPRESA (ver o comentário em `FuncionarioSelecao`).
  */
 export interface DeParaGi {
+  /**
+   * Código da cidade de **RESIDÊNCIA** no catálogo do GI (`codigoCidadeResid`), vindo de
+   * `GI_DEPARA_CIDADES`. **Espaço de código DESCONHECIDO e hoje INMEDÍVEL**, então o mapa segue VAZIO:
+   * `DePara/GetAll` devolve 0 itens, `FuncionarioSelecao/GetAll` esvazia em menos de 10 min, `ApiFicha`
+   * responde 403 e não existe recurso de Município nos 443 paths da API. **Forma igual no contrato NÃO
+   * prova espaço igual** (contra-exemplo no mesmo contrato: `codigoCliente` tem forma idêntica e é outro
+   * espaço). Enquanto não for observável, resolve `null`, e é isso que se quer.
+   */
   codigoCidade(nome: string | null | undefined, uf: string | null | undefined): string | null;
+  /**
+   * Código **IBGE** (7 dígitos) do município, para `codMunicipioNascto`, vindo de
+   * `GI_DEPARA_MUNICIPIOS_IBGE`. **PROVADO** contra a produção do fornecedor (o GI guardou `3509502`,
+   * Campinas, no registro 27 da rodada 4) e padrão do eSocial.
+   *
+   * ⚠️ **POR QUE SÃO DOIS MÉTODOS E DUAS ENVS, e não um só:** são DOIS ESPAÇOS DE CÓDIGO diferentes, um
+   * provado e um desconhecido. Juntá-los de novo faz o campo de NASCIMENTO sair certo e o de RESIDÊNCIA
+   * sair com um código de outro espaço, apontando para a cidade errada na folha de um terceiro, **sem
+   * nenhum erro aparente**. Separados, preencher o IBGE resolve só o que está provado, e a residência
+   * continua nula até haver de onde ler o par (cidade texto → código do GI).
+   *
+   * Membro OBRIGATÓRIO de propósito: opcional, um implementador novo esqueceria em silêncio e o
+   * nascimento voltaria a sair nulo sem ninguém notar. Quem não tem o mapa devolve `null` explícito.
+   */
+  codigoMunicipioIbge(nome: string | null | undefined, uf: string | null | undefined): string | null;
 }
 
 /**
@@ -1167,6 +1196,7 @@ export interface DeParaGi {
  */
 export const DE_PARA_GI_VAZIO: DeParaGi = {
   codigoCidade: () => null,
+  codigoMunicipioIbge: () => null,
 };
 
 function limpo(v: unknown): string | null {
@@ -1336,9 +1366,15 @@ export function montarFuncionarioSelecao(
     // Cidade é TEXTO: truncar perde o final do nome, anular perde a cidade. `codigoCurto` existe para
     // campo de CÓDIGO (`naturalidade`, `sexo`, `raca`), onde cortar INVENTARIA outro valor.
     cidadeNascimento: cortarTexto(limpo(p.cidadeNascimento), 30),
-    // O CÓDIGO do município de nascimento, pelo MESMO de/para de `codigoCidadeResid`, com a UF vinda da
-    // `naturalidade` (que é a UF, não a cidade). De/para vazio: NULO, nunca inventado.
-    codMunicipioNascto: inteiroGi(depara.codigoCidade(p.cidadeNascimento, p.naturalidade)),
+    // O CÓDIGO IBGE do município de nascimento, pelo de/para **IBGE** (`GI_DEPARA_MUNICIPIOS_IBGE`), com
+    // a UF vinda da `naturalidade` (que é a UF, não a cidade). De/para vazio: NULO, nunca inventado.
+    //
+    // ⚠️ **NÃO use `codigoCidade` AQUI** (era o que esta linha fazia até 02/10/2026). Os dois campos de
+    // código de município vivem em ESPAÇOS DIFERENTES: este é IBGE, provado contra a produção do
+    // fornecedor; o `codigoCidadeResid`, 30 linhas abaixo, é o catálogo interno do GI e é desconhecido.
+    // Um mapa só servindo os dois faz o nascimento sair certo e a RESIDÊNCIA sair no espaço errado, em
+    // silêncio, na folha de um terceiro.
+    codMunicipioNascto: inteiroGi(depara.codigoMunicipioIbge(p.cidadeNascimento, p.naturalidade)),
     filiacaoNomeMae: cortarTexto(limpo(p.nomeMae), 70),
     filiacaoNomePai: cortarTexto(limpo(p.nomePai), 70),
     estadoCivil: codigoCurto(limpo(p.estadoCivil), 1),
@@ -1371,6 +1407,8 @@ export function montarFuncionarioSelecao(
     bairroResid: cortarTexto(limpo(p.bairro), 60),
     cidadeResid: cortarTexto(limpo(p.cidade), 60),
     ufResid: codigoCurto(limpo(p.uf), 2),
+    // A cidade de RESIDÊNCIA, pelo catálogo do GI (`GI_DEPARA_CIDADES`), que é OUTRO espaço de código e
+    // segue VAZIO até ser observável. Nunca o de/para IBGE: ver o aviso em `codMunicipioNascto`.
     codigoCidadeResid: inteiroGi(depara.codigoCidade(p.cidade, p.uf)),
     agencia: cortarTexto(limpo(p.agencia), 10),
     contaCorrente: cortarTexto(limpo(p.conta), 20),

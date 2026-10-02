@@ -4,7 +4,26 @@ import type { DeParaGi } from "../domain/portal-dados-gi";
 
 /**
  * O DE/PARA de código do GI (Portal→GI, peça 3): traduz o que o EA guarda como TEXTO (nome da cidade
- * + UF) no CÓDIGO que o `FuncionarioSelecao` espera (`codigoCidadeResid`).
+ * + UF) no CÓDIGO que o `FuncionarioSelecao` espera.
+ *
+ * ═══ DOIS MAPAS DE MUNICÍPIO, DUAS ENVS, E ISSO NÃO É DUPLICAÇÃO (02/10/2026) ═══
+ *
+ * `codigoCidadeResid` (residência) e `codMunicipioNascto` (nascimento) **não vivem no mesmo espaço de
+ * código**, e até 02/10/2026 um mapa só alimentava os dois:
+ *   - **`GI_DEPARA_MUNICIPIOS_IBGE` → `codigoMunicipioIbge` → `codMunicipioNascto`.** É o código
+ *     **IBGE** de 7 dígitos, e está **PROVADO** contra a produção do fornecedor: o GI guardou `3509502`
+ *     (Campinas) no registro 27 da rodada 4, exatamente o número da tabela pública do IBGE, que é
+ *     também o padrão do eSocial.
+ *   - **`GI_DEPARA_CIDADES` → `codigoCidade` → `codigoCidadeResid`.** Espaço **DESCONHECIDO e hoje
+ *     INMEDÍVEL**: `DePara/GetAll` devolve 0 itens, `FuncionarioSelecao/GetAll` esvazia em menos de 10
+ *     min, `ApiFicha` responde 403 e não há recurso de Município nos 443 paths da API. **Forma igual no
+ *     contrato NÃO prova espaço igual** (no mesmo contrato, `codigoCliente` tem forma idêntica e é
+ *     outro espaço). Por isso este mapa **permanece VAZIO**, e o campo sai nulo.
+ *
+ * O QUE ACONTECERIA SE ALGUÉM JUNTASSE OS DOIS DE NOVO: preencher o mapa único com IBGE faz o
+ * nascimento sair CERTO e a RESIDÊNCIA sair com um código de OUTRO espaço, apontando para a cidade
+ * errada na folha de um terceiro, **sem erro aparente nem no EA nem no GI**. A separação é o que
+ * permite ligar o que está provado sem apostar no que não está.
  *
  * PRINCÍPIO: NUNCA SE INVENTA CÓDIGO (§A.9 / instrução da peça 3). A fonte da verdade é o catálogo do
  * próprio GI (municípios), materializado OFFLINE pela grade GET-only e carregado aqui como um mapa via
@@ -39,7 +58,7 @@ import type { DeParaGi } from "../domain/portal-dados-gi";
  * logado com valor.
  */
 
-type MapaCidades = Record<string, string>; // chave normalizada "UF|CIDADE" -> código GI
+type MapaCidades = Record<string, string>; // chave normalizada "UF|CIDADE" -> código (GI ou IBGE)
 /** Pares conhecidos, na forma "empresa|filial" (ex.: "1|0", "1|4"). */
 type ParesEmpresaFilial = ReadonlySet<string>;
 
@@ -47,11 +66,22 @@ type ParesEmpresaFilial = ReadonlySet<string>;
 export class GiDeParaService implements DeParaGi {
   private readonly logger = new Logger("GiDeParaService");
   private readonly cidades: MapaCidades;
+  /** Mapa IBGE, SEPARADO do de cidades de propósito: ver o cabeçalho deste arquivo. */
+  private readonly municipiosIbge: MapaCidades;
   private readonly pares: ParesEmpresaFilial;
 
   constructor(config: ConfigService) {
     this.cidades = normalizarMapaCidades(
       lerJson(config.get<string>("GI_DEPARA_CIDADES"), "GI_DEPARA_CIDADES", this.logger),
+    );
+    // MESMO leitor, MESMA normalização (acento/caixa, chave "UF|CIDADE") e MESMO fail-closed do mapa de
+    // cidades. O que muda é só a env, porque o ESPAÇO do código é outro.
+    this.municipiosIbge = normalizarMapaCidades(
+      lerJson(
+        config.get<string>("GI_DEPARA_MUNICIPIOS_IBGE"),
+        "GI_DEPARA_MUNICIPIOS_IBGE",
+        this.logger,
+      ),
     );
     this.pares = normalizarPares(
       lerJsonLargo(
@@ -62,11 +92,28 @@ export class GiDeParaService implements DeParaGi {
     );
   }
 
-  /** Código GI da cidade por (nome, UF). Sem correspondência: null (não se inventa). */
+  /**
+   * Código do catálogo do GI para a cidade de **RESIDÊNCIA** (`codigoCidadeResid`), por (nome, UF).
+   * Sem correspondência: null (não se inventa). **Hoje sempre null**, porque `GI_DEPARA_CIDADES` segue
+   * vazia até o espaço do fornecedor ser observável.
+   *
+   * ⚠️ NÃO devolver IBGE daqui, e não apontar este método para o mapa IBGE: ver o cabeçalho.
+   */
   codigoCidade(nome: string | null | undefined, uf: string | null | undefined): string | null {
     const chave = chaveCidade(nome, uf);
     if (!chave) return null;
     return this.cidades[chave] ?? null;
+  }
+
+  /**
+   * Código **IBGE** (7 dígitos) do município, para `codMunicipioNascto`, por (nome, UF). Sem
+   * correspondência: null (não se inventa). Fail-closed: sem `GI_DEPARA_MUNICIPIOS_IBGE`, mapa vazio e
+   * todo código nulo.
+   */
+  codigoMunicipioIbge(nome: string | null | undefined, uf: string | null | undefined): string | null {
+    const chave = chaveCidade(nome, uf);
+    if (!chave) return null;
+    return this.municipiosIbge[chave] ?? null;
   }
 
   /**

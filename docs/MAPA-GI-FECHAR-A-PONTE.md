@@ -3,7 +3,20 @@
 Investigacao do coordenador ANTES do primeiro despacho (§A.27/§A.39 passo 1/§A.40 regra 1).
 Tudo medido nesta data contra a producao do EA, a producao do GI (GET-only pela grade) e os dois bancos.
 
-## 0. O ACHADO QUE MUDA O ITEM 2, e e por isso que ele vem primeiro
+## 0. RESOLVIDO EM 02/10/2026: O DE/PARA FOI SEPARADO, por decisao do diretor
+
+O achado abaixo foi acolhido e **consertado**. Hoje sao **DOIS mapas e DUAS envs**:
+
+| env | resolvedor | campo do GI | estado |
+|---|---|---|---|
+| `GI_DEPARA_MUNICIPIOS_IBGE` | `codigoMunicipioIbge` | `codMunicipioNascto` (NASCIMENTO) | IBGE, provado |
+| `GI_DEPARA_CIDADES` | `codigoCidade` | `codigoCidadeResid` (RESIDENCIA) | espaco desconhecido, **segue VAZIA** |
+
+Logo encher o mapa do IBGE **nao alcanca mais** a cidade de residencia, e a residencia continua
+saindo NULA, que e o unico valor honesto enquanto o espaco de codigo do fornecedor nao for
+observavel. O texto original do achado fica abaixo, como registro do que levou a decisao.
+
+## 0.1 O ACHADO ORIGINAL, que levou a separacao
 
 **UM de/para alimenta DOIS campos de ESPACOS DE CODIGO possivelmente DIFERENTES.**
 `montarFuncionarioSelecao` (`domain/portal-dados-gi.ts:1341,1374`) chama o MESMO `depara.codigoCidade`

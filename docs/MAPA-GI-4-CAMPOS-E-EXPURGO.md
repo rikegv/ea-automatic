@@ -197,3 +197,41 @@ endereço público é a Fase 2, que ainda não existe. A frente dela não toca `
 candidato real antes do conserto de contrato. **A decisão do lado a consertar é do diretor** (a tela
 passa a mandar `rotulo` + `confirmadoPorHumano: true`, ou o serviço carimba `true`, já que chegar
 naquela rota é o próprio gesto do candidato), e passa pelo `seguranca`, porque é a trava do V12.
+
+---
+
+# ADENDO 02/10/2026: a correcao da secao 6 foi DESCONSIDERADA pelo diretor, e o motivo e um fato novo
+
+A secao 6 acima propoe trocar o `DELETE` do expurgo por um `UPDATE` que anula o PII e preserva a
+marca. **ISSO NAO SERA FEITO. `expurgo.service.ts` fica como esta, e tocar nele esta proibido.**
+
+## O que a auditoria levantou, e estava tecnicamente correto
+
+`gi_enviado_em` (a marca de idempotencia do envio ao GI) mora na MESMA linha de
+`admissao_dados_gi` que o expurgo apaga por TTL de 30 dias, e `jaEnviado` le essa linha. Medido e
+confirmado: as duas colunas estao na mesma tabela, e o expurgo da `DELETE` na linha inteira. Logo,
+30 dias depois de um envio a marca desaparece e uma retentativa **refaria o POST**.
+
+## O FATO NOVO, que o diretor trouxe e que muda a conclusao
+
+**O GI JA TEM TRAVA ANTI-DUPLICATA POR CPF.** Tentar cadastrar o mesmo CPF duas vezes faz o
+fornecedor avisar que o funcionario ja esta cadastrado, e **ele nao duplica**.
+
+Entao a marca sumir com o expurgo **nao cria duplicata na folha**: a nossa marca economiza uma
+chamada, mas **quem garante a unicidade e o proprio GI**, no sistema que e o dono do cadastro. O
+desfecho de uma retentativa pos-expurgo e a recusa do fornecedor, nao um segundo funcionario.
+
+**A TRAVA ANTI-DUPLICATA E DO GI, NAO DA NOSSA MARCA.** Esta e a linha a lembrar, e e a razao de o
+expurgo poder apagar a ficha inteira normalmente, como ele faz hoje, preservando a §A.6 (o PII do GI
+nao fica retido alem do TTL).
+
+## O limite deste adendo, para nao virar licenca
+
+- Isto NAO dispensa a idempotencia do EA: `jaEnviado` continua valendo e continua sendo a primeira
+  porta. O que se dispensa e o CONSERTO do caso "marca expurgada".
+- Isto vale para DUPLICATA. Nao vale para nenhum outro desfecho de envio.
+- O fato e **declarado pelo diretor a partir da operacao**, e o EA nao o exercitou. Medi-lo custaria
+  um segundo envio com um CPF sintetico ja cadastrado (por exemplo o do registro 27), e a resposta
+  esperada e a recusa do fornecedor. Fica oferecido, nao feito: ninguem pediu.
+
+*(Decisao do diretor, 02/10/2026, na OST de fechar a ponte do GI.)*
