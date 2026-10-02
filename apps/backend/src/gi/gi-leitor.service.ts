@@ -4,6 +4,8 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissaoDadosGi, admissoes, candidatos, clienteVinculos, dadosVagaFolha } from "../db/schema";
 import {
+  baseDoCodClienteComSufixo,
+  baseNumericaDoCodCliente,
   montarContratacaoGi,
   montarPessoaParaGi,
   RETENCAO_DADOS_GI_MS,
@@ -118,6 +120,11 @@ export class GiLeitorService {
    * total da base), então a segunda consulta traz os do cliente e a ESCOLHA é da função pura
    * `resolverEmpresaFilialGi`, onde ela fica testável.
    *
+   * UMA TERCEIRA CONSULTA EXISTE, E SÓ PARA OS 7 `cod_cliente` COM SUFIXO DE CONTRATO (`51525-TEMP.`):
+   * ela traz os vínculos dos IRMÃOS daquela base, que é o que autoriza o montador a tirar o sufixo na
+   * saída sem fundir dois cadastros no GI. Código numérico não a dispara, então o caminho de sempre segue
+   * com duas consultas. Ver `SUFIXO_DE_CONTRATO_NO_COD_CLIENTE` em `portal-dados-gi.ts`.
+   *
    * RECORTE EXPLÍCITO: de `dados_vaga_folha` saem **só o `salario`, a UNIDADE dele e a JORNADA em
    * horas**. De `cliente_vinculos` saem só tipo, empresa, filial e o `ativo`. `left join` na folha porque
    * admissão sem folha existe.
@@ -171,6 +178,46 @@ export class GiLeitorService {
           .where(eq(clienteVinculos.codCliente, base.codCliente))
       : [];
 
+    // ── OS IRMÃOS DA BASE DO `cod_cliente`, e SÓ quando há SUFIXO DE CONTRATO ──────────────────────
+    // O sufixo (`51525-TEMP.`) é regra de negócio do diretor e separa CONTRATOS do mesmo cliente dentro
+    // do EA; ele é tirado só no montador do envio, porque o `codigoCliente` do GI é `int32`. Para provar
+    // que tirá-lo não funde dois cadastros do outro lado, o montador precisa saber se a BASE já resolve
+    // para outro cliente no MESMO par empresa/filial. É o que esta consulta responde, e nada mais.
+    //
+    // ⚠️ SÓ RODA PARA OS 7 CÓDIGOS COM SUFIXO: código numérico (244 dos 251 clientes) nem chega aqui, e
+    // o caminho de sempre segue com DUAS consultas, como antes. As quatro colunas são as MESMAS do
+    // vínculo (tipo, empresa, filial, ativo): nenhuma coluna nova, nada de pessoa, §A.6 preservada.
+    //
+    // O CASAMENTO DA BASE É EM TYPESCRIPT, por `baseNumericaDoCodCliente`, e não num `like`/regexp de
+    // SQL: a régua do sufixo mora numa função só, testável sem banco. Um `like '51525-%'` seria uma
+    // segunda cópia dela, e perderia variações (zero à esquerda) em silêncio, para o lado permissivo.
+    const baseComSufixo = base.codCliente ? baseDoCodClienteComSufixo(base.codCliente) : null;
+    const vinculosDeOutrosClientesDaMesmaBase: VinculoEmpresaFilial[] =
+      baseComSufixo == null
+        ? []
+        : (
+            await this.db
+              .select({
+                codCliente: clienteVinculos.codCliente,
+                tipoServico: clienteVinculos.tipoServico,
+                empresaCodigo: clienteVinculos.empresaCodigo,
+                filial: clienteVinculos.filial,
+                ativo: clienteVinculos.ativo,
+              })
+              .from(clienteVinculos)
+          )
+            .filter(
+              (v) =>
+                v.codCliente !== base.codCliente &&
+                baseNumericaDoCodCliente(v.codCliente) === baseComSufixo,
+            )
+            .map(({ tipoServico, empresaCodigo, filial, ativo }) => ({
+              tipoServico,
+              empresaCodigo,
+              filial,
+              ativo,
+            }));
+
     return montarContratacaoGi({
       salario: base.salario,
       salarioUnidade: base.salarioUnidade,
@@ -184,6 +231,8 @@ export class GiLeitorService {
       // `cliente_vinculos`, abaixo). De/para DIRETO, medido em 99% (`docs/MAPA-GI-CLIENTE-E-CIDADES.md`);
       // não numérico ou ausente resolve para nulo e o envio é RECUSADO, nunca `0`.
       codCliente: base.codCliente,
+      // Os irmãos da base, para o montador decidir se pode tirar o sufixo. Vazio no caminho de sempre.
+      vinculosDeOutrosClientesDaMesmaBase,
     });
   }
 

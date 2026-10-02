@@ -60,7 +60,8 @@ function bancoFalso(linhaInicial?: Partial<LinhaGi>) {
   /**
    * As linhas que cada consulta do leitor devolve, escolhidas pela PROJEÇÃO (as chaves do `select`).
    *
-   * ATUALIZADO em 01/10/2026, quando os quatro campos de contratação entraram no envio: `lerContratacao`
+   * ATUALIZADO DUAS VEZES em 01/10/2026: primeiro quando os campos de contratação entraram no envio, e
+   * depois quando a UNIDADE do salário (`salarioUnidade`) passou a ser exigida. `lerContratacao`
    * acrescentou DUAS consultas, e sem resposta para elas o envio passava a ser recusado com
    * `GI_SEM_EMPRESA_FILIAL` ANTES de chegar ao ponto que esta régua mede (a marca de idempotência).
    *
@@ -81,6 +82,13 @@ function bancoFalso(linhaInicial?: Partial<LinhaGi>) {
       return [{ cand: { nome: "Fulano De Tal", cpf: CPF_SINTETICO }, dados: {} }];
     }
     // `lerContratacao`, consulta 1: a admissão mais o salário da folha (`left join`).
+    //
+    // `salarioUnidade` entrou em 01/10/2026, com a UNIDADE do salário: `recusaDaContratacaoGi` passou a
+    // recusar `GI_SALARIO_SEM_UNIDADE` quando ninguém declarou, e sem a coluna no dublê o envio parava
+    // ANTES do ponto que esta régua mede (a marca de idempotência). É o valor que o banco real entrega
+    // para uma admissão cujo salário o time JÁ auditou, que é o único cenário em que o envio acontece e,
+    // portanto, o único em que a duplicidade era possível. A régua da unidade tem arquivo próprio
+    // (`gi-salario-unidade.tester.spec.ts`), e lá a exigência é a oposta (não enviar).
     if (chaves.includes("codCliente")) {
       return [
         {
@@ -88,6 +96,7 @@ function bancoFalso(linhaInicial?: Partial<LinhaGi>) {
           tipoContrato: "Temporário",
           codCliente: "00123",
           salario: "1500.50",
+          salarioUnidade: "MENSAL",
         },
       ];
     }

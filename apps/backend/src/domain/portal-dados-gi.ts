@@ -729,6 +729,18 @@ export interface EntradaContratacaoGi {
    * consulta nova para isto.
    */
   codCliente?: string | number | null;
+  /**
+   * Os vínculos dos **OUTROS** clientes cujo `cod_cliente` tem a MESMA BASE NUMÉRICA deste (ver
+   * `SUFIXO_DE_CONTRATO_NO_COD_CLIENTE`). Serve a UMA pergunta só, e é a que autoriza tirar o sufixo:
+   * *"a base deste código já resolve para outro cliente no MESMO par empresa/filial?"*. Ausente ou vazio
+   * é "não colide com ninguém".
+   *
+   * ⚠️ **NÃO ENTRA EM `resolverEmpresaFilialGi`**, e a separação é o ponto: empresa e filial continuam
+   * saindo de `vinculos`, os vínculos DESTE cliente e de mais ninguém. Misturar as duas listas faria o
+   * vínculo do irmão virar a empresa da admissão, que é o erro exato que este campo existe para evitar.
+   * Só o código sem sufixo é afetado por ele, e só para dizer SIM ou NÃO.
+   */
+  vinculosDeOutrosClientesDaMesmaBase?: VinculoEmpresaFilial[] | null;
 }
 
 /**
@@ -761,7 +773,15 @@ export function montarContratacaoGi(
     // O CLIENTE FINAL, de/para DIRETO de `admissoes.cod_cliente` (medido, 99%). `0`, vazio, não numérico
     // ou fora da faixa do `int32` caem para NULO, e a guarda do envio recusa: `0` seria referência a
     // cliente inexistente, não campo vazio.
-    codigoCliente: codigoClienteInt32(e.codCliente),
+    //
+    // O SUFIXO DE CONTRATO (`51525-TEMP.`) É TIRADO **AQUI, NA SAÍDA**, e em lugar nenhum mais: ver
+    // `codigoClienteGiDoCodigoDoEa`. O par empresa/filial entra na conta porque é ele que prova que
+    // tirar o sufixo não funde dois clientes do outro lado.
+    codigoCliente: codigoClienteGiDoCodigoDoEa(
+      e.codCliente,
+      empresaFilial,
+      e.vinculosDeOutrosClientesDaMesmaBase,
+    ),
   };
 }
 
@@ -773,8 +793,11 @@ export function montarContratacaoGi(
  * `0` aqui seria aceitar exatamente o que a guarda existe para impedir.
  *
  * RECUSA texto, vazio, sinal e decimal: `cod_cliente` é `varchar` livre no EA e o campo do outro lado é
- * tipado com `pattern`, então um valor que não casa derruba o envio INTEIRO com 400. Os **7 `cod_cliente`
- * não numéricos** da base caem aqui, por desenho.
+ * tipado com `pattern`, então um valor que não casa derruba o envio INTEIRO com 400.
+ *
+ * ⚠️ OS 7 CÓDIGOS COM SUFIXO DE CONTRATO (`51525-TEMP.`) CAEM AQUI, e **é o chamador que os trata**:
+ * `codigoClienteGiDoCodigoDoEa` tira o sufixo na saída quando a base não colide. Esta função é a régua do
+ * código NUMÉRICO e continua sendo só isso, de propósito.
  *
  * ⚠️ O ZERO À ESQUERDA É **ABSORVIDO**, NÃO RECUSADO, e aqui a régua é a do `inteiroGi` e **NÃO** a do
  * `inteiroNaFaixaInt16` (que recusa `"04"` em empresa/filial). O campo do outro lado é `int32`: `"00123"`
@@ -795,6 +818,119 @@ function codigoClienteInt32(v: unknown): number | null {
   if (!/^0*[1-9]\d*$/.test(t)) return null;
   const n = Number.parseInt(t, 10);
   return n <= 2147483647 ? n : null;
+}
+
+/**
+ * ═══ O SUFIXO DE CONTRATO DO `cod_cliente`, E POR QUE ELE SAI **SÓ AQUI** ═══
+ *
+ * **O SUFIXO É REGRA DE NEGÓCIO DO DIRETOR, NÃO SUJEIRA DE CARGA.** Na plataforma do EA, `51525` e
+ * `51525-TEMP.` são **o MESMO cliente com CONTRATOS DIFERENTES**, e é o sufixo que os separa: cadastro,
+ * vínculo, vaga e admissão são de um ou de outro. Então o EA **continua guardando `51525-TEMP.`
+ * INTACTO**, em toda tabela e em toda tela. Quem normaliza é **o montador do envio, e mais ninguém**.
+ *
+ * ⚠️ **NÃO MOVA ISTO PARA O LEITOR, E MUITO MENOS PARA UMA ESCRITA.** Se alguém ler isto como
+ * "normalização boba de string" e subir a função para `lerContratacao`, ou pior, para o cadastro do
+ * cliente, o sufixo deixa de separar os contratos DENTRO do EA, que é a razão de ele existir. Aqui é
+ * tradução de SAÍDA, igual à do vínculo e à do tipo de salário: entra o vocabulário do EA, sai o do GI.
+ *
+ * **POR QUE TIRAR O SUFIXO NA SAÍDA É SEGURO: QUEM SEPARA DO OUTRO LADO É A EMPRESA/FILIAL.** O
+ * `codigoCliente` do GI é `int32`, então `51525-TEMP.` **não cabe** lá de jeito nenhum, e mandar o
+ * código cru é o que **recusava o envio** antes desta regra. Mas o payload **já leva
+ * `codigoEmpresa`/`codigoFilial`** (de `cliente_vinculos`, ver `resolverEmpresaFilialGi`), e eles caem em
+ * empresas DIFERENTES para os dois cadastros. MEDIDO na produção em 02/10/2026:
+ *
+ * | `cod_cliente` | empresa/filial | tipo de serviço |
+ * |---|---|---|
+ * | `51525`       | **2/4** SOULAN ADM          | TERCEIRO   |
+ * | `51525-TEMP.` | **1/4** SOULAN CONSULTORIA  | TEMPORARIO |
+ *
+ * Com `codigoCliente = 51525` nos dois, o GI continua recebendo DOIS envios distinguíveis, porque o par
+ * empresa/filial vai no mesmo payload. O sufixo separa na plataforma; a empresa separa no GI.
+ *
+ * ✅ **PROVADO CONTRA O FORNECEDOR, NÃO DEDUZIDO (02/10/2026):** dois registros foram enviados com o
+ * MESMO `codigoCliente` 51525 em empresas diferentes (`2/4` e `1/4`), e **o GI guardou os dois
+ * separados**. A premissa não é raciocínio nosso: foi medida do outro lado.
+ *
+ * ═══ A RÉGUA DA COLISÃO É DERIVADA DO DADO, NÃO UMA LISTA DE EXCEÇÃO ═══
+ *
+ * O argumento acima **só vale enquanto o par empresa/filial de fato separar**. Quando NÃO separa, tirar o
+ * sufixo fundiria dois clientes do EA num único cliente do GI, e aí o envio precisa **RECUSAR**: nenhum
+ * dos dois desfechos alternativos é admissível, porque mandar o sufixo não cabe no `int32` e inventar um
+ * código novo é exatamente o que o fail-closed desta frente proíbe.
+ *
+ * Então a régua é **"a base deste código já resolve para OUTRO cliente no MESMO par empresa/filial?"**, e
+ * ela é respondida pelos vínculos (`vinculosDeOutrosClientesDaMesmaBase`), não por código escrito à mão.
+ * O caso seguinte nasce coberto sem ninguém lembrar, e nenhum `cod_cliente` fica literal aqui.
+ *
+ * O CASO QUE A RÉGUA PEGA, medido na mesma data: **`57315` tem DUAS linhas com sufixo** (`57315-T` e
+ * `57315-TEMP.`) e **as duas são `1/4` TEMPORARIO**. Sem sufixo elas ficariam idênticas em cliente,
+ * empresa e filial, isto é, o GI não teria como separá-las: **as duas recusam**, por esta régua e não por
+ * uma exceção nominal. (`57315` base, `2/4` TERCEIRO, segue válido e normal, porque é numérico.)
+ *
+ * **SEM O PAR RESOLVIDO, RECUSA.** Se empresa/filial não resolveu, não há como PROVAR que a base não
+ * colide, e a prova é a condição de tirar o sufixo. Na prática isso não muda motivo de recusa nenhum:
+ * `GI_SEM_EMPRESA_FILIAL` é conferido ANTES de `GI_CLIENTE_NAO_RESOLVIDO` em `recusaDaContratacaoGi`, e é
+ * ele que a tela mostra. É o caso do `56702-T`, que **não tem vínculo nenhum** na base.
+ *
+ * **VÍNCULO INATIVO DO IRMÃO NÃO COLIDE**, pela mesma razão que ele não resolve empresa/filial em
+ * `resolverEmpresaFilialGi`: um cadastro cujo vínculo está inativo **nunca chega a ser enviado**, então
+ * não existe ambiguidade do outro lado para desfazer.
+ *
+ * O CÓDIGO NUMÉRICO NÃO PASSA POR NADA DISTO: `codigoClienteInt32` resolve e a função retorna antes. Os
+ * 244 clientes numéricos da base seguem com o comportamento de sempre, linha por linha.
+ */
+const SUFIXO_DE_CONTRATO_NO_COD_CLIENTE = /^(0*[1-9]\d*)-\S+$/;
+
+/**
+ * A BASE NUMÉRICA de um `cod_cliente` **que tem sufixo de contrato**. `null` quando não há sufixo (o
+ * código é numérico puro, ou é lixo que não começa por número significativo): assim o chamador distingue
+ * "não precisa de normalização" de "normalizou".
+ */
+export function baseDoCodClienteComSufixo(v: unknown): number | null {
+  const t = typeof v === "string" ? v.trim() : "";
+  const m = SUFIXO_DE_CONTRATO_NO_COD_CLIENTE.exec(t);
+  return m ? codigoClienteInt32(m[1]) : null;
+}
+
+/**
+ * A BASE NUMÉRICA de QUALQUER `cod_cliente`: o próprio número quando ele é numérico puro, e a base quando
+ * ele tem sufixo de contrato. É por aqui que o leitor junta os IRMÃOS de uma base (`51525` e
+ * `51525-TEMP.` devolvem os dois `51525`), e a régua mora NUMA FUNÇÃO SÓ, testável sem banco: fazer esse
+ * casamento em SQL colocaria uma segunda cópia da régua onde nenhum teste a executa.
+ */
+export function baseNumericaDoCodCliente(v: unknown): number | null {
+  return codigoClienteInt32(v) ?? baseDoCodClienteComSufixo(v);
+}
+
+/**
+ * O `codigoCliente` do GI a partir do `cod_cliente` do EA, **com o sufixo de contrato tirado na saída**
+ * quando (e somente quando) a base não colide. Ver o bloco de `SUFIXO_DE_CONTRATO_NO_COD_CLIENTE` para o
+ * porquê do sufixo existir e o porquê de ser seguro tirá-lo aqui.
+ *
+ * Fail-closed em todos os degraus, e **nunca `0`**: sem base válida, sem par empresa/filial resolvido, ou
+ * com colisão na base, devolve `null` e `recusaDaContratacaoGi` recusa o envio.
+ */
+function codigoClienteGiDoCodigoDoEa(
+  cod: unknown,
+  par: { empresa: number; filial: number } | null,
+  vinculosDeOutrosClientesDaMesmaBase: VinculoEmpresaFilial[] | null | undefined,
+): number | null {
+  // Caminho de SEMPRE, 244 dos 251 clientes: numérico resolve direto e nada abaixo roda.
+  const direto = codigoClienteInt32(cod);
+  if (direto != null) return direto;
+
+  const base = baseDoCodClienteComSufixo(cod);
+  if (base == null) return null;
+  // Sem o par, não há prova de que a base não colide, e a prova é a condição de tirar o sufixo.
+  if (!par) return null;
+
+  const colide = (vinculosDeOutrosClientesDaMesmaBase ?? []).some(
+    (v) =>
+      v?.ativo !== false &&
+      codigoEmpresaInt16(v?.empresaCodigo) === par.empresa &&
+      codigoFilialInt16(v?.filial) === par.filial,
+  );
+  return colide ? null : base;
 }
 
 /**
@@ -1326,7 +1462,10 @@ export const NENHUM_PAR_EMPRESA_FILIAL: ParEmpresaFilialConhecido = () => false;
  *
  *  - `GI_CLIENTE_NAO_RESOLVIDO`: o **CLIENTE FINAL** (`codigoCliente`, o tomador, NÃO a empresa do grupo)
  *    não resolveu a partir de `admissoes.cod_cliente`. Ou a admissão está sem cliente (a pré-admissão do
- *    Pandapé nasce assim), ou o `cod_cliente` não é numérico (**7 na base**). A régua é a MESMA da
+ *    Pandapé nasce assim), ou o `cod_cliente` não resolve para um inteiro válido. Os **7 com SUFIXO DE
+ *    CONTRATO** da base (`51525-TEMP.`) **não caem mais aqui por serem não numéricos**: o sufixo é tirado
+ *    na saída e eles resolvem, exceto quando a base COLIDE no mesmo par empresa/filial (ver
+ *    `SUFIXO_DE_CONTRATO_NO_COD_CLIENTE`), e aí esta recusa é o desfecho, de propósito. A régua é a MESMA da
  *    empresa, não a da filial: **`0` recusa**, porque `0` é o `default` do campo no GI, isto é, o valor
  *    que a omissão produz, e ele é referência a cliente INEXISTENTE. Destrava-se cadastrando/corrigindo o
  *    `cod_cliente`, nunca mandando `0`. §A.6: o código não carrega o valor.

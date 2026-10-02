@@ -1601,7 +1601,9 @@ describe("codigoCliente: o CLIENTE FINAL, de/para DIRETO, e `0` NUNCA sai", () =
     expect(montarContratacaoGi({ ...BASE, codCliente: " 777 " }).codigoCliente).toBe(777);
   });
 
-  it("`0`, vazio, ausente e NAO NUMERICO resolvem para NULO (os 7 da base caem aqui)", () => {
+  it("`0`, vazio, ausente e NAO NUMERICO resolvem para NULO", () => {
+    // ⚠️ `12A` e `ABC` seguem recusando: NÃO são sufixo de contrato (ver o describe do sufixo abaixo),
+    // são lixo. O sufixo de contrato é `<numero>-<algo>`, e só ele é normalizado na saída.
     for (const cru of ["0", "00", "000", "", "   ", "ABC", "12A", "1.5", "-1", "+1", null, undefined]) {
       expect(montarContratacaoGi({ ...BASE, codCliente: cru }).codigoCliente, String(cru)).toBeNull();
     }
@@ -1679,5 +1681,108 @@ describe("codigoCliente: o CLIENTE FINAL, de/para DIRETO, e `0` NUNCA sai", () =
     expect(recusa({ ...completo, codigoCliente: null, tipoSalario: null })).toBe(
       "GI_SALARIO_SEM_UNIDADE",
     );
+  });
+});
+
+describe("SUFIXO DE CONTRATO no `cod_cliente`: sai na SAIDA, e a colisao da base RECUSA", () => {
+  /**
+   * O SUFIXO É REGRA DE NEGÓCIO DO DIRETOR: na plataforma, `51525` e `51525-TEMP.` são o MESMO cliente
+   * com CONTRATOS diferentes, e o EA guarda o código INTACTO. O `codigoCliente` do GI é `int32`, então o
+   * código cru **recusava o envio**; tirar o sufixo é seguro porque o par empresa/filial, que vai no
+   * MESMO payload, separa os dois cadastros do outro lado.
+   *
+   * MEDIDO na produção em 02/10/2026: `51525` é `2/4` TERCEIRO e `51525-TEMP.` é `1/4` TEMPORARIO.
+   */
+  const TEMPORARIO = (empresa: string, filial: string) => ({
+    tipoServico: "TEMPORARIO",
+    empresaCodigo: empresa,
+    filial,
+    ativo: true,
+  });
+  const BASE = { salario: "1500.50", tipoContrato: "Temporário" } as const;
+  /** Mesmo idioma dos demais testes de recusa: o payload é montado, e o par é conhecido. */
+  const recusaDe = (c: ContratacaoGi) =>
+    recusaDaContratacaoGi(montarFuncionarioSelecao({}, undefined, c), () => true);
+
+  it("`51525-TEMP.` vira `51525` no envio, e empresa/filial continuam as DELE", () => {
+    const c = montarContratacaoGi({
+      ...BASE,
+      codCliente: "51525-TEMP.",
+      vinculos: [TEMPORARIO("1", "4")],
+      // O irmão `51525` cai em OUTRA empresa: é isso que torna seguro tirar o sufixo.
+      vinculosDeOutrosClientesDaMesmaBase: [
+        { tipoServico: "TERCEIRO", empresaCodigo: "2", filial: "4", ativo: true },
+      ],
+    });
+    expect(c.codigoCliente).toBe(51525);
+    expect(c.codigoEmpresa).toBe(1);
+    expect(c.codigoFilial).toBe(4);
+  });
+
+  it("outras formas de sufixo (`-T`) e espaco de borda tambem resolvem", () => {
+    const com = (cod: string) =>
+      montarContratacaoGi({ ...BASE, codCliente: cod, vinculos: [TEMPORARIO("1", "4")] }).codigoCliente;
+    expect(com("56702-T")).toBe(56702);
+    expect(com("  55642-TEMP.  ")).toBe(55642);
+    // O zero à esquerda da base é absorvido aqui pela mesma régua do código numérico.
+    expect(com("0056085-TEMP.")).toBe(56085);
+  });
+
+  it("COLISAO DA BASE no MESMO par empresa/filial RECUSA (o caso `57315`, pela regua e nao por lista)", () => {
+    /**
+     * `57315-T` e `57315-TEMP.` são AMBOS `1/4` TEMPORARIO. Sem o sufixo ficariam idênticos em cliente,
+     * empresa e filial, e o GI não teria como separá-los: recusa. Não há nenhum `cod_cliente` escrito no
+     * produto, então o caso seguinte nasce coberto.
+     */
+    const c = montarContratacaoGi({
+      ...BASE,
+      codCliente: "57315-TEMP.",
+      vinculos: [TEMPORARIO("1", "4")],
+      vinculosDeOutrosClientesDaMesmaBase: [
+        { tipoServico: "TERCEIRO", empresaCodigo: "2", filial: "4", ativo: true }, // o `57315` base
+        TEMPORARIO("1", "4"), // o `57315-T`: MESMO par, aqui está a colisão
+      ],
+    });
+    expect(c.codigoCliente).toBeNull();
+    expect(c.codigoCliente).not.toBe(0);
+    expect(recusaDe({ ...c, salario: 2000, tipoSalario: "M" })).toBe("GI_CLIENTE_NAO_RESOLVIDO");
+  });
+
+  it("vinculo INATIVO do irmao NAO colide: aquele cadastro nao chega a ser enviado", () => {
+    const c = montarContratacaoGi({
+      ...BASE,
+      codCliente: "57315-TEMP.",
+      vinculos: [TEMPORARIO("1", "4")],
+      vinculosDeOutrosClientesDaMesmaBase: [{ ...TEMPORARIO("1", "4"), ativo: false }],
+    });
+    expect(c.codigoCliente).toBe(57315);
+  });
+
+  it("SEM par empresa/filial resolvido, RECUSA: nao ha como provar que a base nao colide", () => {
+    // É o `56702-T` da base, que não tem vínculo nenhum. O motivo que a tela mostra continua sendo o da
+    // empresa, porque `recusaDaContratacaoGi` confere empresa/filial ANTES do cliente.
+    const c = montarContratacaoGi({ ...BASE, codCliente: "56702-T", vinculos: [] });
+    expect(c.codigoCliente).toBeNull();
+    expect(c.codigoEmpresa).toBeNull();
+    expect(recusaDe({ ...c, salario: 2000, tipoSalario: "M" })).toBe("GI_SEM_EMPRESA_FILIAL");
+  });
+
+  it("o que NAO e sufixo de contrato continua recusando, e `0` NUNCA sai", () => {
+    const com = (cod: string) =>
+      montarContratacaoGi({ ...BASE, codCliente: cod, vinculos: [TEMPORARIO("1", "4")] }).codigoCliente;
+    for (const cru of ["ABC", "12A", "-TEMP.", "0-TEMP.", "000-T", "1.5-T", "51525-", "51525 TEMP."]) {
+      expect(com(cru), String(cru)).toBeNull();
+    }
+  });
+
+  it("codigo NUMERICO nao passa pela regra do sufixo (o caminho de sempre, intacto)", () => {
+    // Mesmo com irmãos no MESMO par, o numérico resolve direto: a colisão só existe para quem normaliza.
+    const c = montarContratacaoGi({
+      ...BASE,
+      codCliente: "51525",
+      vinculos: [TEMPORARIO("1", "4")],
+      vinculosDeOutrosClientesDaMesmaBase: [TEMPORARIO("1", "4")],
+    });
+    expect(c.codigoCliente).toBe(51525);
   });
 });
