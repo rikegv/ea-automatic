@@ -562,7 +562,13 @@ export default function NovaAdmissaoPage() {
   );
 
   const canConfirm = Boolean(
-    cliente && cargoId && cand.nome.trim() && cpfValid && cand.sexo && !jornadaTrava,
+    cliente &&
+      cargoId &&
+      cand.nome.trim() &&
+      cpfValid &&
+      cand.sexo &&
+      cand.dataNascimento.trim() &&
+      !jornadaTrava,
   );
 
   async function confirmar(aceitePendencias = false) {

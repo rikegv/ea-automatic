@@ -486,6 +486,14 @@ export class AdmissoesService {
       throw new BadRequestException("CPF inválido");
     }
 
+    // Data de nascimento é BLOQUEANTE na criação humana (wizard), não mais pendência aceitável:
+    // o Portal do Candidato identifica por CPF mais data de nascimento, então sem ela a admissão
+    // nasce sem o candidato poder entrar no Portal. O `bypassAceite` preserva o Pandapé (de/para
+    // resolvido), que entra pelo mesmo `create` sem passar por gente e pode não trazer a data.
+    if (!opts?.bypassAceite && !dto.candidato.dataNascimento) {
+      throw new BadRequestException("Informe a data de nascimento do candidato para criar a admissão.");
+    }
+
     // Valor obrigatório nos benefícios que têm valor. Antes da transação: erro de payload não
     // deve abrir transação nem criar nada.
     await this.validarValoresDoPacote(dto.pacoteBeneficios);
@@ -507,9 +515,10 @@ export class AdmissoesService {
     // cobrava item que a esteira já não cobrava: desligar Centro de custo para um cliente valia na
     // esteira e não na criação. Agora vale nos quatro pontos.
     //
-    // Os itens ABAIXO (Tempo de contrato, Data de nascimento, Telefone, E-mail, substituído) são
-    // exclusivos do aceite de CRIAÇÃO (W6) e não fazem parte da régua de pendências obrigatórias,
-    // então seguem cobrados como sempre foram e NÃO aparecem na tela de configuração.
+    // Os itens ABAIXO (Tempo de contrato, Telefone, E-mail, substituído) são exclusivos do aceite de
+    // CRIAÇÃO (W6) e não fazem parte da régua de pendências obrigatórias, então seguem cobrados como
+    // sempre foram e NÃO aparecem na tela de configuração. A Data de nascimento SAIU desta lista: ela
+    // virou bloqueio duro no caminho humano (ver guard acima), não é mais contornável por aceite.
     const configCliente = await configDoCliente(this.db, dto.codCliente);
     const pend: string[] = pendenciasObrigatorias(
       {
@@ -533,7 +542,6 @@ export class AdmissoesService {
       configCliente,
     );
     if (!vf.tempoContrato) pend.push("Tempo de contrato");
-    if (!dto.candidato.dataNascimento) pend.push("Data de nascimento");
     if (!dto.candidato.telefone) pend.push("Telefone");
     if (!dto.candidato.email) pend.push("E-mail");
     if (vf.motivo === "Substituição") {

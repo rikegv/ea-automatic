@@ -14,6 +14,9 @@ import type { CreateAdmissaoDto } from "../admissoes/dto/create-admissao.dto";
 
 const CPF_VALIDO = "52998224725";
 
+/** data de nascimento válida: a regra nova só checa presença, não formato. */
+const NASCIMENTO_VALIDO = "1990-01-01";
+
 /** dto com TODOS os obrigatórios da W6 vazios (salário, escala, benefícios, contrato, etc.). */
 function dtoVazio(): CreateAdmissaoDto {
   return {
@@ -21,6 +24,16 @@ function dtoVazio(): CreateAdmissaoDto {
     cargoId: "11111111-1111-1111-1111-111111111111",
     candidato: { cpf: CPF_VALIDO, nome: "Fulano de Tal" },
   };
+}
+
+/**
+ * dtoVazio COM a data de nascimento preenchida. A data virou bloqueio duro no caminho humano
+ * (guard antes da transação), então os casos que provam OUTRAS pendências precisam trazê-la para
+ * não curto-circuitar no guard da data.
+ */
+function dtoComNascimento(): CreateAdmissaoDto {
+  const base = dtoVazio();
+  return { ...base, candidato: { ...base.candidato, dataNascimento: NASCIMENTO_VALIDO } };
 }
 
 /** tx mock: cliente/cargo existem, régua vazia → cria admissão e devolve o id. */
@@ -66,12 +79,14 @@ describe("AdmissoesService.create — bypassAceite (DoD §2 / regra 5 não-bloqu
     const { db, transaction } = makeDb();
     const svc = new AdmissoesService(db);
 
-    await expect(svc.create(dtoVazio())).rejects.toBeInstanceOf(ConflictException);
+    // Com a data de nascimento presente, o guard duro da data NÃO dispara, então este caso segue
+    // provando que as DEMAIS pendências (salário, contrato, etc.) ainda exigem aceite explícito.
+    await expect(svc.create(dtoComNascimento())).rejects.toBeInstanceOf(ConflictException);
     // o guard barra ANTES de abrir a transação.
     expect(transaction).not.toHaveBeenCalled();
 
     // confirma o shape do erro (needsAceite + campos pendentes).
-    await svc.create(dtoVazio()).catch((err: ConflictException) => {
+    await svc.create(dtoComNascimento()).catch((err: ConflictException) => {
       const body = err.getResponse() as { needsAceite?: boolean; camposPendentes?: string[] };
       expect(body.needsAceite).toBe(true);
       expect(body.camposPendentes).toEqual(expect.arrayContaining(["Salário", "Tipo de contrato"]));
@@ -96,7 +111,9 @@ describe("AdmissoesService.create — bypassAceite (DoD §2 / regra 5 não-bloqu
     const { db, transaction } = makeDb();
     const svc = new AdmissoesService(db);
 
-    const res = await svc.create({ ...dtoVazio(), aceitePendencias: true });
+    // A data de nascimento ESTÁ presente: o aceite resolve as demais pendências e a admissão nasce.
+    // (Sem a data, nem o aceite cria — isso é coberto pelo spec da regra de bloqueio da data.)
+    const res = await svc.create({ ...dtoComNascimento(), aceitePendencias: true });
 
     expect(res).toMatchObject({ admissaoId: "adm-nova" });
     expect(transaction).toHaveBeenCalledTimes(1);

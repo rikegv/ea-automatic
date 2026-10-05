@@ -19937,3 +19937,44 @@ shared-types (src+dist, só os exports novos) copiados da main; frontend buildad
 `frontend` construíram; `tester` independente: 9 testes novos verdes, 0 defeito, provou que a vaga
 aberta à mão aparece e que a REVISAO some da Central mas fica no `pendentesDeRevisao`. Suítes: backend
 469/8556, frontend 131/1889, zero vermelho. Coordenador: backend, contrato, prova e publicação.
+
+---
+
+## 05/10/2026 (noite): DATA DE NASCIMENTO OBRIGATÓRIA no "+ Nova Admissão", e o endereço do link do Portal corrigido
+
+**O que entrou.** A Data de Nascimento do candidato virou BLOQUEANTE na criação humana (wizard
+"+ Nova Admissão"). Antes tinha asterisco mas deixava salvar sem, aceitando a pendência, e isso fazia
+o candidato nascer sem poder entrar no Portal (que identifica por CPF mais data de nascimento). Agora
+o botão "Confirmar admissão" só habilita com a data, e o backend recusa a criação humana sem ela.
+
+**Por quê.** Sem a data, o link do Portal não deixa o candidato passar da primeira tela. Decisão do
+diretor, validada por ele na 3120.
+
+**Onde (recorte nominal, §A.14).**
+- `apps/frontend/src/app/(app)/nova/page.tsx`: `cand.dataNascimento.trim()` entrou no `canConfirm`.
+- `apps/backend/src/admissoes/admissoes.service.ts`: bloqueio duro no `create`, logo após a validação
+  de CPF, com curto-circuito `!opts?.bypassAceite` para NÃO quebrar o Pandapé (de/para resolvido, que
+  entra pelo mesmo `create` com `bypassAceite: true` e pode não trazer a data). O `pend.push("Data de
+  nascimento")` foi removido: a data saiu da lista de pendências aceitáveis, não é mais contornável
+  por `aceitePendencias: true`. O DTO e a edição (`UpdateAdmissaoDto`) NÃO foram tocados.
+- Testes: `apps/backend/src/pandape/pandape-bypass-aceite.spec.ts` (ajustados os 2 casos que
+  codificavam a regra antiga) e `apps/backend/src/admissoes/admissoes.data-nascimento-bloqueante.spec.ts`
+  (novo). 8/8 verdes.
+
+**As existentes sem data (§A.19, decisão do diretor): NÃO mexer.** Medido em produção: 152 admissões
+sem data de nascimento, e ZERO estão vivas (92 ADMISSAO_CONCLUIDA + 60 DECLINOU, todas terminais).
+A obrigatoriedade vale SÓ para admissões novas; o passado fica intacto, não entra em fila nem recálculo.
+
+**Fábrica (§A.38/§A.39).** `arquiteto` mapeou o impacto (achou que o `create` é compartilhado com o
+Pandapé, o que ditou o desenho). `tester` independente escreveu/consertou os specs (8/8 verdes).
+`seguranca`: APROVADO (mensagem de erro estática sem PII, sem log novo de dado pessoal, Pandapé
+intacto). Coordenador: construção, medição em produção, prova visual na 3120 (screenshots: sem data o
+botão fica desabilitado, com data habilita; data de admissão/telefone/e-mail seguem não bloqueantes).
+
+**Endereço do link do Portal corrigido (produção).** `PORTAL_LINK_BASE_URL` foi trocado de
+`https://portal.soulan.com.br/portal` (DNS morto, não abre no 4G) para
+`https://clientesportalsoulan.com.br/portal` (o domínio que está no ar e serve produção). Só a
+variável do `.env`, nada mais. A partir daí todo link gerado no Gerenciador aponta para o endereço
+que abre de fora. Provado: link de teste gerado começa com `clientesportalsoulan.com.br`.
+
+**Commit (hashes):** ver `git log` desta data.
