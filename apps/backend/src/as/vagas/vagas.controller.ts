@@ -54,7 +54,10 @@ export class VagasController {
 
   @Get()
   list() {
-    return this.vagas.list();
+    // A CENTRAL DE VAGAS mostra só vaga JÁ LIBERADA (decisão do diretor, 05/10/2026): a pendente de
+    // revisão e o rascunho seguem só no Liberar Vaga. O filtro mora no `listCentral`, não no `list`
+    // cru, que a fila de revisão ainda consome. Ver o comentário do método.
+    return this.vagas.listCentral();
   }
 
   /** Cargos e clientes para os seletores do cadastro, servidos pelo próprio módulo (ver o service). */

@@ -38,6 +38,7 @@ import {
   VAGA_VINCULO_LABEL,
   exigeTempoContrato,
   nomeDaUf,
+  papelDeVagaLiberada,
   rotuloTempoContrato,
   IDIOMA_NIVEL_LABEL,
   type AsOrigemDoValor,
@@ -637,6 +638,24 @@ export default function CentralDeVagasPage() {
    * o recorte (`filtradas`) já o consomem, e em JavaScript a ordem de declaração é a ordem de uso.
    */
   const { status: catalogoStatus } = useStatusVaga(token);
+  /**
+   * ─ O CATÁLOGO SÓ DAS VAGAS JÁ LIBERADAS (decisão do diretor, 05/10/2026) ─────────────────────
+   *
+   * A CENTRAL DE VAGAS MOSTRA SÓ VAGA LIBERADA: papéis ABERTURA, ENTREGA, FECHAMENTO e CANCELAMENTO
+   * (`VAGA_STATUS_PAPEIS_LIBERADAS`, lido via `papelDeVagaLiberada`). As de papel REVISAO (Pendente
+   * De Revisão) e RASCUNHO saem por inteiro da tela e seguem vivendo só no Liberar Vaga.
+   *
+   * ESTE RECORTE SERVE A DOIS PONTOS, E SÓ A ELES: os CARDS da primeira fileira (`kpis.cards`) e as
+   * opções do FILTRO de status (`optStatus`). Sem ele, "Pendente De Revisão" e "Rascunho" seriam
+   * cards zerados e opções de filtro que nunca casam, porque o backend já não manda essas linhas.
+   *
+   * O RÓTULO, A ORDENAÇÃO E A BUSCA CONTINUAM COM O CATÁLOGO COMPLETO (`catalogoStatus`): uma linha
+   * precisa sempre resolver o próprio rótulo, mesmo que seu papel não apareça na fileira de cards.
+   */
+  const catalogoStatusLiberados = useMemo(
+    () => catalogoStatus.filter((st) => papelDeVagaLiberada(st.papel)),
+    [catalogoStatus],
+  );
   /**
    * O CATÁLOGO DE LINHAS DE SERVIÇO (Onda C, peça 1). Memoizado por carga de página, como o de
    * status e o de etapas: é DADO DO DIRETOR, lido por endpoint, e nunca uma lista escrita na tela.
@@ -1770,10 +1789,12 @@ export default function CentralDeVagasPage() {
    * │ qualquer chave) e a LISTA dos cards vem de `cardsDeStatus`, direto do catálogo.             │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
-   * O CATÁLOGO INTEIRO ENTRA (`catalogoStatus`, com os inativos), e não só os ativos, pelo mesmo
-   * motivo dos cards de etapa: inativar um status NÃO move as vagas que estão nele, e essas vagas
-   * precisam continuar aparecendo, com o rótulo e a cor de verdade, marcadas como fora de
-   * circulação. Só com os ativos, elas sumiriam da fileira sem nada falhar.
+   * O CATÁLOGO ENTRA COM OS INATIVOS, mas só os de papel LIBERADO (`catalogoStatusLiberados`), pelo
+   * mesmo motivo dos cards de etapa: inativar um status NÃO move as vagas que estão nele, e essas
+   * vagas precisam continuar aparecendo, com o rótulo e a cor de verdade, marcadas como fora de
+   * circulação. Só com os ativos, elas sumiriam da fileira sem nada falhar. O recorte por papel
+   * liberado tira "Pendente De Revisão" e "Rascunho" da fileira: elas não estão na Central (o
+   * backend já não as manda), então um card delas nasceria sempre zerado.
    */
   const kpis = useMemo(() => {
     const conta: Record<string, number> = {};
@@ -1789,9 +1810,9 @@ export default function CentralDeVagasPage() {
        * mora em `lib/as-vagas-lista.somarPosicoesOficiais` e é testada lá.
        */
       posicoes: somarPosicoesOficiais(filtradas),
-      cards: cardsDeStatus(catalogoStatus, conta),
+      cards: cardsDeStatus(catalogoStatusLiberados, conta),
     };
-  }, [filtradas, catalogoStatus]);
+  }, [filtradas, catalogoStatusLiberados]);
 
   /**
    * ─ A SEGUNDA FILEIRA (peça 2.3): QUANTA GENTE, E ONDE ────────────────────────────────────────
@@ -1841,15 +1862,19 @@ export default function CentralDeVagasPage() {
    * O INATIVO FICA NA LISTA, e aqui a régua é diferente da dos cards de propósito: card CONTA, e
    * card zerado de status fora de circulação é ruído; filtro PROCURA, e procurar por um status
    * inativado é justamente como se acha a vaga que ficou parada nele.
+   *
+   * SÓ OS DE PAPEL LIBERADO (`catalogoStatusLiberados`): o filtro não oferece "Pendente De Revisão"
+   * nem "Rascunho", porque essas vagas não aparecem na Central (o backend já não as manda), e um
+   * filtro por elas nunca casaria com nenhuma linha.
    */
   const optStatus = useMemo(
     () =>
-      statusOrdenados(catalogoStatus).map((st) => ({
+      statusOrdenados(catalogoStatusLiberados).map((st) => ({
         value: st.codigo,
         label: st.ativo ? st.rotulo : `${st.rotulo} (fora de circulação)`,
         color: corDoTom(st.tom),
       })),
-    [catalogoStatus],
+    [catalogoStatusLiberados],
   );
 
   const optEtapas = useMemo(() => {

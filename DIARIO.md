@@ -19904,3 +19904,36 @@ escreveu o requisito em paralelo, achou 2 defeitos reais (régua de posições p
 salário apagado que voltava) e matou 8/8 mutações pedidas mais 3 extras; `backend` e `frontend`
 construíram; coordenador: mapa, contrato, recrutadores, textos, prova e publicação.
 Suítes: backend 468 arquivos / 8.552 testes, frontend 131 / 1.889, zero vermelho.
+
+---
+
+## 05/10/2026 (fim de tarde): a Central de Vagas passa a mostrar SÓ vaga liberada
+
+Pedido urgente do diretor: a Central de Vagas deve mostrar só vaga JÁ LIBERADA (papel ABERTURA,
+ENTREGA, FECHAMENTO, CANCELAMENTO), no mesmo padrão da esteira. As PENDENTE_REVISAO e RASCUNHO saem
+por inteiro da Central e seguem só no Liberar Vaga. Antes, 504 pendentes poluíam a tela.
+
+**O recorte mora no backend, não no frontend:** `VagasService.listCentral()` filtra `list()` pelos
+papéis de `VAGA_STATUS_PAPEIS_LIBERADAS` (shared-types, fonte única), e o `GET /as/vagas` passou a
+chamá-lo. `list()` CRU fica intocado, porque o Liberar Vaga (`pendentesDeRevisao`,
+`liberadasDaRevisao`) ainda o consome e precisa da vaga em REVISAO. O recorte é por PAPEL, não pelo
+evento de liberação: a vaga aberta à mão (nasce ABERTA sem nunca ter passado por REVISAO) é liberada
+e aparece. Frontend: `catalogoStatusLiberados` tira "Pendente De Revisão" e "Rascunho" dos cards e do
+filtro de status; pill, rótulo, ordenação e busca seguem com o catálogo completo.
+
+**KPIs coerentes por construção:** cards, posições e funil derivam de `rows`/`filtradas`, que já
+chegam só com as liberadas. Nada hardcoded.
+
+**Medido em produção (prova visual, §A.13):** Central com 12 vagas abertas / 13 posições, cards só
+Aberta/Entregue/Fechada/Cancelada (sem Rascunho nem Pendente De Revisão). Liberar Vaga intacto: badge
+503, "503 vagas esperam revisão" (§A.27 preservado: as pendentes não sumiram, só saíram da Central).
+
+**Publicação sem build no release:** backend `dist`+`src` de `vagas.service`/`vagas.controller` e o
+shared-types (src+dist, só os exports novos) copiados da main; frontend buildado em cópia irmã e o
+`.next` trocado. GI conferido intacto. Backup em `.backup-20261005-central-liberadas`. `ea-backend` e
+`ea-frontend` reiniciados, ativos.
+
+**Fábrica (§A.38):** mudança de listagem, sem CPF/auth/RBAC, então sem `seguranca`. `backend` e
+`frontend` construíram; `tester` independente: 9 testes novos verdes, 0 defeito, provou que a vaga
+aberta à mão aparece e que a REVISAO some da Central mas fica no `pendentesDeRevisao`. Suítes: backend
+469/8556, frontend 131/1889, zero vermelho. Coordenador: backend, contrato, prova e publicação.

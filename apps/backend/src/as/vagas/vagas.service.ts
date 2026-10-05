@@ -28,6 +28,7 @@ import type {
   VagaMetaReducao,
   VagaStatus,
 } from "@ea/shared-types";
+import { VAGA_STATUS_PAPEIS_LIBERADAS } from "@ea/shared-types";
 import {
   CANDIDATURA_SITUACOES,
   type AsVagaCancelamentoPrevia,
@@ -306,6 +307,28 @@ export class VagasService {
    * obrigaria cada leitor a decidir o que fazer com a ausência, e o zero já é a resposta certa: vaga
    * sem gente dentro tem zero posições entregues.
    */
+  /**
+   * ─ A CENTRAL DE VAGAS: SÓ VAGA JÁ LIBERADA (decisão do diretor, 05/10/2026) ───────────────────
+   *
+   * A Central mostra só o que já foi liberado (aberta, entregue, fechada, cancelada), no mesmo padrão
+   * da esteira, que só mostra quem já entrou no fluxo. A `PENDENTE_REVISAO` (504 vagas espelhadas do
+   * Pandapé) e a `RASCUNHO` saem COMPLETAMENTE daqui e seguem vivendo só no Liberar Vaga, que lê
+   * `pendentesRevisao`/`liberadasDaRevisao` do `list()` CRU. Por isso o filtro mora AQUI e não no
+   * `list()`: `list()` é compartilhado (a fila de revisão e o lookup por id precisam da vaga em
+   * REVISAO), e filtrá-lo sumiria a vaga do Liberar Vaga também.
+   *
+   * O recorte é por PAPEL, não por status literal nem pelo evento de liberação: a vaga aberta à mão
+   * (trilha "nova", que nasce ABERTA sem nunca ter passado por REVISAO) é liberada e tem de aparecer,
+   * e o evento REVISAO->ABERTURA não a alcançaria. `VAGA_STATUS_PAPEIS_LIBERADAS` é a fonte única que
+   * o frontend (cards e filtro de status) também lê.
+   */
+  async listCentral(): Promise<VagaItemOndaE[]> {
+    const regua = await this.statusVaga.regua();
+    return (await this.list()).filter((v) =>
+      VAGA_STATUS_PAPEIS_LIBERADAS.some((papel) => regua.ehDoPapel(v.status, papel)),
+    );
+  }
+
   async list(): Promise<VagaItemOndaE[]> {
     const consultor = alias(usuarios, "consultor");
     const recruiter = alias(usuarios, "recruiter");

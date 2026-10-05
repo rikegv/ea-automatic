@@ -1202,6 +1202,31 @@ export const VAGA_STATUS_PAPEIS_DE_SISTEMA: readonly VagaStatusPapel[] = VAGA_ST
 );
 
 /**
+ * OS PAPÉIS DE VAGA JÁ LIBERADA, que é o que a CENTRAL DE VAGAS mostra (decisão do diretor, 05/10/2026).
+ *
+ * A vaga só aparece na Central depois de LIBERADA: as abertas e entregues, e as encerradas (fechada,
+ * cancelada). É o mesmo padrão da esteira, que só mostra quem já entrou no fluxo. Ficam DE FORA, e
+ * seguem vivendo só no Liberar Vaga: `REVISAO` (a espelhada do Pandapé, ainda não revisada por gente)
+ * e `RASCUNHO` (a vaga que ainda não nasceu para o time). `LIVRE` também fica fora (não é um estado
+ * de vaga liberada). Isso NÃO apaga nada: a vaga pendente continua no Liberar Vaga e, ao ser liberada,
+ * passa a aparecer aqui.
+ *
+ * FONTE ÚNICA: backend (a rota da Central) e frontend (cards e filtro de status) leem desta lista, para
+ * não divergirem sobre o que é "liberada".
+ */
+export const VAGA_STATUS_PAPEIS_LIBERADAS: readonly VagaStatusPapel[] = [
+  "ABERTURA",
+  "ENTREGA",
+  "FECHAMENTO",
+  "CANCELAMENTO",
+];
+
+/** A vaga, pelo papel do seu status, já foi liberada (aparece na Central de Vagas)? */
+export function papelDeVagaLiberada(papel: VagaStatusPapel): boolean {
+  return VAGA_STATUS_PAPEIS_LIBERADAS.includes(papel);
+}
+
+/**
  * UM STATUS PODE SER DESTINO DE UM MOVIMENTO MANUAL?
  *
  * A DUPLA CONFERÊNCIA É DELIBERADA, e não redundância: `movivelManualmente` é um flag que o DIRETOR
