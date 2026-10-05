@@ -19834,3 +19834,28 @@ duas. O veto do mapa pagou-se sozinho: foi ele que achou o terceiro portão da a
 acoplamento de PII. `tester` entrou junto com a construção, achou o furo da marca e provou que o teste
 do V12 morde contra o HEAD. `ia` fechou o `ai-service`. `backend` achou e declarou a própria regressão,
 o que fez a tarefa 1 ser revertida em vez de publicada.
+
+---
+
+## 05/10/2026: o conserto do 429 da Central de Candidatos VALIDADO em produção, frente fechada
+
+**O diretor validou na tela de produção: "funcionou perfeitamente".** Com isso fecha a frente aberta
+em 02/10 (madrugada e tarde). Nada novo a publicar: o frontend `a151931` está no ar desde 02/10
+17:24:36 UTC, e o backend entrou no `ab38a11`.
+
+**O que foi medido antes da validação (05/10, 12:19 UTC), para o registro não depender de memória:**
+- os 3 arquivos do `a151931` na árvore de release são idênticos ao commit (diff contra o git), e o chunk
+  servido (`page-e244e0a52d9bb4c9.js`, http 200, 35.017 bytes) carrega o canário `Funil N`;
+- a rota `POST /api/as/candidatos/buscar` responde 401 sem sessão (existe), e o `dist` traz `funilDaPagina`;
+- no log de acesso do Caddy: **156 respostas 429** em 02/10 entre 09h e 13h (85 na rota antiga
+  `/as/candidatos/vaga/:id`), e **zero 429, em todas as rotas**, de 02/10 17:24 a 05/10 12:18.
+
+**Uma ressalva de método que a validação do diretor resolveu:** até 05/10 12:18 ninguém tinha aberto
+a Central em produção. As 10 ocorrências de `/as/candidatos` no log eram o prefetch do menu lateral
+(o Next pré-carrega todas as páginas do menu), não visita, e zero `buscar` havia passado pelo proxy.
+O zero de 429 era verdadeiro e não provava nada sobre a tela; a prova é a do diretor.
+
+**Achado registrado, não construído (§A.31):** `/api/esteira/pendencias-portal` chega a **81 chamadas
+por minuto** sozinha, com **1.531 respostas 400** desde 02/10 17:24, no mesmo balde de 120/min do
+sistema inteiro. Foi a fonte de 61 dos 429 de 02/10. Hoje não estoura; é a próxima candidata a negar
+serviço. Frente própria, a decidir pelo diretor.
