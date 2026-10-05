@@ -404,9 +404,9 @@ describe("os quatro campos que NÃO são adotáveis", () => {
    */
   const NAO_ADOTAVEIS = [
     { campo: "situacao", rotulo: "Situação", caminho: /ficha do candidato/i },
-    { campo: "vaga_codigo", rotulo: "Código Da Vaga", caminho: /revisão da vaga/i },
-    { campo: "vaga_nome_divulgacao", rotulo: "Nome Da Vaga", caminho: /revisão da vaga/i },
-    { campo: "vaga_cidade", rotulo: "Cidade Da Vaga", caminho: /revisão da vaga/i },
+    { campo: "vaga_codigo", rotulo: "Código Da Vaga", caminho: /editar vaga/i },
+    { campo: "vaga_nome_divulgacao", rotulo: "Nome Da Vaga", caminho: /editar vaga/i },
+    { campo: "vaga_cidade", rotulo: "Cidade Da Vaga", caminho: /editar vaga/i },
   ] as const;
 
   it.each(NAO_ADOTAVEIS)(

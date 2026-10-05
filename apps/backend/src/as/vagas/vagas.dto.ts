@@ -901,3 +901,53 @@ export class TransferirConsultorDaVagaDto {
   @IsUUID()
   paraConsultorId!: string;
 }
+
+/**
+ * ─ EDITAR A VAGA JÁ LIBERADA (Central de Vagas, 05/10/2026) ───────────────────────────────────────
+ *
+ * O CORPO DA EDIÇÃO É O DO FORMULÁRIO (herdado, com as MESMAS validações, e o `CreateVagaDto` não
+ * muda), mais os dois lados da vaga e as duas confirmações. Todos opcionais.
+ *
+ * A SEMÂNTICA É OUTRA, e é o que separa esta rota do `PATCH :id` do rascunho: CAMPO AUSENTE É "NÃO
+ * MEXER", e não "limpar". Para limpar um campo, mande `null` ou texto vazio. Quem decide o que entra
+ * é a lista branca do `VagasEdicaoService`, e não este DTO: `codigo`, `idVacancyPandape`, `status`,
+ * `contraparteId` e `envioShortlist` só são aceitos IGUAIS ao valor atual. `regiaoEstado` é aceito:
+ * com cidade, prevalece a UF da cidade; sem cidade, vale a UF escolhida no formulário.
+ */
+export class EditarVagaDto extends CreateVagaDto {
+  /**
+   * O SALÁRIO NA EDIÇÃO: `null` ou vazio é LIMPAR, e não "não mexer" (achado do tester, 05/10/2026).
+   *
+   * O `CreateVagaDto` normaliza vazio para `undefined`, que no rascunho é o certo e na edição faria
+   * o salário apagado voltar em silêncio. O `class-transformer` aplica a transformação do pai ANTES
+   * desta, então ela lê o valor CRU do corpo (`obj[key]`), e não o `value` já normalizado. O resto
+   * passa pela mesma normalização e pelo mesmo `@Matches` herdado.
+   */
+  @IsOptional()
+  @Transform(({ obj, key }) => {
+    const cru: unknown = (obj as Record<string, unknown>)[key];
+    if (cru === null || (typeof cru === "string" && cru.trim() === "")) return null;
+    return normalizarSalarioParaDto(cru);
+  })
+  declare salarioAbertura?: string;
+
+  /** O consultor da vaga. Conferido no service: existe, está ativo e tem papel de A&S CONSULTOR. */
+  @IsOptional()
+  @IsUUID()
+  consultorId?: string | null;
+
+  /** O recruiter da vaga. Conferido no service: existe, está ativo e tem papel de A&S RECRUITER. */
+  @IsOptional()
+  @IsUUID()
+  recruiterId?: string | null;
+
+  /** A tela já mostrou quantas entrevistas com o cliente antigo a troca de cliente apaga. */
+  @IsOptional()
+  @IsBoolean()
+  confirmarTrocaDeCliente?: boolean;
+
+  /** A tela já avisou que a meta nova fica abaixo de quem está alocado. */
+  @IsOptional()
+  @IsBoolean()
+  confirmarAbaixoDoAlocado?: boolean;
+}

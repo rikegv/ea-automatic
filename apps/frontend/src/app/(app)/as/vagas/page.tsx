@@ -128,6 +128,8 @@ import {
 } from "@/lib/as-vaga-cancelamento";
 import { VagaPainelModal, type AcaoDaVaga } from "@/components/as/vagas/VagaPainelModal";
 import { ReabrirVagaModal } from "@/components/as/vagas/ReabrirVagaModal";
+import { ExcluirVagaModal } from "@/components/as/vagas/ExcluirVagaModal";
+import { podeExcluirVagaPeloPapel } from "@/lib/as-vaga-edicao";
 /* A TRILHA SAIU DESTE ARQUIVO (frente do reuso pela Liberar Vaga). O que ficou aqui importado dela
    é o vocabulário que as DUAS telas leem: o contrato de `/as/vagas/opcoes`, o formato do CPF e os
    idiomas da vaga, que a FICHA também escreve, e o "Substituição" que a ficha também compara. Uma
@@ -498,7 +500,10 @@ export default function CentralDeVagasPage() {
   /* `isAdmin` É MASTER OU SUPER_ADMIN, a tradução exata do `@Roles` da rota do reabrir (peça 2).
      Ele NÃO é a trava, é o que decide se a caixa lê a prévia ou explica que a ação é de Master: a
      autoridade é o servidor, que recusa o POST de quem não tem o papel. */
-  const { token, isAdmin } = useAuth();
+  /* O `user.papel` decide só se o "Excluir vaga" APARECE (frente do CRUD da vaga liberada: excluir
+     é de SUPER_ADMIN, o Master não exclui), pela régua `podeExcluirVagaPeloPapel`. A autoridade é
+     o `@Roles` do DELETE. */
+  const { token, isAdmin, user } = useAuth();
   const [rows, setRows] = useState<VagaListItem[]>([]);
   const [opcoes, setOpcoes] = useState<Opcoes>({
     cargos: [],
@@ -785,6 +790,8 @@ export default function CentralDeVagasPage() {
    * página que não precisa dele (§A.6).
    */
   const [reabrirAlvo, setReabrirAlvo] = useState<VagaListItem | null>(null);
+  /** EXCLUIR A VAGA (frente do CRUD da vaga liberada). Toda a leitura e o erro moram no modal. */
+  const [excluirAlvo, setExcluirAlvo] = useState<VagaListItem | null>(null);
   const [cancForm, setCancForm] = useState<CancelamentoForm>({
     motivo: "",
     observacao: "",
@@ -986,6 +993,17 @@ export default function CentralDeVagasPage() {
     if (!detalhe) return;
     setVerAlvo(null);
     setTrilha({ tipo: "clone", vaga: detalhe });
+  }
+
+  /**
+   * EDITAR A VAGA JÁ LIBERADA (frente do CRUD): a MESMA trilha, no modo `edicao`, com o detalhe
+   * buscado uma vez como no rascunho e no clone. Fecha o painel antes, pelo mesmo motivo deles.
+   */
+  async function editarVagaLiberada(v: VagaListItem) {
+    const detalhe = await buscarDetalhe(v.id);
+    if (!detalhe) return;
+    setVerAlvo(null);
+    setTrilha({ tipo: "edicao", vaga: detalhe });
   }
 
   function abrirPosicoes(v: VagaListItem) {
@@ -1380,6 +1398,17 @@ export default function CentralDeVagasPage() {
     /* EDITAR AS POSIÇÕES (os dois contadores): na vaga viva e fora do rascunho. No RASCUNHO os dois
        campos já são editados na própria trilha, e na vaga ENCERRADA a meta não muda mais, porque ela
        já foi confrontada com a contagem do fechamento. */
+    /* EDITAR A VAGA INTEIRA (frente do CRUD da vaga liberada): na vaga EM PROCESSO, a mesma régua
+       do "Editar posições", para qualquer usuário com o menu. O "Editar posições" fica como está. */
+    if (emProcesso) {
+      lista.push({
+        id: "editar",
+        rotulo: "Editar vaga",
+        icone: "pen",
+        descricao: `Editar a vaga ${rotuloDaVaga(v)}`,
+        onClick: () => void editarVagaLiberada(v),
+      });
+    }
     if (emProcesso) {
       lista.push({
         id: "posicoes",
@@ -1442,6 +1471,18 @@ export default function CentralDeVagasPage() {
       descricao: `Clonar a vaga ${rotuloDaVaga(v)}`,
       onClick: () => clonarVaga(v),
     });
+    /* EXCLUIR É SÓ DO SUPER_ADMIN, e aqui o botão se ESCONDE dos demais (decisão do diretor: o
+       Master não exclui). O modal lê a prévia e diz quando a vaga tem gente e não pode sair. */
+    if (podeExcluirVagaPeloPapel(user?.papel)) {
+      lista.push({
+        id: "excluir",
+        rotulo: "Excluir vaga",
+        icone: "trash",
+        descricao: `Excluir a vaga ${rotuloDaVaga(v)}`,
+        perigo: true,
+        onClick: () => setExcluirAlvo(v),
+      });
+    }
     return lista;
   }
 
@@ -3100,7 +3141,11 @@ export default function CentralDeVagasPage() {
              painel, e cada um deles sempre tem algo na tela (o formulário, ou a recusa que tomou o
              lugar dele). */
           acaoAberta={
-            posAlvo !== null || fecharAlvo !== null || cancelarAlvo !== null || reabrirAlvo !== null
+            posAlvo !== null ||
+            fecharAlvo !== null ||
+            cancelarAlvo !== null ||
+            reabrirAlvo !== null ||
+            excluirAlvo !== null
           }
         >
           <>
@@ -3705,6 +3750,22 @@ export default function CentralDeVagasPage() {
                lista completa, não de uma linha. Sem ele, a linha ficaria certa no meio de uma faixa
                de indicadores errada. */
             setRows((atuais) => atuais.map((v) => (v.id === atualizada.id ? atualizada : v)));
+            void carregar();
+          }}
+        />
+      )}
+
+      {/* ── EXCLUIR A VAGA (frente do CRUD da vaga liberada) ─────────────────
+          DEPOIS DO PAINEL, para pintar por cima dele, e sem `key`, pelo mesmo motivo medido no
+          reabrir logo acima. Excluída, a vaga some: o painel fecha junto e a lista é relida. */}
+      {excluirAlvo && (
+        <ExcluirVagaModal
+          vaga={excluirAlvo}
+          token={token}
+          onFechar={() => setExcluirAlvo(null)}
+          onExcluida={() => {
+            setExcluirAlvo(null);
+            setVerAlvo(null);
             void carregar();
           }}
         />

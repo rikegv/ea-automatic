@@ -1,10 +1,21 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Optional,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import { CurrentUser, Roles } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
 import {
   CancelarVagaDto,
   CreateVagaDto,
   EditarPosicoesVagaDto,
+  EditarVagaDto,
   FecharVagaDto,
   MoverStatusVagaDto,
   ReabrirVagaDto,
@@ -12,6 +23,7 @@ import {
   LiberarVagaRevisaoDto,
   TransferirConsultorDaVagaDto,
 } from "./vagas.dto";
+import { VagasEdicaoService } from "./vagas-edicao.service";
 import { VagasService } from "./vagas.service";
 
 /**
@@ -24,7 +36,21 @@ import { VagasService } from "./vagas.service";
  */
 @Controller("as/vagas")
 export class VagasController {
-  constructor(private readonly vagas: VagasService) {}
+  constructor(
+    private readonly vagas: VagasService,
+    /**
+     * Editar e excluir a vaga JÁ LIBERADA (05/10/2026), em serviço próprio por exigência do veto.
+     *
+     * OPCIONAL NA ASSINATURA por alcance (§A.26): specs já validadas constroem esta controller à mão
+     * com um argumento só. Em execução o Nest sempre injeta (o provider está no `AsModule`).
+     */
+    @Optional() private readonly edicaoInjetada?: VagasEdicaoService,
+  ) {}
+
+  private edicao(): VagasEdicaoService {
+    if (!this.edicaoInjetada) throw new Error("VagasEdicaoService não foi injetado.");
+    return this.edicaoInjetada;
+  }
 
   @Get()
   list() {
@@ -96,6 +122,16 @@ export class VagasController {
   @Get("consultores")
   consultoresParaTransferencia() {
     return this.vagas.consultoresParaTransferencia();
+  }
+
+  /**
+   * OS RECRUITERS QUE PODEM RECEBER UMA VAGA: o catálogo do seletor de recruiter da edição da vaga
+   * liberada (05/10/2026). Mesmo regime de `consultores`: caminho fixo ANTES do `@Get(":id")`, sem
+   * `@Roles` (leitura de id e nome de usuário interno; o menu `as-vagas` restringe).
+   */
+  @Get("recrutadores")
+  recrutadores() {
+    return this.edicao().recrutadores();
   }
 
   /** Quem abriu vem da SESSÃO, nunca do corpo: é trilha, não campo de formulário. */
@@ -355,6 +391,49 @@ export class VagasController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.vagas.transferirConsultor(id, dto, user.id);
+  }
+
+  /**
+   * ─ EDITAR A VAGA JÁ LIBERADA (05/10/2026): a prévia e a escrita ──────────────────────────────
+   *
+   * SEM `@Roles`: editar é do consultor (decisão do diretor), e quem restringe é o menu `as-vagas`,
+   * que reivindica a controller inteira (`VagasController.*`). As travas são de ESTADO, no service:
+   * só vaga em processo, a fronteira da admissão, as posições e os destinos dos dois lados.
+   *
+   * Recusa de regra volta 409 com `AsVagaEdicaoNegada` (`codigo` de `AS_VAGA_EDICAO_RECUSAS`); os
+   * dois `CONFIRMAR_*` pedem que a tela reenvie o mesmo corpo com a confirmação marcada.
+   */
+  @Get(":id/edicao-previa")
+  previaDaEdicao(@Param("id", ParseUUIDPipe) id: string) {
+    return this.edicao().previa(id);
+  }
+
+  @Patch(":id/editar")
+  editar(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: EditarVagaDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.edicao().editar(id, dto, user.id);
+  }
+
+  /**
+   * ─ EXCLUIR A VAGA (05/10/2026): só o SUPER_ADMIN, e só vaga sem candidatura nem shortlist ──────
+   *
+   * `@Roles("SUPER_ADMIN")` SOZINHO, e o MASTER recebe 403 de propósito: o `RolesGuard` faz
+   * `required.includes(papel)`, e a decisão do diretor é que o Master não exclui. A PRÉVIA tem o
+   * mesmo guard, porque só serve a quem pode excluir. O menu `as-vagas` segue valendo por cima.
+   */
+  @Get(":id/exclusao-previa")
+  @Roles("SUPER_ADMIN")
+  previaDaExclusao(@Param("id", ParseUUIDPipe) id: string) {
+    return this.edicao().exclusaoPrevia(id);
+  }
+
+  @Delete(":id")
+  @Roles("SUPER_ADMIN")
+  excluir(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.edicao().excluir(id, user.id);
   }
 
   /**

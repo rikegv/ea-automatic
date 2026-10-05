@@ -5663,3 +5663,136 @@ export const ESTADO_DA_PROPOSTA_LABEL: Record<EstadoDaPropostaDeCliente, string>
  */
 export const CASOS_DA_PROPOSTA_DE_CLIENTE = ["COM_CODIGO", "SO_NOME"] as const;
 export type CasoDaPropostaDeCliente = (typeof CASOS_DA_PROPOSTA_DE_CLIENTE)[number];
+
+/*
+ * ─ EDITAR E EXCLUIR VAGA JÁ LIBERADA (Central de Vagas, 05/10/2026) ────────────────────────────────
+ *
+ * Contrato da frente do CRUD da vaga liberada. O mapa de alcance, o veto do `seguranca` e as 7
+ * decisões do diretor estão em `docs/MAPA-CRUD-VAGA-LIBERADA.md`.
+ *
+ * EDITAR: qualquer consultor com o menu `as-vagas`, só vaga EM PROCESSO (papel ABERTURA ou ENTREGA).
+ * Vaga ENCERRADA (fechada, cancelada) não se edita: tem de ser editada antes de encerrar. Vaga em
+ * RASCUNHO ou REVISAO tem formulário próprio (continuar rascunho, revisar).
+ * EXCLUIR: só SUPER_ADMIN, e só vaga sem candidatura nem shortlist.
+ */
+
+/**
+ * O QUE O A&S NÃO EDITA MAIS DEPOIS DE MANDAR ALGUÉM PARA A ADMISSÃO (decisão 3 do diretor).
+ *
+ * São EXATAMENTE os campos da vaga que a ponte copia para a admissão no envio
+ * (`dadosDaPonteParaAdmissao`). Depois do primeiro envio, o dado é do ADM, que o edita na tela dele
+ * (ficha da admissão, troca de cliente, liberação); o A&S não propaga e não edita. A fronteira vale
+ * enquanto a vaga tiver candidatura ENVIADA PARA ADMISSÃO ou ligada a uma admissão.
+ *
+ * O BACKEND CONFERE NO RESULTADO, NÃO NO CORPO: um campo acoplado (trocar o vínculo apaga o
+ * substituído) mudaria um campo travado sem que o corpo o mencionasse.
+ */
+export const AS_VAGA_CAMPOS_DA_ADMISSAO = [
+  "codCliente",
+  "cargoId",
+  "salarioAbertura",
+  "horarioEscala",
+  "tempoContrato",
+  "motivo",
+  "substituidoNome",
+  "substituidoCpf",
+  "localTrabalho",
+] as const;
+export type AsVagaCampoDaAdmissao = (typeof AS_VAGA_CAMPOS_DA_ADMISSAO)[number];
+
+/**
+ * O QUE A EDIÇÃO NUNCA ESCREVE, em vaga nenhuma.
+ *
+ * `codigo` e `idVacancyPandape` são a identidade da vaga no Pandapé: trocar faria a varredura criar
+ * uma vaga duplicada. `status` tem fluxo próprio (mover, fechar, cancelar, reabrir). `contraparteId`
+ * é substituído por `consultorId` e `recruiterId` explícitos. `envioShortlist` é derivado das
+ * shortlists. Os carimbos de fechamento, reabertura e cancelamento, e o `salarioFechamento`, não
+ * estão no formulário e não entram por aqui.
+ *
+ * `regiaoEstado` NÃO está aqui de propósito: ele só é derivado quando a vaga tem cidade
+ * (`cidade?.uf ?? dto.regiaoEstado`); sem cidade, é a UF que a pessoa escolheu no formulário.
+ */
+export const AS_VAGA_CAMPOS_NUNCA_EDITAVEIS = [
+  "codigo",
+  "idVacancyPandape",
+  "status",
+  "contraparteId",
+  "envioShortlist",
+] as const;
+export type AsVagaCampoNuncaEditavel = (typeof AS_VAGA_CAMPOS_NUNCA_EDITAVEIS)[number];
+
+/** O que a tela recebe ANTES de abrir a edição. Conveniência: a autoridade é a rota de edição. */
+export interface AsVagaEdicaoPrevia {
+  vagaId: string;
+  /** Papel ABERTURA ou ENTREGA. Falso traz `motivoNaoEditavel`. */
+  editavel: boolean;
+  motivoNaoEditavel: string | null;
+  /** Candidaturas da vaga enviadas para a admissão (situação ou admissão ligada). */
+  enviadosParaAdmissao: number;
+  /** Vazio quando `enviadosParaAdmissao` é zero; senão, `AS_VAGA_CAMPOS_DA_ADMISSAO`. */
+  camposTravadosPelaAdmissao: AsVagaCampoDaAdmissao[];
+  /** Entrevistas nas etapas de entrega ao cliente, que a troca de cliente APAGA (decisão 2). */
+  entrevistasComOCliente: number;
+  posicoesOficiais: number | null;
+  posicoesBanco: number;
+  /** Ocupação viva, a mesma régua do `editarPosicoes`. */
+  alocados: number;
+  entregues: number;
+  consultorId: string | null;
+  recruiterId: string | null;
+}
+
+/**
+ * Os recusos da edição que a tela trata pelo `codigo`. Os dois `CONFIRMAR_*` não são erro: são o
+ * pedido de confirmação, e a tela reenvia o mesmo corpo com a confirmação marcada.
+ */
+export const AS_VAGA_EDICAO_RECUSAS = [
+  "VAGA_NAO_EDITAVEL",
+  "CAMPO_NUNCA_EDITAVEL",
+  "CAMPO_DA_ADMISSAO",
+  "CONFIRMAR_TROCA_DE_CLIENTE",
+  "CONFIRMAR_ABAIXO_DO_ALOCADO",
+  "ABAIXO_DO_ENTREGUE",
+] as const;
+export type AsVagaEdicaoRecusa = (typeof AS_VAGA_EDICAO_RECUSAS)[number];
+
+export interface AsVagaEdicaoNegada {
+  codigo: AsVagaEdicaoRecusa;
+  mensagem: string;
+  /** Os campos que causaram `CAMPO_NUNCA_EDITAVEL` ou `CAMPO_DA_ADMISSAO`. */
+  campos?: string[];
+  /** Quantas entrevistas a troca de cliente vai apagar (`CONFIRMAR_TROCA_DE_CLIENTE`). */
+  entrevistas?: number;
+  alocados?: number;
+  entregues?: number;
+}
+
+/**
+ * Confirmações que o corpo da edição carrega quando a tela já mostrou o aviso. Ausente vale falso.
+ * Mandar a confirmação sem a situação existir não faz nada.
+ */
+export interface AsVagaEdicaoConfirmacoes {
+  confirmarTrocaDeCliente?: boolean;
+  confirmarAbaixoDoAlocado?: boolean;
+}
+
+export interface AsVagaEdicaoResultado {
+  vagaId: string;
+  /** Quantos campos mudaram de fato (zero é sucesso sem efeito, e nada é gravado na trilha). */
+  camposAlterados: number;
+  entrevistasRemovidas: number;
+}
+
+/** O que o modal de exclusão recebe antes de o Super Admin confirmar. */
+export interface AsVagaExclusaoPrevia {
+  vagaId: string;
+  /** Falso quando há candidatura ou shortlist: o banco recusa e ninguém some em silêncio. */
+  podeExcluir: boolean;
+  candidaturas: number;
+  shortlists: number;
+  /**
+   * A vaga tem `idVacancyPandape`: se ainda estiver ativa na origem (Pandapé ou Digai), a varredura
+   * a recria na fila de revisão em até 30 minutos (decisão 4: permitido, com aviso).
+   */
+  voltaPelaVarredura: boolean;
+}

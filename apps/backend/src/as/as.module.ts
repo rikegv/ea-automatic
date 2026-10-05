@@ -58,6 +58,7 @@ import { VagaStatusController } from "./vaga-status/vaga-status.controller";
 import { VagaStatusService } from "./vaga-status/vaga-status.service";
 import { VagasController } from "./vagas/vagas.controller";
 import { VagasService } from "./vagas/vagas.service";
+import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
 
 /**
  * MÓDULO DE ATRAÇÃO E SELEÇÃO. Nasce ISOLADO: tabela própria (`vagas`), rota própria (`as/...`),
@@ -268,6 +269,8 @@ import { VagasService } from "./vagas/vagas.service";
   // vaga recebe candidato?" também.
   providers: [
     VagasService,
+    // Editar e excluir a vaga JÁ LIBERADA (05/10/2026). Usa as peças do `VagasService`, não o `atualizar`.
+    VagasEdicaoService,
     /*
      * `ShortlistsService` é o dono ÚNICO da escrita de `as_shortlists` e `as_shortlist_itens`, e o
      * SEGUNDO escritor de `vagas.envio_shortlist`. Os dois escritores daquele campo NÃO colidem,

@@ -89,8 +89,8 @@ export const artigo: Artigo = {
       acao: "A saída do funil se registra na ficha do candidato, escolhendo o motivo do catálogo, e não por esta fila. Concordando com o Pandapé, registre a saída na ficha e depois feche esta linha com o botão de manter o EA.",
     },
     {
-      sintoma: "No lugar do botão de adotar aparece um aviso dizendo para resolver pela revisão da vaga.",
-      acao: "Os campos de abertura da vaga só voltam a ser editáveis quando um Master devolve a vaga para revisão. Corrija a vaga por lá e depois feche esta linha com o botão de manter o EA.",
+      sintoma: "No lugar do botão de adotar aparece um aviso dizendo para resolver em Editar vaga.",
+      acao: "O nome e a cidade da vaga se corrigem em Editar vaga, na Central de Vagas, enquanto a vaga estiver aberta ou entregue. O código é a identidade da vaga no Pandapé e não se edita. Corrija a vaga por lá e depois feche esta linha com o botão de manter o EA.",
     },
     {
       sintoma: "Você adotou o valor errado e quer voltar atrás.",

@@ -1280,7 +1280,7 @@ export class VagasService {
    * de existir a continuação do rascunho isto vivia dentro do `create`; duplicá-lo no `atualizar`
    * teria feito o rascunho e a publicação limparem coisas diferentes.
    */
-  private camposDaTrilha(
+  public camposDaTrilha(
     regua: ReguaDeStatusDaVaga,
     dto: CreateVagaDto,
     status: VagaStatus,
@@ -1510,7 +1510,7 @@ export class VagasService {
    * não pode descobrir as pendências uma por uma. A tela já barra antes de chegar aqui; esta trava é
    * para o corpo montado fora dela, e é a autoridade.
    */
-  private travaObrigatorios(
+  public travaObrigatorios(
     regua: ReguaDeStatusDaVaga,
     campos: VagaCamposObrigatoriosComLinha,
     status: VagaStatus,
@@ -1684,7 +1684,7 @@ export class VagasService {
    * │ módulo já pagou várias vezes.                                                              │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  private reducaoDeMeta(
+  public reducaoDeMeta(
     antes: { posicoesOficiais: number | null; posicoesBanco: number },
     depois: { posicoesOficiais: number | null; posicoesBanco: number },
   ): {
@@ -1729,7 +1729,7 @@ export class VagasService {
    * O QUE FAZER VEM JUNTO. Quem lê está com o formulário aberto e precisa saber qual número serve, e
    * não só que o dele não serve.
    */
-  private mensagemDeExcesso(excesso: ExcessoDePosicoes): string {
+  public mensagemDeExcesso(excesso: ExcessoDePosicoes): string {
     const entregues =
       excesso.lado === "OFICIAIS"
         ? `${excesso.informado} ${excesso.informado === 1 ? "posição oficial" : "posições oficiais"}`
@@ -3900,7 +3900,7 @@ export class VagasService {
    * transação, sem dizer a quem opera o que fazer. A conferência é leitura, então mora FORA da
    * transação, como o catálogo de status: ela responde sobre um cadastro que não muda no intervalo.
    */
-  private async exigirClienteExistente(codCliente: string): Promise<void> {
+  public async exigirClienteExistente(codCliente: string): Promise<void> {
     const [achado] = await this.db
       .select({ cod: clientes.codCliente })
       .from(clientes)
@@ -4227,7 +4227,7 @@ export class VagasService {
    * §A.6: a frase de recusa fala de PAPEL e de ESTADO, e o nome que ela devolve é de usuário interno.
    * Nenhum dado de candidato passa por aqui.
    */
-  private async consultorDeDestino(paraId: string): Promise<{ id: string; nome: string }> {
+  public async consultorDeDestino(paraId: string): Promise<{ id: string; nome: string }> {
     const pessoa = await this.db.query.usuarios.findFirst({ where: eq(usuarios.id, paraId) });
     if (!pessoa) throw new NotFoundException("Consultor de destino não encontrado.");
     if (!pessoa.ativo) {
@@ -4618,7 +4618,7 @@ export class VagasService {
    * AUSENTE NÃO TOCA O BANCO: rascunho sem linha escolhida é estado normal, e quem cobra a presença
    * é a régua dos obrigatórios, na publicação.
    */
-  private async resolverLinhaServico(id: number | null | undefined): Promise<number | null> {
+  public async resolverLinhaServico(id: number | null | undefined): Promise<number | null> {
     if (id === null || id === undefined) return null;
     const linhas = await this.db
       .select({
@@ -4655,7 +4655,7 @@ export class VagasService {
    * │ é o único caminho legítimo para o nulo, e ele não passa por conferência nenhuma.             │
    * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  private async resolverHerdaveis(dto: CreateVagaDto): Promise<{
+  public async resolverHerdaveis(dto: CreateVagaDto): Promise<{
     segmentoId: number | null;
     comercialId: number | null;
   }> {
@@ -4707,7 +4707,7 @@ export class VagasService {
    *
    * AUSENTE NÃO TOCA O BANCO, pelo mesmo motivo: a vaga sem cidade é rascunho, não erro.
    */
-  private async resolverCidade(id: number | null | undefined): Promise<AsCidade | null> {
+  public async resolverCidade(id: number | null | undefined): Promise<AsCidade | null> {
     if (id === null || id === undefined) return null;
     const [cidade] = await this.db
       .select({ id: asCidades.id, nome: asCidades.nome, uf: asCidades.uf })
@@ -4796,7 +4796,7 @@ export class VagasService {
    * não sabe explicar. Aqui a resposta é 400 com o motivo, e o benefício inativo (que a FK aceitaria)
    * também é barrado.
    */
-  private async validaBeneficios(
+  public async validaBeneficios(
     itens: { beneficioId: string; valor?: string }[],
   ): Promise<{ beneficioId: string; valor: string | null }[]> {
     const porId = new Map<string, string | null>();

@@ -288,12 +288,12 @@ export function podeAdotar(campo: CampoDeDivergencia): boolean {
  * candidato, e os três campos de abertura de vaga, que se resolvem pela revisão da vaga.
  */
 export function resumoDoCaminhoManual(campo: CampoDeDivergencia): string {
-  return campo === "situacao" ? "Resolva na ficha do candidato" : "Resolva pela revisão da vaga";
+  return campo === "situacao" ? "Resolva na ficha do candidato" : "Resolva em Editar vaga";
 }
 
 /** A frase inteira, para o `title`. É a mesma régua que o 409 do servidor explica. */
 export function avisoDoCaminhoManual(campo: CampoDeDivergencia): string {
   return campo === "situacao"
     ? "Este campo não é adotado por aqui: quem sai do funil sai pela ficha do candidato, escolhendo o motivo do catálogo. Concordando com o Pandapé, registre a saída na ficha e depois feche esta linha com Manter o EA."
-    : "Este campo não é adotado por aqui: a vaga já foi liberada, e os campos de abertura só voltam a ser editáveis quando um Master devolve a vaga para a revisão. Corrija a vaga por lá e depois feche esta linha com Manter o EA.";
+    : "Este campo não é adotado por aqui. O nome e a cidade se corrigem em Editar vaga, na Central de Vagas, enquanto a vaga estiver aberta ou entregue; o código é a identidade da vaga no Pandapé e não se edita. Depois feche esta linha com Manter o EA.";
 }

@@ -30,6 +30,7 @@ import type { CampoExtraidoPortal, VereditoDoDocumento } from "@ea/shared-types"
 import { FONTES_EXTERNAS } from "../../domain/as-etapa-externa";
 import { RETENCAO_EVENTO_ACAO, RETENCAO_EVENTO_RESULTADO } from "../../domain/retencao-evento";
 import type { VagaIdiomaGravado } from "../../domain/vaga-idioma";
+import { VAGA_EDICAO_CAMPOS_DA_TRILHA } from "../../domain/vaga-edicao";
 import {
   areaEnum,
   asCandidatoOrigemEnum,
@@ -3869,6 +3870,67 @@ export const vagaConsultorTransferencias = pgTable(
       "ck_vaga_consultor_transferencias_houve_troca",
       sql`${t.deConsultorId} is distinct from ${t.paraConsultorId}`,
     ),
+  }),
+);
+
+/**
+ * ─ A TRILHA DA EDIÇÃO DA VAGA JÁ LIBERADA (0143, Central de Vagas, 05/10/2026) ────────────────────
+ *
+ * UMA LINHA POR CAMPO ALTERADO, com quem e quando. `de`/`para` só carregam valor nos campos de
+ * TIPO FECHADO (`VAGA_EDICAO_CAMPOS_COM_VALOR`); texto livre grava `valor_omitido = true` com os dois
+ * nulos (§A.6, veto do `seguranca`): é por texto livre que nome, CPF, telefone e e-mail entram.
+ *
+ * `vaga_id` SEM FK NENHUMA para `vagas`, e é desenho: CASCADE apagaria a trilha junto com a vaga
+ * excluída, NO ACTION impediria excluir vaga editada, SET NULL perderia o vínculo. `campo` tem CHECK
+ * na lista fechada (`VAGA_EDICAO_CAMPOS_DA_TRILHA`), lida da mesma constante que o serviço usa.
+ */
+const CAMPOS_DA_EDICAO_SQL = sql.raw(VAGA_EDICAO_CAMPOS_DA_TRILHA.map((c) => `'${c}'`).join(", "));
+
+export const vagaEdicoes = pgTable("vaga_edicoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    vagaId: uuid("vaga_id").notNull(),
+    porId: uuid("por_id")
+      .notNull()
+      .references(() => usuarios.id, { onDelete: "restrict" }),
+    em: timestamp("em", { withTimezone: true }).notNull().defaultNow(),
+    campo: varchar("campo", { length: 40 }).notNull(),
+    de: text("de"),
+    para: text("para"),
+    valorOmitido: boolean("valor_omitido").notNull(),
+  },
+  (t) => ({
+    idxVaga: index("idx_vaga_edicoes_vaga").on(t.vagaId, t.em),
+    ckCampo: check("ck_vaga_edicoes_campo", sql`${t.campo} in (${CAMPOS_DA_EDICAO_SQL})`),
+    ckOmitido: check(
+      "ck_vaga_edicoes_omitido_sem_valor",
+      sql`${t.valorOmitido} = false or (${t.de} is null and ${t.para} is null)`,
+    ),
+  }),
+);
+
+/**
+ * ─ O REGISTRO DA EXCLUSÃO DE VAGA (0143) ─────────────────────────────────────────────────────────
+ *
+ * SEM FK PARA `vagas`, pelo mesmo motivo da trilha acima: a linha existe justamente para sobreviver
+ * à vaga. O `instantaneo` leva só TIPO FECHADO (ids, códigos de catálogo, datas, números) e os fatos
+ * que o CASCADE apaga junto com a vaga: a liberação da revisão, as reduções de meta, as trocas de
+ * cliente e as transferências de consultor. Nunca nome de divulgação, texto livre ou CPF (§A.6).
+ */
+export const vagaExclusoes = pgTable("vaga_exclusoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    vagaId: uuid("vaga_id").notNull(),
+    codigo: varchar("codigo", { length: 40 }),
+    idVacancyPandape: varchar("id_vacancy_pandape", { length: 40 }),
+    porId: uuid("por_id")
+      .notNull()
+      .references(() => usuarios.id, { onDelete: "restrict" }),
+    em: timestamp("em", { withTimezone: true }).notNull().defaultNow(),
+    instantaneo: jsonb("instantaneo").$type<Record<string, unknown>>().notNull(),
+  },
+  (t) => ({
+    idxVaga: index("idx_vaga_exclusoes_vaga").on(t.vagaId),
   }),
 );
 

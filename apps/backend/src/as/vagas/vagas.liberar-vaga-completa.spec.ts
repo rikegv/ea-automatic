@@ -695,6 +695,12 @@ describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por po
       // A DERIVAÇÃO. Só se move DENTRO do processo: ela retorna cedo quando o papel atual não é de
       // processo, então não é porta de ENTRADA e não alcança vaga sem cliente.
       "as/vagas/derivar-status-da-vaga.ts",
+      // ─ A EDIÇÃO DA VAGA JÁ LIBERADA (05/10/2026), E A RESPOSTA É "NÃO ALCANÇA" ────────────────
+      // NÃO escreve `status` (nem `status_manual_*`), então não é porta de entrada em papel nenhum;
+      // só aceita vaga JÁ em papel de processo (ABERTURA/ENTREGA, conferido sob `for update`); e
+      // RECUSA esvaziar `cod_cliente` (cliente novo conferido contra o catálogo). O DELETE apaga a
+      // vaga inteira e só passa sem candidatura nem shortlist.
+      "as/vagas/vagas-edicao.service.ts",
       // ─ O CARIMBO DO ACEITE DA PROPOSTA (01/10/2026), E A RESPOSTA É A MESMA ──────────────────
       // Ele grava UMA coluna: `cliente_proposto_estado = 'CONFIRMADO'`, quando uma pessoa aceita na
       // liberação exatamente o cliente que a planilha propôs. NÃO escreve `status`, NÃO escreve

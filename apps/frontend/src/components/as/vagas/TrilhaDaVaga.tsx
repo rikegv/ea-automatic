@@ -41,6 +41,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -84,6 +85,9 @@ import {
   IDIOMA_NIVEIS,
   IDIOMA_NIVEL_LABEL,
   type AsLinhaDeServico,
+  type AsVagaEdicaoConfirmacoes,
+  type AsVagaEdicaoNegada,
+  type AsVagaEdicaoPrevia,
   type AsVagaIdioma,
   type IdiomaNivel,
   type VagaContextoAs,
@@ -113,6 +117,21 @@ import { statusDePublicacao, statusDoPapel, type AsVagaStatus } from "@/lib/as-s
 import { avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
 import { liberarVagaPendenteRevisao, salvarVagaEmRevisao } from "@/lib/as-vagas-revisao";
 import { propostaDaVaga } from "@/lib/as-proposta-cliente";
+import {
+  avisoDaFronteiraDaAdmissao,
+  carregarConsultores,
+  carregarRecrutadores,
+  confirmacoesDepoisDe,
+  consultoresDaEdicao,
+  corpoDaEdicao,
+  edicaoPrevia,
+  editarVaga,
+  ehPedidoDeConfirmacao,
+  recrutadoresDaEdicao,
+  recusaDaEdicao,
+  textoDaConfirmacao,
+  travadosDaPrevia,
+} from "@/lib/as-vaga-edicao";
 import { PropostaDeClienteDaPlanilha } from "./PropostaDeClienteDaPlanilha";
 
 export interface OpcaoCliente {
@@ -417,6 +436,11 @@ const FORM_VAZIO = (): FormVaga => ({
  * dela ele ganha a cor de alerta do DS e o leitor de tela ganha "obrigatório" por extenso, em vez de
  * ler um asterisco solto no meio da frase.
  */
+/** O campo de texto em leitura (modo edição, campo travado pela admissão): mesmo visual do código. */
+function classeDoCampo(travado: boolean): string {
+  return travado ? "ds-input cursor-not-allowed opacity-70" : "ds-input";
+}
+
 function Obrigatorio() {
   return (
     <span className="text-danger" aria-hidden>
@@ -579,7 +603,14 @@ export type ModoDaTrilha =
   | { tipo: "nova" }
   | { tipo: "rascunho"; vaga: VagaDetalhe }
   | { tipo: "clone"; vaga: VagaDetalhe }
-  | { tipo: "liberacao"; vaga: VagaDetalhe };
+  | { tipo: "liberacao"; vaga: VagaDetalhe }
+  /**
+   * EDITAR A VAGA JÁ LIBERADA (frente do CRUD, `docs/MAPA-CRUD-VAGA-LIBERADA.md`), em papel
+   * ABERTURA ou ENTREGA. Mesmo formulário: código em leitura, Status oculto, a contraparte trocada
+   * por Consultor e Recrutador explícitos, e os campos que a admissão já copiou em leitura quando a
+   * vaga mandou alguém para lá (decisão 3). Grava por `PATCH /as/vagas/:id/editar`.
+   */
+  | { tipo: "edicao"; vaga: VagaDetalhe };
 
 /**
  * O QUE A TRILHA NÃO BUSCA SOZINHA, e é de propósito: a Central de Vagas já lê `opcoes`, `contexto`
@@ -744,7 +775,10 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
    * O "DE" SAI DA LINHA DA LISTA, como saía antes: a trilha é montada com `key` na vaga, então o
    * objeto aqui é o mesmo que a tabela tinha no clique, e a lista não é relida com o modal aberto.
    */
-  const vagaEmEdicao = modo.tipo === "rascunho" || modo.tipo === "liberacao" ? modo.vaga : null;
+  const vagaEmEdicao =
+    modo.tipo === "rascunho" || modo.tipo === "liberacao" || modo.tipo === "edicao"
+      ? modo.vaga
+      : null;
   const editandoId = vagaEmEdicao?.id ?? null;
 
   /**
@@ -765,6 +799,17 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
    *    reconhece na reentrega da varredura, e reescrevê-lo aqui desfaria esse par em silêncio.
    */
   const ehLiberacao = modo.tipo === "liberacao";
+
+  /**
+   * ─ O MODO EDIÇÃO, A VAGA JÁ LIBERADA (frente do CRUD da vaga liberada) ──────────────────────
+   *
+   * O QUE ELE FAZ DE DIFERENTE: código em leitura (como na liberação), Status oculto (status tem
+   * fluxo próprio), a contraparte trocada por DOIS seletores explícitos, Consultor e Recrutador
+   * (decisão do diretor: o responsável troca com frequência), e os campos que a admissão já copiou
+   * em LEITURA quando a vaga mandou alguém para lá (decisão 3). Sem proposta da planilha e sem os
+   * botões de liberar. Grava por `PATCH /as/vagas/:id/editar`, nunca pelo `PATCH :id` do rascunho.
+   */
+  const ehEdicao = modo.tipo === "edicao";
 
   /**
    * ─ A PROPOSTA DE CLIENTE VINDA DA PLANILHA DO TIME, E SÓ NO MODO LIBERAÇÃO ───────────────────
@@ -851,6 +896,91 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
    */
   const [avisoTrilha, setAvisoTrilha] = useState<{ texto: string; publicar: boolean } | null>(null);
 
+  /**
+   * ─ O ESTADO DO MODO EDIÇÃO ─────────────────────────────────────────────────────────────────
+   *
+   * A PRÉVIA é lida ao abrir e diz se a vaga ainda é editável, quem são os responsáveis e quais
+   * campos já são do ADM. Enquanto ela não chega, o salvar fica desabilitado: sem ela a tela não
+   * sabe o que travar, e o servidor recusaria o campo travado depois de a pessoa ter editado.
+   *
+   * OS RESPONSÁVEIS ficam fora do `FormVaga` de propósito: são do modo edição, e entrar no
+   * formulário comum mudaria a comparação de "formulário vazio" dos outros quatro modos.
+   *
+   * A CONFIRMAÇÃO PEDIDA PELO SERVIDOR (409 `CONFIRMAR_*`) guarda as confirmações já dadas, porque
+   * podem vir as duas em sequência: trocar o cliente e, no reenvio, reduzir abaixo do alocado.
+   */
+  const [previa, setPrevia] = useState<AsVagaEdicaoPrevia | null>(null);
+  const [erroPrevia, setErroPrevia] = useState<string | null>(null);
+  const [consultores, setConsultores] = useState<{ id: string; nome: string }[]>([]);
+  const [recrutadores, setRecrutadores] = useState<{ id: string; nome: string }[]>([]);
+  const [responsaveis, setResponsaveis] = useState({ consultorId: "", recruiterId: "" });
+  const [pedidoConfirmacao, setPedidoConfirmacao] = useState<{
+    negada: AsVagaEdicaoNegada;
+    confirmacoes: AsVagaEdicaoConfirmacoes;
+  } | null>(null);
+  const vagaId = vagaEmEdicao?.id ?? null;
+
+  useEffect(() => {
+    if (!ehEdicao || !vagaId) return;
+    let vivo = true;
+    edicaoPrevia(vagaId, token)
+      .then((p) => {
+        if (!vivo) return;
+        setPrevia(p);
+        setResponsaveis({ consultorId: p.consultorId ?? "", recruiterId: p.recruiterId ?? "" });
+      })
+      .catch((err) => {
+        if (vivo) {
+          setErroPrevia(
+            err instanceof Error && err.message
+              ? err.message
+              : "Não foi possível conferir a vaga para edição.",
+          );
+        }
+      });
+    carregarConsultores(token)
+      .then((lista) => {
+        if (vivo) setConsultores(lista);
+      })
+      .catch(() => {
+        /* A LISTA VAZIA NÃO TRAVA A EDIÇÃO: o responsável atual entra na lista mesmo assim, e
+           quem precisa trocar vê só ele. A falha não é silenciosa para o salvar. */
+      });
+    carregarRecrutadores(token)
+      .then((lista) => {
+        if (vivo) setRecrutadores(lista);
+      })
+      .catch(() => {
+        /* Mesmo critério da lista de consultores: o recrutador atual entra mesmo assim. */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [ehEdicao, vagaId, token]);
+
+  const travados = useMemo(() => travadosDaPrevia(previa), [previa]);
+  const avisoFronteira = avisoDaFronteiraDaAdmissao(previa);
+  /** A edição só grava com a prévia lida e dizendo que a vaga é editável. */
+  const edicaoBloqueada = ehEdicao && (!previa || !previa.editavel);
+  const opcoesConsultor = useMemo(
+    () =>
+      consultoresDaEdicao(
+        consultores,
+        previa?.consultorId ?? null,
+        vagaEmEdicao?.consultorNome ?? null,
+      ),
+    [consultores, previa?.consultorId, vagaEmEdicao?.consultorNome],
+  );
+  const opcoesRecrutador = useMemo(
+    () =>
+      recrutadoresDaEdicao(
+        recrutadores,
+        previa?.recruiterId ?? null,
+        vagaEmEdicao?.recruiterNome ?? null,
+      ),
+    [recrutadores, previa?.recruiterId, vagaEmEdicao?.recruiterNome],
+  );
+
   const set = <K extends keyof FormVaga>(campo: K, valor: FormVaga[K]) =>
     setForm((f) => ({ ...f, [campo]: valor }));
 
@@ -888,6 +1018,22 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
 
   /** Fechar por engano não pode custar 38 campos: com rascunho na mão, pergunta antes de descartar. */
   function pedirParaSair() {
+    /* NA EDIÇÃO A COMPARAÇÃO É COM A VAGA COMO ELA ABRIU, e não com o formulário vazio: a vaga já
+       existe, então "nada mudou" é sair direto, e só a alteração não salva pede confirmação. */
+    if (ehEdicao) {
+      const intacta =
+        JSON.stringify(form) === JSON.stringify(inicial.form) &&
+        JSON.stringify(beneficios) === JSON.stringify(inicial.beneficios) &&
+        JSON.stringify(testes) === JSON.stringify(inicial.testes) &&
+        responsaveis.consultorId === (previa?.consultorId ?? "") &&
+        responsaveis.recruiterId === (previa?.recruiterId ?? "");
+      if (intacta) {
+        onFechar();
+        return;
+      }
+      setConfirmarDescarte(true);
+      return;
+    }
     const vazio =
       JSON.stringify(form) === JSON.stringify({ ...FORM_VAZIO(), dataAbertura: form.dataAbertura });
     if (vazio && testes.length === 0 && Object.keys(beneficios).length === 0) {
@@ -1055,11 +1201,18 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
    * único chamador que o passa como verdadeiro é o botão do próprio diálogo, depois de a pessoa ter
    * lido a frase. Sem ele, confirmar reabriria o mesmo aviso para sempre.
    */
-  async function enviar(publicar: boolean, jaAvisado = false) {
+  async function enviar(
+    publicar: boolean,
+    jaAvisado = false,
+    confirmacoes: AsVagaEdicaoConfirmacoes = {},
+  ) {
     if (salvando) return;
+    if (ehEdicao && edicaoBloqueada) return;
     setErroForm(null);
 
-    if (publicar) {
+    /* NA EDIÇÃO A RÉGUA DE PUBLICAR NÃO RODA AQUI: a vaga já está publicada, e quem confere o que
+       não pode ser esvaziado (cliente, cargo) é a rota de edição, sobre o resultado. */
+    if (publicar && !ehEdicao) {
       if (pendenciasAgora.length > 0) {
         setPendencias(pendenciasAgora);
         mioloRef.current?.scrollTo({ top: 0, behavior: "smooth" });
@@ -1137,7 +1290,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
            * ATUAL de propósito (a vaga continua na fila), e mandar "RASCUNHO" daqui seria pedir
            * para tirá-la dela por uma rota de edição, sem trilha e sem a régua dos obrigatórios.
            */
-          ...(ehLiberacao ? {} : { status: publicar ? form.status : "RASCUNHO" }),
+          ...(ehLiberacao || ehEdicao ? {} : { status: publicar ? form.status : "RASCUNHO" }),
           sazonalidade: form.sazonalidade,
           /* ONDA C: o id do catálogo. `undefined` quando vazio, e nunca `0` nem string vazia: o
              rascunho pode ser salvo sem ela, e quem cobra a PRESENÇA na publicação é a régua
@@ -1239,7 +1392,15 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
        * do servidor, depois de cobrar os onze obrigatórios. Ninguém completa quarenta campos numa
        * sentada, e sem a primeira porta parar no meio custaria o trabalho inteiro.
        */
-      if (ehLiberacao && editandoId) {
+      if (ehEdicao && editandoId) {
+        /* O CORPO DA EDIÇÃO é o mesmo da trilha, sem o que a edição nunca escreve, sem os campos
+           travados pela admissão, com os dois responsáveis e as confirmações já dadas. */
+        await editarVaga(
+          editandoId,
+          corpoDaEdicao(corpo, travados, responsaveis, confirmacoes),
+          token,
+        );
+      } else if (ehLiberacao && editandoId) {
         if (publicar) await liberarVagaPendenteRevisao(editandoId, corpo, token);
         else await salvarVagaEmRevisao(editandoId, corpo, token);
       } else {
@@ -1251,6 +1412,20 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
       }
       await onGravada();
     } catch (err) {
+      /* O 409 DA EDIÇÃO É LIDO PELO `codigo`. Os dois `CONFIRMAR_*` abrem o diálogo e reenviam com
+         a confirmação; os demais mostram a frase do servidor no formulário. */
+      if (ehEdicao) {
+        const negada = recusaDaEdicao(err);
+        if (negada && ehPedidoDeConfirmacao(negada)) {
+          setPedidoConfirmacao({ negada, confirmacoes });
+          return;
+        }
+        setErroForm(
+          negada?.mensagem ??
+            (err instanceof Error && err.message ? err.message : "Erro ao salvar a vaga."),
+        );
+        return;
+      }
       // O erro do código duplicado é do passo 1: a trilha volta para lá, senão a mensagem aparece
       // numa tela que não tem o campo que ela cita.
       const msg = err instanceof Error ? err.message : "Erro ao salvar";
@@ -1288,7 +1463,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
         className="max-w-[1100px] p-0"
         /* O rótulo acompanha o modo: quem usa leitor de tela ouve o que a trilha está fazendo, e
            "Abrir vaga" numa vaga que já existe seria a tela dizendo outra coisa do que faz. */
-        ariaLabel={ehLiberacao ? "Liberar vaga" : "Abrir vaga"}
+        ariaLabel={ehEdicao ? "Editar vaga" : ehLiberacao ? "Liberar vaga" : "Abrir vaga"}
       >
         <form onSubmit={salvar} className="flex max-h-[86vh] flex-col">
           {/* TOPO FIXO: título e Stepper nunca saem da vista, então a pessoa sempre sabe onde está. */}
@@ -1296,13 +1471,40 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
             <div className="eyebrow !mb-1">Atração e Seleção</div>
             {/* §A.24: título em title case, e ele diz o que a trilha está fazendo. */}
             <h2 className="mb-4 text-lg font-semibold text-text">
-              {ehLiberacao ? "Liberar Vaga" : "Abrir Vaga"}
+              {ehEdicao ? "Editar Vaga" : ehLiberacao ? "Liberar Vaga" : "Abrir Vaga"}
             </h2>
             {ehLiberacao && (
               <p className="-mt-3 mb-4 text-[12.5px] text-dim">
                 Esta vaga entrou sozinha pela varredura do Pandapé, e o ATS não manda cliente,
                 salário, benefícios, escala nem endereço. Complete o que falta para liberar. Se
                 ainda não tem tudo, salve sem liberar e volte depois: a vaga continua na fila.
+              </p>
+            )}
+            {/* O AVISO DA FRONTEIRA A&S/ADM (decisão 3), NO TOPO E FORA DO MIOLO: ele vale para os
+                cinco passos, então não pode rolar para fora da vista. */}
+            {ehEdicao && avisoFronteira && (
+              <p
+                className="-mt-2 mb-4 flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[rgba(245,196,81,0.12)] px-3.5 py-3 text-[12.5px] leading-snug text-warn"
+                role="status"
+              >
+                <Icon name="alert" className="mt-[2px] h-3.5 w-3.5 flex-none" aria-hidden />
+                <span>{avisoFronteira}</span>
+              </p>
+            )}
+            {ehEdicao && erroPrevia && (
+              <p
+                className="-mt-2 mb-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3.5 py-3 text-[12.5px] text-danger"
+                role="alert"
+              >
+                {erroPrevia}
+              </p>
+            )}
+            {ehEdicao && previa && !previa.editavel && (
+              <p
+                className="-mt-2 mb-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3.5 py-3 text-[12.5px] text-danger"
+                role="alert"
+              >
+                {previa.motivoNaoEditavel ?? "Esta vaga não pode ser editada agora."}
               </p>
             )}
             <Stepper steps={STEPS} current={step} />
@@ -1377,7 +1579,8 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       onChange={escolherCliente}
                       options={optClientes}
                       searchable
-                      limpavel
+                      limpavel={!travados.has("codCliente")}
+                      disabled={travados.has("codCliente")}
                       placeholder="Selecionar cliente"
                       ariaLabel="Cliente da vaga"
                     />
@@ -1386,6 +1589,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                   {/* A PROPOSTA DA PLANILHA, LOGO ABAIXO DO SELETOR E NUNCA DENTRO DELE (condição
                       C1). Ela ocupa as duas colunas, como o próprio seletor, para o texto da
                       procedência caber em linha e não quebrar no meio de um nome de cliente. */}
+                  {!ehEdicao && (
                   <PropostaDeClienteDaPlanilha
                     proposta={propostaDeCliente}
                     codClienteEscolhido={form.codCliente}
@@ -1396,6 +1600,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                        solicitante padrão daquele cliente, que é o que a escolha a mão já traz. */
                     onConfirmar={escolherCliente}
                   />
+                  )}
 
                   <Campo rotulo="Código da vaga" obrigatorio id="vaga-codigo">
                     {/*
@@ -1411,14 +1616,29 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       value={form.codigo}
                       onChange={(e) => set("codigo", e.target.value)}
                       placeholder="Ex.: 511805"
-                      className={ehLiberacao ? "ds-input cursor-not-allowed opacity-70" : "ds-input"}
-                      readOnly={ehLiberacao}
-                      aria-readonly={ehLiberacao || undefined}
-                      title={ehLiberacao ? "Código da vaga no Pandapé, não editável." : undefined}
+                      className={
+                        ehLiberacao || ehEdicao
+                          ? "ds-input cursor-not-allowed opacity-70"
+                          : "ds-input"
+                      }
+                      readOnly={ehLiberacao || ehEdicao}
+                      aria-readonly={ehLiberacao || ehEdicao || undefined}
+                      title={
+                        ehLiberacao
+                          ? "Código da vaga no Pandapé, não editável."
+                          : ehEdicao
+                            ? "O código identifica a vaga e não é editável."
+                            : undefined
+                      }
                     />
                     {ehLiberacao && (
                       <span className="text-[12px] text-faint">
                         Código da vaga no Pandapé. Não é editável aqui.
+                      </span>
+                    )}
+                    {ehEdicao && (
+                      <span className="text-[12px] text-faint">
+                        O código identifica a vaga e não é editável.
                       </span>
                     )}
                   </Campo>
@@ -1438,6 +1658,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       value={form.cargoId}
                       onChange={(v) => set("cargoId", v)}
                       options={optCargos}
+                      disabled={travados.has("cargoId")}
                       searchable
                       placeholder="Selecionar cargo"
                       ariaLabel="Cargo da vaga"
@@ -1587,7 +1808,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       carrega `status`. A régua continua contando o campo, pelo DESTINO
                       (`statusDaRegua`), então nada deixa de ser cobrado por ele sumir.
                     */}
-                  {!ehLiberacao && (
+                  {!ehLiberacao && !ehEdicao && (
                   <CampoSelect rotulo="Status" obrigatorio id="vaga-status">
                     <Select
                       value={form.status}
@@ -1762,6 +1983,43 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                 <>
                   {/* OS DOIS LADOS DA VAGA. O lado de quem abre é carimbado sozinho e aparece só
                         como informação; a trilha pede um seletor, o do lado oposto. */}
+                  {/* NA EDIÇÃO, OS DOIS RESPONSÁVEIS EXPLÍCITOS no lugar do "você abre como" e da
+                      contraparte: quem edita não é quem abriu, e o diretor troca o responsável com
+                      frequência. Rótulo de campo em frase normal (§A.24), `Select` do DS (§A.35). */}
+                  {ehEdicao && (
+                    <>
+                      <CampoSelect rotulo="Consultor" id="vaga-consultor">
+                        <Select
+                          value={responsaveis.consultorId}
+                          onChange={(v) => setResponsaveis((r) => ({ ...r, consultorId: v }))}
+                          options={[
+                            { value: "", label: "não informado" },
+                            ...opcoesConsultor.map((p) => ({ value: p.id, label: p.nome })),
+                          ]}
+                          searchable
+                          disabled={!previa}
+                          placeholder="Selecionar consultor"
+                          ariaLabel="Consultor da vaga"
+                        />
+                      </CampoSelect>
+                      <CampoSelect rotulo="Recrutador" id="vaga-recrutador">
+                        <Select
+                          value={responsaveis.recruiterId}
+                          onChange={(v) => setResponsaveis((r) => ({ ...r, recruiterId: v }))}
+                          options={[
+                            { value: "", label: "não informado" },
+                            ...opcoesRecrutador.map((p) => ({ value: p.id, label: p.nome })),
+                          ]}
+                          searchable
+                          disabled={!previa}
+                          placeholder="Selecionar recrutador"
+                          ariaLabel="Recrutador da vaga"
+                        />
+                      </CampoSelect>
+                    </>
+                  )}
+
+                  {!ehEdicao && (
                   <div className="md:col-span-2">
                     {contexto.papelAs ? (
                       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
@@ -1780,6 +2038,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/*
                       O BLOCO DA CONTRAPARTE SOME NO MODO LIBERAÇÃO. A vaga espelhada do Pandapé tem
@@ -1787,7 +2046,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       para ter um lado oposto. O campo apareceria e não faria nada, que é pior do
                       que não aparecer.
                     */}
-                  {ladoOposto && !ehLiberacao && (
+                  {ladoOposto && !ehLiberacao && !ehEdicao && (
                     <CampoSelect rotulo={PAPEL_AS_LABEL[ladoOposto]} largo>
                       <Select
                         value={form.contraparteId}
@@ -1829,6 +2088,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       <Select
                         value={form.tempoContrato}
                         onChange={(v) => set("tempoContrato", v)}
+                        disabled={travados.has("tempoContrato")}
                         options={[
                           { value: "", label: "não informado" },
                           ...VAGA_TEMPO_CONTRATO.map((t) => ({
@@ -1864,6 +2124,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         <Select
                           value={form.motivo}
                           onChange={(v) => set("motivo", v)}
+                          disabled={travados.has("motivo")}
                           options={[
                             { value: "", label: "não informado" },
                             ...opcoes.motivos.map((m) => ({ value: m, label: m })),
@@ -1904,7 +2165,9 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                             <input
                               value={form.substituidoNome}
                               onChange={(e) => set("substituidoNome", e.target.value)}
-                              className="ds-input"
+                              readOnly={travados.has("substituidoNome")}
+                              aria-readonly={travados.has("substituidoNome") || undefined}
+                              className={classeDoCampo(travados.has("substituidoNome"))}
                             />
                           </Campo>
 
@@ -1918,7 +2181,9 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                               value={form.substituidoCpf}
                               onChange={(e) => set("substituidoCpf", formatCpf(e.target.value))}
                               placeholder="000.000.000-00"
-                              className="ds-input"
+                              readOnly={travados.has("substituidoCpf")}
+                              aria-readonly={travados.has("substituidoCpf") || undefined}
+                              className={classeDoCampo(travados.has("substituidoCpf"))}
                             />
                           </Campo>
 
@@ -1945,7 +2210,9 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         value={form.salarioAbertura}
                         onChange={(e) => set("salarioAbertura", maskMoedaBR(e.target.value))}
                         placeholder="2.500,00"
-                        className="ds-input pl-9"
+                        readOnly={travados.has("salarioAbertura")}
+                        aria-readonly={travados.has("salarioAbertura") || undefined}
+                        className={cn(classeDoCampo(travados.has("salarioAbertura")), "pl-9")}
                       />
                     </div>
                   </Campo>
@@ -1998,7 +2265,12 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     <textarea
                       value={form.localTrabalho}
                       onChange={(e) => set("localTrabalho", e.target.value)}
-                      className="ds-input min-h-[64px] resize-y"
+                      readOnly={travados.has("localTrabalho")}
+                      aria-readonly={travados.has("localTrabalho") || undefined}
+                      className={cn(
+                        classeDoCampo(travados.has("localTrabalho")),
+                        "min-h-[64px] resize-y",
+                      )}
                     />
                   </Campo>
 
@@ -2113,6 +2385,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         ...opcoes.escalas.map((e) => ({ value: e, label: e })),
                         { value: ESCALA_OUTRA, label: ESCALA_OUTRA },
                       ]}
+                      disabled={travados.has("horarioEscala")}
                       searchable
                       menuFit
                       ariaLabel="Horário e escala"
@@ -2125,7 +2398,12 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         value={form.horarioEscalaOutra}
                         onChange={(e) => set("horarioEscalaOutra", e.target.value)}
                         placeholder="Escreva o horário e a escala desta vaga"
-                        className="ds-input min-h-[64px] resize-y"
+                        readOnly={travados.has("horarioEscala")}
+                        aria-readonly={travados.has("horarioEscala") || undefined}
+                        className={cn(
+                          classeDoCampo(travados.has("horarioEscala")),
+                          "min-h-[64px] resize-y",
+                        )}
                       />
                     </Campo>
                   )}
@@ -2482,7 +2760,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                 normal o botão continua sendo UM só, exatamente como o diretor já validou.
               */}
             <div className="flex items-center gap-2">
-              {ehLiberacao ? (
+              {ehLiberacao || ehEdicao ? (
                 <>
                   <Button
                     type="button"
@@ -2529,6 +2807,9 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                   NÃO é um rascunho, ela é uma vaga viva na fila de revisão, e o `PATCH` a deixa
                   exatamente onde estava. Botão é COMANDO, então escrita normal (§A.24).
                 */}
+              {/* NA EDIÇÃO NÃO EXISTE RASCUNHO: a vaga já está publicada, e o único gesto de gravar
+                  é o "Salvar alterações", à direita. */}
+              {!ehEdicao && (
               <Button
                 type="button"
                 variant="secondary"
@@ -2541,6 +2822,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     ? "Salvar sem liberar"
                     : "Salvar Rascunho"}
               </Button>
+              )}
 
               {step < STEPS.length - 1 && (
                 <Button key="continuar" type="button" onClick={() => setStep((s) => s + 1)}>
@@ -2564,7 +2846,19 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                   escrever e recusa com a lista inteira. Isto aqui é o aviso, para ninguém clicar no
                   que seria recusado.
                 */}
-              {ehLiberacao ? (
+              {ehEdicao ? (
+                /* "SALVAR ALTERAÇÕES" EM TODO PASSO, como o "Liberar vaga": quem edita a vaga
+                   publicada costuma mexer em um campo só, e não deve atravessar os cinco passos para
+                   gravar. Desabilitado até a prévia chegar dizendo que a vaga é editável. */
+                <Button
+                  key="salvar-edicao"
+                  type="button"
+                  onClick={() => void enviar(true)}
+                  disabled={salvando || edicaoBloqueada}
+                >
+                  {salvando ? "Salvando…" : "Salvar alterações"}
+                </Button>
+              ) : ehLiberacao ? (
                 <Button
                   key="liberar"
                   type="button"
@@ -2617,13 +2911,15 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
            aviso aberto pelo "Salvar sem liberar" num botão escrito "Salvar Rascunho" faria a
            pergunta falar de um gesto que a tela não oferece. */
         confirmLabel={
-          ehLiberacao
-            ? avisoTrilha?.publicar
-              ? "Liberar vaga"
-              : "Salvar sem liberar"
-            : avisoTrilha?.publicar
-              ? "Publicar Vaga"
-              : "Salvar Rascunho"
+          ehEdicao
+            ? "Salvar alterações"
+            : ehLiberacao
+              ? avisoTrilha?.publicar
+                ? "Liberar vaga"
+                : "Salvar sem liberar"
+              : avisoTrilha?.publicar
+                ? "Publicar Vaga"
+                : "Salvar Rascunho"
         }
         cancelLabel="Cancelar"
         tone="warn"
@@ -2634,13 +2930,41 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
         onCancel={() => setAvisoTrilha(null)}
       />
 
+      {/* ── A CONFIRMAÇÃO PEDIDA PELO SERVIDOR NA EDIÇÃO (409 `CONFIRMAR_*`) ──────────────
+          TROCAR O CLIENTE apaga as entrevistas marcadas com o cliente anterior (decisão 2), e
+          REDUZIR ABAIXO DO ALOCADO deixa gente alocada além da meta. As duas podem vir em
+          sequência: o reenvio leva as confirmações já dadas e o servidor pede a seguinte. */}
+      <ConfirmDialog
+        open={pedidoConfirmacao !== null}
+        title={pedidoConfirmacao ? textoDaConfirmacao(pedidoConfirmacao.negada).titulo : ""}
+        message={pedidoConfirmacao ? textoDaConfirmacao(pedidoConfirmacao.negada).frase : ""}
+        confirmLabel={
+          pedidoConfirmacao ? textoDaConfirmacao(pedidoConfirmacao.negada).botao : "Confirmar"
+        }
+        cancelLabel="Cancelar"
+        tone="warn"
+        busy={salvando}
+        onConfirm={() => {
+          if (!pedidoConfirmacao) return;
+          const proximas = confirmacoesDepoisDe(
+            pedidoConfirmacao.confirmacoes,
+            pedidoConfirmacao.negada,
+          );
+          setPedidoConfirmacao(null);
+          void enviar(true, true, proximas);
+        }}
+        onCancel={() => setPedidoConfirmacao(null)}
+      />
+
       <ConfirmDialog
         open={confirmarDescarte}
         /* NO MODO LIBERAÇÃO A VAGA NÃO É DESCARTADA, e dizer que é seria mentir: ela já existe e
            continua na fila. O que se perde é o PREENCHIMENTO, e é isso que a pergunta diz. */
-        title={ehLiberacao ? "Sair Sem Salvar?" : "Descartar Esta Vaga?"}
+        title={ehLiberacao || ehEdicao ? "Sair Sem Salvar?" : "Descartar Esta Vaga?"}
         message={
-          ehLiberacao
+          ehEdicao
+            ? "Você alterou campos que ainda não foram salvos. Se sair agora, as alterações se perdem e a vaga continua como está."
+            : ehLiberacao
             ? "Você preencheu campos que ainda não foram salvos. Se sair agora, eles se perdem e a vaga continua na fila como está. Para guardar o que já fez, use Salvar sem liberar."
             : "Você preencheu campos que ainda não foram salvos. Se sair agora, eles se perdem."
         }

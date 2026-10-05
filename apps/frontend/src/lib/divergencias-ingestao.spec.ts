@@ -225,8 +225,8 @@ describe("adotar, que só existe em três dos oito campos", () => {
   it("o aviso diz o caminho real de cada família, e é a mesma régua que o 409 explica", () => {
     expect(avisoDoCaminhoManual("situacao")).toContain("ficha do candidato");
     expect(avisoDoCaminhoManual("situacao")).toContain("motivo do catálogo");
-    expect(avisoDoCaminhoManual("vaga_codigo")).toContain("revisão");
-    expect(avisoDoCaminhoManual("vaga_cidade")).toContain("Master");
+    expect(avisoDoCaminhoManual("vaga_codigo")).toContain("Editar vaga");
+    expect(avisoDoCaminhoManual("vaga_cidade")).toContain("Central de Vagas");
   });
 });
 

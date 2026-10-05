@@ -301,7 +301,7 @@ export class IngestaoDivergenciasService {
     }
 
     throw new ConflictException(
-      "Este campo da vaga não é adotado por esta fila: a vaga já foi liberada, e os campos de abertura só voltam a ser editáveis quando um Master devolve a vaga para a revisão. Corrija a vaga por lá e depois feche esta linha com Manter O EA.",
+      "Este campo da vaga não é adotado por esta fila. O nome e a cidade se corrigem em Editar vaga, na Central de Vagas, enquanto a vaga estiver aberta ou entregue; o código é a identidade da vaga no Pandapé e não se edita. Depois feche esta linha com Manter O EA.",
     );
   }
 

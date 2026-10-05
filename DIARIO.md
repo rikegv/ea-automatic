@@ -19859,3 +19859,48 @@ O zero de 429 era verdadeiro e não provava nada sobre a tela; a prova é a do d
 por minuto** sozinha, com **1.531 respostas 400** desde 02/10 17:24, no mesmo balde de 120/min do
 sistema inteiro. Foi a fonte de 61 dos 429 de 02/10. Hoje não estoura; é a próxima candidata a negar
 serviço. Frente própria, a decidir pelo diretor.
+
+---
+
+## 05/10/2026 (tarde): CRUD da vaga liberada EM PRODUÇÃO, aguardando validação do diretor
+
+Central de Vagas: **editar** vaga em processo (qualquer consultor) e **excluir** vaga (só SUPER_ADMIN),
+com as 7 decisões do diretor. Mapa, veto e emenda em `docs/MAPA-CRUD-VAGA-LIBERADA.md`.
+
+**O que subiu.** Modo `edicao` no mesmo formulário de abrir/revisar (`TrilhaDaVaga`), botões "Editar
+vaga" e "Excluir vaga" no painel, `ExcluirVagaModal`, rotas `GET :id/edicao-previa`, `PATCH :id/editar`,
+`GET :id/exclusao-previa`, `DELETE :id` (`@Roles("SUPER_ADMIN")`) e `GET recrutadores`. Migration
+**0143** (`vaga_edicoes`, `vaga_exclusoes`, sem FK para `vagas`) aplicada em `ea_automatic` (143
+migrations). **Não aplicada na homologação** (ela está ~120 arquivos atrás da main; entra no próximo
+sync, `when` acima da marca).
+
+**A fronteira A&S/ADM (decisão 3):** com candidatura enviada para admissão, os 9 campos que a ponte
+copia (cliente, cargo, salário, escala, tempo de contrato, motivo, substituído nome e CPF, local) travam
+para o A&S, conferidos no RESULTADO. O ADM já edita esses dados nas telas dele; nada foi mexido lá.
+
+**Publicação, sem build no release:** `dist` do backend buildado na main e copiado nominalmente (8
+módulos; `vagas.service.js` saiu IDÊNTICO, o `private`->`public` não emite JS); frontend buildado numa
+cópia irmã e o `.next` trocado (o anterior em `apps/frontend/.next-antes-20261005-crud-vaga`; backup
+geral em `~/apps/ea-release-portal/.backup-20261005-crud-vaga`). `dist/gi/gi-depara.service.js`
+conferido intacto (alerta da sessão do GI). Contagens antes/depois: 513 vagas e 3.034 admissões iguais.
+
+**Prova.** Bateria pela API real numa CÓPIA do banco de produção com backend temporário sem credencial
+nenhuma (22 cenários, todos com o resultado esperado, inclusive trilha e instantâneo sem PII), prints no
+build de prova e prints somente leitura em produção (edição aberta e cancelada, zero linha gravada).
+Cópia, Redis descartável e instâncias 3911/3912 desmontados. O `.next` da MAIN ficou buildado apontando
+para a 3911; nada o serve, mas não usar sem rebuildar.
+
+**Achados que o diretor decide (não construídos):**
+1. **Não existe recrutador.** Zero usuário com papel A&S `RECRUITER`, e nenhuma das 513 vagas tem
+   consultor ou recrutador gravado. A lista de recrutador da edição sai vazia até alguém ser marcado.
+2. **A fronteira se contorna por rotas antigas (`seguranca`):** o "Corrigir liberação" do Master troca
+   o cliente de vaga aberta sem olhar enviados, e devolver à fila + liberar de novo reescreve os 9
+   campos. E uma corrida no envio para admissão (snapshot lido antes da trava).
+3. A confirmação de troca de cliente é sim/não, não a contagem: entrevista marcada entre o aviso e o
+   reenvio também é apagada (a contagem real fica na trilha).
+
+**Fábrica (§A.38):** `seguranca` vetou o mapa (trilha e lista branca) e APROVOU o código; `tester`
+escreveu o requisito em paralelo, achou 2 defeitos reais (régua de posições por lado no contrato,
+salário apagado que voltava) e matou 8/8 mutações pedidas mais 3 extras; `backend` e `frontend`
+construíram; coordenador: mapa, contrato, recrutadores, textos, prova e publicação.
+Suítes: backend 468 arquivos / 8.552 testes, frontend 131 / 1.889, zero vermelho.
