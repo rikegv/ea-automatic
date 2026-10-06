@@ -20906,3 +20906,19 @@ PORTAL_CORREIO_SENDGRID_API_KEY e PORTAL_CORREIO_REMETENTE não estão no .env d
 passos finais sozinha: instalar a chave no .env (chmod 600) mais PORTAL_CORREIO_REMETENTE
 (portal@soulanrh.com.br), confirmar o remetente verificado no SendGrid, e provar um código chegando num
 e-mail. Aí a porta sai de manutenção e passa a funcionar.
+
+## 06/10/2026 (noite): Central de Candidatos, carga + conserto do KPI PRONTOS no main, presos pelo health do publicador
+
+Sessao ea-automatic-80. Retomada pos-queda de energia.
+
+ITENS 1-3 seguem no ar (commits a3b2f40/032a49a/2890c8f), 200/200.
+
+CARGA INCREMENTAL + CONSERTO DO BUG DO KPI: commit 3119c95 no origin/main, auditados (seguranca APROVOU 1-3, a carga R1-R8 e o delta do KPI; tester confirmou recorte ATIVO e card=filtro) e verdes (typecheck + 790 as/candidatos + 73/5 frontend; as suites COMPLETAS estouraram o tempo do ambiente, nao e falha).
+- Carga: automatica (decisao do diretor, sem botao), freio (setTimeout 500/pag 1,5s, pausa blur/visibilitychange, backoff 429, cache so em memoria, descarte no unmount), indicador "Carregados X de 82.068".
+- KPI: medido, ENTREVISTA_SOULAN 71 candidaturas TODAS ATIVO (card certo, filtro olhava so a pagina). Conserto: porEtapa so ATIVO; filtroCardEtapa/filtroCardSituacao no buscar aplicados SO na lista, nunca nos KPIs; clique filtra no servidor sobre a base inteira.
+
+NAO SUBIU: rodei scripts/publicar-producao.sh (A.49, autor sessao 94). Build limpo do origin/main FUNCIONOU (ea-build em 3119c95, artefatos com o conserto conferido), mas o script REVERTEU por FALSO NEGATIVO: health do passo 7 (sleep 4 + curl unico) corre com o boot de ~4s do backend, pega connection refused e dispara rollback. Zero erro de boot no journal. Producao sa no artefato anterior.
+
+BLOQUEIO (sessao caiu antes da resposta do Rike): autorizar corrigir o health check do publicar-producao.sh (laco de retry no passo 7) e re-publicar. Autor 94 fora do ar; peer de nao autoriza mexer em codigo de outra sessao. Atalho: artefatos ja prontos em ea-build.
+
+EM ABERTO: GAP 1 (tester, pre-existente): card de desfecho no escopo "Em Andamento" (ou etapa no "Historico") mostra numero e filtra vazio porque os KPIs ignoram o filtro de escopo client-side. Recomendacao: esconder a fileira de cards fora do escopo ativo. Toca tela validada, perguntar antes (§A.26). Rike nao decidiu.
