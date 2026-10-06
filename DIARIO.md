@@ -20799,3 +20799,28 @@ solto nao revisado dessa sessao (inclusive o `shared-types` compartilhado, risco
 e a acao que o diretor reservou ("So o Rike coordena / Coordenem o restart"). A publicacao em
 producao fica para quando a sessao Candidatos liberar o worktree e o diretor coordenar o restart; o
 codigo ja esta em `origin/main`, pronto.
+
+## 06/10/2026: Central de Candidatos, itens 1-3 NO AR e a carga incremental construida
+
+Retomada apos queda de energia. A tentativa anterior a queda ja tinha publicado os itens 1-3
+(dist backend 15:55, .next 16:00, servicos reiniciados depois: frontend 16:03, backend 16:52),
+so faltava commitar e provar. Feito.
+
+ITENS 1-3 EM PRODUCAO (commits a3b2f40 feat + 032a49a docs, push eab7456..032a49a):
+- Item 1: cliente/cargo vem da propria projecao do /buscar (leftJoin clientes+cargos no
+  funilDaPagina, SEM filtro de status da vaga), nao mais do mapa de /as/vagas. Conserta a
+  regressao da Central de Vagas (05/10). Medido: 24.572 candidatos voltam a mostrar o cargo.
+- Item 2 (KPI real): /buscar devolve kpis (porEtapa/porSituacao) por contagem agregada sobre o
+  conjunto filtrado inteiro; total ja era real. Base medida hoje: 82.068 candidatos (nao 200).
+- Item 3 (opcoes): GET /as/candidatos/opcoes alimenta os filtros, desacopla de /as/vagas (§A.37).
+- Item 4 vaga na ficha: ja estava correto (FichaCandidatoModal renderiza vagaNome por candidatura).
+Prova no ar: health 200, /as/candidatos/opcoes 401 (guardada, nao 404), login 200, 11 chunks
+servidos com a projecao clienteNome. Drift zero: fonte do ea-release-portal identica ao commitado.
+Auditoria §A.38: seguranca APROVOU o Bloco 1 (sem PII nova, RBAC fechado pelo menu as-candidatos,
+lista sem CPF).
+
+CARGA INCREMENTAL (item 4 do pedido) CONSTRUIDA, NAO publicada (aguarda validacao do diretor):
+cadeia de setTimeout (1 pagina de 500 a cada 1,5s), pausa por visibilitychange/blur e retomada por
+focus, parada no total, backoff 429, cache so em memoria do componente descartado no unmount.
+Gate verde, seguranca APROVOU o codigo (R1-R8), tester 32 casos (73 verdes) + 6 gaps de teste de
+integracao registrados (comportamento do efeito React, nao testavel em unidade sem harness pesado).
