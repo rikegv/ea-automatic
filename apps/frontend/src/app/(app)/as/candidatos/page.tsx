@@ -1155,25 +1155,33 @@ export default function CentralDeCandidatosPage() {
           para a assinatura do sistema aparecer, que é o mesmo fundo das outras telas.
           O invólucro fica como agrupador das duas fileiras, sem `relative isolate`, que existiam só
           para prender o `-z-10` da marca que saiu. */}
+      {/* CARD = FILTRO EM TODO CARD VISÍVEL (GAP 1): a fileira que não pertence ao escopo ativo é
+          ESCONDIDA, não mostrada com número que filtra vazio. Os KPIs do servidor (`porEtapa` conta
+          ATIVO, `porSituacao` conta desfecho) ignoram o escopo, que é recorte só da lista (linhas
+          651-652); então, no escopo "Em Andamento", um card de DESFECHO mostrava total mas a lista,
+          já recortada para só ATIVO, vinha vazia (e, simétrico, uma ETAPA no "Histórico"). A régua é
+          a mesma do recorte da lista: em andamento valem Total, as ETAPAS e o "Sem Vaga" (linha sem
+          candidatura é `emAndamento`, linha 650); no histórico valem Total e os DESFECHOS. Trocar de
+          escopo já volta o card ativo ao Total (linha 1119), então nunca sobra filtro de card oculto. */}
       <div>
         <div
           className="mb-[12px] grid gap-[12px]"
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
         >
           <Kpi id={CARD_TOTAL} rotulo="Total" valor={funil.total} icone="layers" />
-          {funil.etapas.map((c) => (
-            <Kpi key={c.chave} card={c} />
-          ))}
+          {escopo === "andamento" &&
+            funil.etapas.map((c) => <Kpi key={c.chave} card={c} />)}
         </div>
 
         <div
           className="mb-[18px] grid gap-[12px]"
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
         >
-          {funil.desfechos.map((c) => (
-            <Kpi key={c.chave} card={c} />
-          ))}
-          <Kpi id={CARD_SEM_VAGA} rotulo="Sem Vaga" valor={funil.semVaga} icone="folder" />
+          {escopo === "historico" &&
+            funil.desfechos.map((c) => <Kpi key={c.chave} card={c} />)}
+          {escopo === "andamento" && (
+            <Kpi id={CARD_SEM_VAGA} rotulo="Sem Vaga" valor={funil.semVaga} icone="folder" />
+          )}
         </div>
       </div>
 
