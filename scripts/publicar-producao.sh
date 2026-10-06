@@ -82,11 +82,30 @@ done
 
 echo "==> [7/8] restart unico + health (GARANTIA 5)"
 systemctl --user restart ea-backend.service ea-frontend.service
-sleep 4
+
+# HEALTH COM LACO DE RETRY, NAO UM CURL UNICO APOS SLEEP FIXO. O ea-backend leva ~4s do restart ate
+# escutar na 3011; o sleep 4 + curl unico corria JUNTO com o boot, pegava "connection refused" e o
+# script REVERTIA um deploy BOM (falso negativo medido em 06/10/2026). O laco ESPERA o servico subir
+# de verdade: tenta a cada 2s ate um teto generoso e so reprova se estourar o tempo. So entao o
+# ROLLBACK volta a significar "deploy ruim de verdade", e nao "o curl chegou antes do boot".
+espera_health() {
+  local nome="$1" url="$2" esperado="$3" limite="${4:-60}"
+  local inicio code
+  inicio="$(date +%s)"
+  while :; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" || true)"
+    [ "$code" = "$esperado" ] && { echo "    $nome OK ($code em $(( $(date +%s) - inicio ))s)"; return 0; }
+    if [ "$(( $(date +%s) - inicio ))" -ge "$limite" ]; then
+      echo "    $nome FALHOU: ultimo codigo '$code' apos ${limite}s de espera"
+      return 1
+    fi
+    sleep 2
+  done
+}
 ok=1
-curl -fsS --max-time 8 http://127.0.0.1:3011/api/health >/dev/null || { echo "    backend 3011 FALHOU"; ok=0; }
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:3010/login || true)"
-[ "$code" = "200" ] || { echo "    frontend 3010/login -> $code FALHOU"; ok=0; }
+espera_health "backend 3011/api/health" "http://127.0.0.1:3011/api/health" "200" 60 || ok=0
+# So checa o frontend depois do backend de pe: a tela depende do backend para servir de verdade.
+[ "$ok" = "1" ] && { espera_health "frontend 3010/login" "http://127.0.0.1:3010/login" "200" 60 || ok=0; }
 
 echo "==> [8/8] resultado"
 if [ "$ok" = "1" ]; then
