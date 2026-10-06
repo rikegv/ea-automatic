@@ -39,17 +39,18 @@ function relativo(caminho: string): string {
 }
 
 /**
- * O UNICO ARQUIVO DO PORTAL COM PERMISSAO DE ASSINAR, e a permissao e de UMA coisa so.
+ * O CORREIO DO PORTAL, QUE NAO ASSINA MAIS NADA.
  *
- * O correio do Portal assina o JWT de OAuth do Google (`createSign("RSA-SHA256")`, fluxo
- * `jwt-bearer`) para trocar por um token do Gmail. Isso NAO e a assinatura de URL de armazenamento
- * que esta frente removeu do EA: e outro assunto, outra chave e outro destino.
+ * O desenho antigo do correio assinava o JWT de OAuth do Google (`createSign("RSA-SHA256")`, fluxo
+ * `jwt-bearer`) para trocar por um token do Gmail. Esse canal saiu de vez: o envio passou a sair
+ * pelo SendGrid (`POST api.sendgrid.com/v3/mail/send`, `Authorization: Bearer`), e com ele sumiram
+ * a assinatura RSA, a chave de conta de servico do Google e o escopo `gmail.send`. O unico segredo
+ * do correio agora e a chave de API do SendGrid, tratada como as demais no inventario abaixo.
  *
- * EXCLUIR O ARQUIVO DA VARREDURA FOI RECUSADO PELA AUDITORIA. A excecao e NOMINAL e vem casada com
- * o teste "o correio assina O JWT do Gmail, e nada alem disso", logo abaixo, que afirma o valor
- * esperado dos dois lados.
+ * Por isso NAO HA MAIS EXCECAO NOMINAL na varredura de assinatura: todo arquivo do Portal, o correio
+ * incluido, e varrido igual, e nenhum assina.
  */
-const ASSINA_JWT_DO_CORREIO = "portal/portal-correio.service.ts";
+const CORREIO = "portal/portal-correio.service.ts";
 
 describe("A chave RSA saiu do EA, e isso e medida", () => {
   const VARIAVEIS = [
@@ -76,49 +77,27 @@ describe("A chave RSA saiu do EA, e isso e medida", () => {
     expect(existsSync(join(__dirname, "gcs-assinatura-v4.spec.ts"))).toBe(false);
   });
 
-  it("nenhum arquivo do Portal assina com RSA nem carrega chave privada de conta de servico", () => {
-    const marcas = ["GOOG4-RSA-SHA256", "createSign(", "RSA-SHA256", "carregarCredencialGcs", "BEGIN PRIVATE KEY"];
+  it("nenhum arquivo do Portal assina com RSA, carrega chave privada de conta de servico nem pede escopo do Google", () => {
+    // O CORREIO E VARRIDO COMO TODOS OS OUTROS, SEM EXCECAO NOMINAL. Era ele o unico com permissao
+    // de assinar no desenho antigo (JWT do Gmail); depois da troca para o SendGrid nenhum arquivo do
+    // Portal assina, carrega chave privada de conta de servico nem toca escopo do Google. Varrer com
+    // excecao viraria esconderijo para o proximo segredo entrar sem ninguem ver.
+    const marcas = [
+      "GOOG4-RSA-SHA256",
+      "createSign(",
+      "RSA-SHA256",
+      "carregarCredencialGcs",
+      "BEGIN PRIVATE KEY",
+      "googleapis.com/auth/",
+    ];
     const achados: string[] = [];
     for (const arquivo of DO_PORTAL) {
-      if (relativo(arquivo) === ASSINA_JWT_DO_CORREIO) continue;
       const fonte = readFileSync(arquivo, "utf8");
       for (const marca of marcas) {
         if (fonte.includes(marca)) achados.push(`${relativo(arquivo)} -> ${marca}`);
       }
     }
     expect(achados, "a assinatura da URL tem de acontecer fora do EA, na identidade de runtime do emissor").toEqual([]);
-  });
-
-  /**
-   * A EXCECAO NOMINAL NAO E UM ESCONDERIJO, E ELA TEM DE SER PROVADA TODO DIA.
-   *
-   * EXCLUIR O ARQUIVO DA VARREDURA FOI RECUSADO PELA AUDITORIA, e com razao: a garantia deste
-   * teste e ser INVENTARIO FECHADO dos segredos do Portal, e foi exatamente assim que ele pegou o
-   * segredo NOVO do correio. Um arquivo fora da varredura seria o lugar onde o proximo segredo
-   * entra sem ninguem ver.
-   *
-   * O que o correio assina e o JWT de OAuth do Google (fluxo `jwt-bearer`), que NAO e a assinatura
-   * de URL de armazenamento que esta frente tirou do EA: outro assunto, outra chave e outro
-   * destino. Um manda e-mail em nome da caixa delegada; a outra concedia acesso direto ao balde.
-   *
-   * Por isso a excecao e NOMINAL e vem com o valor ESPERADO explicito, que e estritamente mais
-   * forte do que pular o arquivo: falha tambem se o correio DEIXAR de assinar (a permissao virou
-   * letra morta e a excecao tem de sair daqui) ou se ele passar a assinar OUTRA coisa.
-   */
-  it("o correio assina O JWT do Gmail, e nada alem disso", () => {
-    const fonte = readFileSync(join(SRC, ASSINA_JWT_DO_CORREIO), "utf8");
-
-    expect(
-      fonte.includes("createSign("),
-      `\`${ASSINA_JWT_DO_CORREIO}\` parou de assinar. A excecao nominal acima virou letra morta e tem de SAIR da varredura, senao ela vira esconderijo`,
-    ).toBe(true);
-
-    for (const proibida of ["GOOG4-RSA-SHA256", "carregarCredencialGcs", "BEGIN PRIVATE KEY", "PORTAL_GCS_"]) {
-      expect(
-        fonte.includes(proibida),
-        `o correio passou a mexer com \`${proibida}\`. Ele tem permissao para assinar o JWT de OAuth do Gmail e NADA MAIS: assinatura de URL de armazenamento e chave de conta de servico do balde sairam do EA nesta frente e nao voltam por esta porta`,
-      ).toBe(false);
-    }
   });
 
   it("o unico segredo que sobra no Portal e a chave do BILHETE", () => {
@@ -137,19 +116,19 @@ describe("A chave RSA saiu do EA, e isso e medida", () => {
           // sessao de 72 horas e nada falha.
           "PORTAL_LINK_PRIVATE_KEY",
           "PORTAL_SESSION_PRIVATE_KEY",
-          // AS DUAS DO CORREIO (frente do envio do link). Elas entram NESTA LISTA, e nao numa
+          // A CHAVE DO CORREIO (frente do envio do link). Ela entra NESTA LISTA, e nao numa
           // exclusao do arquivo da varredura, porque a garantia deste teste e o INVENTARIO: um
           // segredo novo no Portal so passa a existir depois de alguem editar esta lista e
-          // escrever por que ele existe. Foi assim que o teste pegou o proprio correio.
+          // escrever por que ele existe. Foi assim que o teste pegou o proprio correio, primeiro no
+          // desenho Gmail e agora na troca para o SendGrid.
           //
-          // Sao a conta de servico e a chave RSA que assinam o JWT de OAuth do Gmail, reusando a
-          // conta e a delegacao de dominio que ja rodam em producao no Drive. Nao concedem acesso
-          // a balde nenhum: o escopo e `gmail.send`, afirmado logo abaixo.
+          // E a chave de API do SendGrid, que autentica o `POST api.sendgrid.com/v3/mail/send` no
+          // cabecalho `Authorization: Bearer`. Nao e credencial do Google: nao ha mais conta de
+          // servico, chave RSA nem escopo `gmail.send` no correio.
           //
-          // `PORTAL_CORREIO_REMETENTE` e `PORTAL_CORREIO_TIMEOUT_MS` NAO entram: nao sao segredo e
-          // nem casam com o regex acima (`_KEY`, `_SECRET`, `_SA_EMAIL`).
-          "PORTAL_CORREIO_SA_EMAIL",
-          "PORTAL_CORREIO_PRIVATE_KEY",
+          // `PORTAL_CORREIO_REMETENTE`, `PORTAL_CORREIO_REMETENTE_NOME` e `PORTAL_CORREIO_TIMEOUT_MS`
+          // NAO entram: nao sao segredo e nem casam com o regex acima (`_KEY`, `_SECRET`, `_SA_EMAIL`).
+          "PORTAL_CORREIO_SENDGRID_API_KEY",
         ].includes(nome),
     );
     expect(inesperadas, "variavel de chave inesperada no Portal").toEqual([]);
@@ -159,35 +138,38 @@ describe("A chave RSA saiu do EA, e isso e medida", () => {
    * A CHAVE DO CORREIO E LIDA EM UM ARQUIVO SO.
    *
    * Espalhar o segredo por um segundo arquivo multiplica as copias dele em memoria e multiplica os
-   * caminhos por onde ele volta num log de erro (a mensagem do OpenSSL repete pedacos da chave, e
-   * e por isso que o correio so loga o NOME da classe do erro). Um ponto de leitura e o que torna
+   * caminhos por onde ele volta num log de erro (o corpo de erro do SendGrid ECOA o que mandamos, e
+   * e por isso que o correio so loga o rotulo da rota e o status). Um ponto de leitura e o que torna
    * essa disciplina conferivel de relance.
    */
-  for (const variavel of ["PORTAL_CORREIO_PRIVATE_KEY", "PORTAL_CORREIO_SA_EMAIL"]) {
-    it(`${variavel} e lida em UM arquivo so`, () => {
-      const achados = TODOS.filter((a) => readFileSync(a, "utf8").includes(variavel)).map(relativo);
-      expect(
-        achados,
-        `${variavel} passou a ser lida em mais de um lugar. Espalhar o segredo multiplica as copias dele em memoria e os caminhos por onde ele vaza num log de erro; quem precisa enviar e-mail chama o \`PortalCorreioService\``,
-      ).toEqual([ASSINA_JWT_DO_CORREIO]);
-    });
-  }
+  it("PORTAL_CORREIO_SENDGRID_API_KEY e lida em UM arquivo so", () => {
+    const achados = TODOS.filter((a) =>
+      readFileSync(a, "utf8").includes("PORTAL_CORREIO_SENDGRID_API_KEY"),
+    ).map(relativo);
+    expect(
+      achados,
+      "PORTAL_CORREIO_SENDGRID_API_KEY passou a ser lida em mais de um lugar. Espalhar o segredo multiplica as copias dele em memoria e os caminhos por onde ele vaza num log de erro; quem precisa enviar e-mail chama o `PortalCorreioService`",
+    ).toEqual([CORREIO]);
+  });
 
   /**
-   * O ESCOPO E `gmail.send` E NADA ALEM, e esta e a linha que mais importa deste arquivo.
+   * NENHUM ESCOPO DO GOOGLE EM LUGAR NENHUM DO PORTAL, e esta e a linha que mais importa deste arquivo.
    *
-   * Hoje o escopo e uma constante em UMA linha do correio. Sem teste, alargar para `gmail.modify`
-   * ou `gmail.readonly` e uma edicao de dez segundos que ninguem revisa, e o efeito e enorme: o
-   * token passaria a dar ao processo a CAIXA INTEIRA do remetente (ler, apagar, responder), com a
-   * delegacao de dominio ja concedida e sem nenhuma aprovacao nova.
+   * O desenho antigo pedia `gmail.send` numa constante do correio, e o risco era alargar para
+   * `gmail.modify` ou `gmail.readonly`, que entregariam a CAIXA INTEIRA do remetente ao processo.
+   * Com o SendGrid nao ha token do Google nenhum: nenhum arquivo do Portal pode citar um escopo
+   * `googleapis.com/auth/`. Este teste varre o Portal inteiro e cai se um escopo do Google voltar.
    */
-  it("o correio pede `gmail.send` e mais nenhum escopo do Google", () => {
-    const fonte = readFileSync(join(SRC, ASSINA_JWT_DO_CORREIO), "utf8");
-    const escopos = [...new Set([...fonte.matchAll(/googleapis\.com\/auth\/([a-z.]+)/g)].map((m) => m[1]))];
+  it("nenhum arquivo do Portal pede escopo do Google", () => {
+    const escopos = new Set<string>();
+    for (const arquivo of DO_PORTAL) {
+      const fonte = readFileSync(arquivo, "utf8");
+      for (const m of fonte.matchAll(/googleapis\.com\/auth\/([a-z.]+)/g)) escopos.add(m[1]);
+    }
     expect(
-      escopos,
-      "o escopo do correio mudou. `gmail.send` so deixa MANDAR; qualquer escopo de leitura ou de modificacao entrega a caixa inteira do remetente ao processo, com a delegacao de dominio ja concedida",
-    ).toEqual(["gmail.send"]);
+      [...escopos],
+      "voltou um escopo do Google ao Portal. O envio sai pelo SendGrid e nao deve haver token nem escopo do Google em arquivo nenhum do Portal; qualquer escopo de leitura ou de modificacao entregaria a caixa inteira do remetente ao processo",
+    ).toEqual([]);
   });
 });
 

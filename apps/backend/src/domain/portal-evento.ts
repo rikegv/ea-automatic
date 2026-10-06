@@ -131,6 +131,61 @@ export const PORTAL_EVENTOS = [
   // que a Sala De Segurança conta para saber quantas vezes a régua precisou ser desmentida (§A.9).
   // Misturar tentativa recusada com destrave feito estragaria exatamente esse número.
   "PORTAL_DESTRAVE_RECUSADO",
+  // ── A PORTA DE E-MAIL DO PORTAL (contrato v2, seção 7) ───────────────────────────────────────
+  //
+  // NOVE EVENTOS, E NÃO UM COM UM CAMPO DIZENDO O PASSO, pelo mesmo argumento dos pares acima: a
+  // Sala De Segurança precisa CONTAR cada desfecho sem depender de ler o campo de dados de cada
+  // linha, e os nove respondem perguntas diferentes. "Quantos pedidos de código houve" é volume;
+  // "quantos códigos SAÍRAM" é entrega; "quantos códigos errados" é o sinal de força bruta;
+  // "quantas travas" é trabalho que caiu na fila do time. Com um evento só, o sinal de ataque e o
+  // fluxo normal seriam a mesma linha.
+  //
+  // ┌─ `candidato_hash` FICA NULO NESTES EVENTOS, E ISSO NÃO É LACUNA ───────────────────────────┐
+  // │ A coluna é `sha256(pepper:"cpf":cpf)` e nada mais, e é ela que indexa                       │
+  // │ `idx_portal_eventos_candidato`. Nesta porta não existe CPF VERIFICADO até a identidade ser   │
+  // │ gravada: o que existe é a posse de uma caixa de e-mail, e e-mail NÃO É identidade (medido em │
+  // │ produção: 6 endereços compartilhados por 12 CPFs, 5 deles com dois nomes). Escrever hash de  │
+  // │ e-mail ali somaria, sob uma chave só, eventos de pessoas diferentes, e a pergunta "o que     │
+  // │ aconteceu com esta pessoa" passaria a responder sobre um punhado delas.                      │
+  // │                                                                                             │
+  // │ O ÚNICO que carrega `candidato_hash` é `PORTAL_IDENTIDADE_GRAVADA`, porque é exatamente ali  │
+  // │ que o CPF deixa de ser um palpite e passa a ser o dado da ficha.                             │
+  // └─────────────────────────────────────────────────────────────────────────────────────────────┘
+  //
+  // §A.6: nenhum deles leva e-mail, hash de e-mail, código, nome, CPF informado nem campo
+  // divergente. A allowlist `CAMPOS_PERMITIDOS` NÃO foi alargada, e os campos que estes eventos
+  // usam (`motivoCodigo`, `janela`, `ate`, `tentativaN`, `autorId`) já estavam nela. A recusa de
+  // alargar é o que torna esta lista uma defesa e não uma formalidade.
+  "PORTAL_ACESSO_EMAIL_SOLICITADO",
+  // `PORTAL_ACESSO_EMAIL_ENVIADO` é o CÓDIGO que saiu, e SÓ ele.
+  "PORTAL_ACESSO_EMAIL_ENVIADO",
+  /*
+   * ┌─ `PORTAL_ACESSO_LINK_ENVIADO` É TIPO PRÓPRIO, E ELE NASCEU DE UM VETO (V2 da C7) ───────────┐
+   * │ Ele era o MESMO `PORTAL_ACESSO_EMAIL_ENVIADO` do código, e as duas linhas saíam IDÊNTICAS:   │
+   * │ mesmo tipo, `resultado` OK, `motivo_codigo` nulo, `candidato_hash` nulo, `jti_link` nulo e    │
+   * │ `dados` vazio. Só a vizinhança temporal as distinguia, ou seja, não as distinguia: quem       │
+   * │ contasse "quantos códigos de verificação saíram" passava a contar entrega de LINK junto.      │
+   * │                                                                                            │
+   * │ E ISSO QUEBRAVA A SEMÂNTICA QUE ESTE PRÓPRIO CATÁLOGO DECLARA, no bloco acima: "quantos       │
+   * │ códigos SAÍRAM é entrega... com um evento só, o sinal de ataque e o fluxo normal seriam a     │
+   * │ mesma linha". A entrega do código é o passo 1 da porta e o volume dela é sinal de força       │
+   * │ bruta; a entrega do link é o DESFECHO da porta e o volume dela é operação funcionando. Duas   │
+   * │ perguntas, e as duas têm de ser contáveis sem ninguém precisar ler campo de dados.            │
+   * │                                                                                            │
+   * │ ELE NÃO É O `PORTAL_LINK_ENVIADO`, e a distinção é a mesma que separa `AUTOATENDIMENTO` de   │
+   * │ `AUTOMATICO`: aquele é o carimbo do ENVIO em si, gravado por `marcarEnvioDoLink` e comum aos  │
+   * │ três caminhos de entrega; este é o desfecho DESTA porta, que é o único caminho em que o       │
+   * │ pedido partiu do próprio candidato. Contar os dois juntos apagaria justamente essa diferença. │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  "PORTAL_ACESSO_LINK_ENVIADO",
+  "PORTAL_ACESSO_EMAIL_RECUSADO",
+  "PORTAL_ACESSO_EMAIL_CODIGO_ERRADO",
+  "PORTAL_ACESSO_EMAIL_CONFIRMADO",
+  "PORTAL_IDENTIDADE_GRAVADA",
+  "PORTAL_ACESSO_TRAVADO",
+  "PORTAL_ACESSO_DESTRAVADO",
+  "PORTAL_ACESSO_DESTRAVE_RECUSADO",
 ] as const;
 
 export type PortalEventoTipo = (typeof PORTAL_EVENTOS)[number];
@@ -155,6 +210,12 @@ const TIPOS_RECUSADOS = new Set<string>([
   "PORTAL_LIMITE_ATINGIDO",
   "PORTAL_ORIGEM_RECUSADA",
   "PORTAL_DESTRAVE_RECUSADO",
+  // Os QUATRO desfechos de recusa da porta de e-mail. O DESTRAVADO e o CONFIRMADO ficam de fora
+  // (são êxito), e o SOLICITADO/ENVIADO/IDENTIDADE_GRAVADA também: pedido e entrega não são recusa.
+  "PORTAL_ACESSO_EMAIL_RECUSADO",
+  "PORTAL_ACESSO_EMAIL_CODIGO_ERRADO",
+  "PORTAL_ACESSO_TRAVADO",
+  "PORTAL_ACESSO_DESTRAVE_RECUSADO",
 ]);
 
 /**
@@ -285,6 +346,68 @@ export const PORTAL_MOTIVOS = [
   "APAGADO",
   "QUARENTENA",
   "MARCADO",
+  // ── A PORTA DE E-MAIL DO PORTAL (contrato v2, seção 7) ───────────────────────────────────────
+  //
+  // ELES PRECISAM EXISTIR AQUI, e não é formalidade: `PORTAL_MOTIVOS` é lista FECHADA e
+  // `montarEventoPortal` DESCARTA em silêncio o código que não esteja nela. Um motivo fora do
+  // catálogo não vira texto livre nem erro: vira `motivo_codigo` NULO, e o evento chega à Sala De
+  // Segurança dizendo que recusou sem dizer por quê. É a cicatriz do `TENTATIVAS_ESGOTADAS`, e ela
+  // já custou uma frente.
+  //
+  // ┌─ ELES SÃO VOCABULÁRIO DE TRILHA, E NÃO CHEGAM AO CANDIDATO ────────────────────────────────┐
+  // │ A porta de e-mail responde a MESMA recusa neutra em todos estes casos: o corpo é um só, a    │
+  // │ frase é uma só, e nada nela diz se o e-mail existe, se o CPF confere, se a data bateu ou se  │
+  // │ a pessoa está travada. Distinguir na resposta recriaria o oráculo que a identificação do     │
+  // │ Portal fecha desde o primeiro dia. Aqui a distinção é INTERNA, e é ela que permite ao time   │
+  // │ separar força bruta de erro de digitação.                                                    │
+  // └─────────────────────────────────────────────────────────────────────────────────────────────┘
+  //
+  // `ACESSO_EMAIL_TETO`: o balde de 3 por hora ou 10 por dia estourou para aquele endereço. Código
+  // próprio, e não o `BLOQUEADO` da identificação: aquele é o balde de 5 tentativas em 15 minutos
+  // do CPF e do link, e somar os dois estragaria os dois números.
+  "ACESSO_EMAIL_TETO",
+  // `EMAIL_NAO_RESOLVEU`: nenhum candidato do funil tem aquele endereço. É o sinal de ENUMERAÇÃO
+  // quando aparece em rajada, e é a única forma de enxergá-la: a resposta ao candidato é idêntica à
+  // do e-mail existente, por desenho, então o único lugar onde a diferença aparece é aqui.
+  "EMAIL_NAO_RESOLVEU",
+  // Os QUATRO motivos da TRAVA, os mesmos de `MOTIVOS_DA_TRAVA_DE_ACESSO` (shared-types) e com a
+  // MESMA grafia, de propósito: a fila do time mostra `portal_acesso_travas.motivo_codigo` e a
+  // trilha mostra este campo, e grafias diferentes para o mesmo fato fariam as duas telas parecerem
+  // falar de coisas distintas.
+  "EMAIL_AMBIGUO",
+  "TRAVA_ANTERIOR",
+  "DIVERGENCIA_CADASTRO",
+  "CPF_DE_OUTRO_CANDIDATO",
+  // `CODIGO_ERRADO` e `CODIGO_EXPIRADO`: são coisas diferentes e pedem respostas diferentes de quem
+  // investiga. Errado em rajada é força bruta; expirado em massa é o correio lento ou a caixa que
+  // atrasa, que é problema de entrega e não de segurança.
+  "CODIGO_ERRADO",
+  "CODIGO_EXPIRADO",
+  // `BILHETE_MORTO`: apresentou bilhete inexistente, já consumido ou vencido no passo da identidade.
+  "BILHETE_MORTO",
+  // `CPF_INVALIDO`: o dígito verificador do que ELE digitou não fecha. NÃO é trava, de propósito
+  // (precedência do contrato, degrau 3): travar por erro de digitação do próprio candidato encheria
+  // a fila de destrave de ruído, e isso ele corrige sozinho na tela.
+  "CPF_INVALIDO",
+  // `FICHA_ANONIMIZADA`: a ficha do funil já passou pelo expurgo por retenção. Recusa neutra, e
+  // NUNCA escrita: reescrever CPF e nascimento ali DESFARIA um expurgo de LGPD, e a varredura de
+  // `RetencaoCandidatosService` (CTE `pessoais_cicatrizados`) apagaria de novo, então o dado do
+  // candidato sumiria sozinho e ninguém saberia explicar por quê.
+  "FICHA_ANONIMIZADA",
+  // `SEM_AUTOR_PARA_O_LINK`: havia admissão viva, e a emissão do link SE ABSTEVE porque
+  // `portal_links.criado_por_id` é NOT NULL e não há usuário real a quem atribuir a autoria. Ver o
+  // bloco do `autorDoLink` no serviço: inventar autor para poder emitir transformaria a trilha em
+  // ficção, e abster-se é o comportamento seguro (mesmo raciocínio da §A.33).
+  "SEM_AUTOR_PARA_O_LINK",
+  // `ENVIO_NAO_OCORREU`: o caminho de envio que já existe se absteve ou falhou, e ele registra a
+  // própria trilha com o próprio código. Este código existe para que a porta de e-mail não fique
+  // muda sobre o desfecho dela, SEM duplicar o vocabulário do envio aqui dentro.
+  "ENVIO_NAO_OCORREU",
+  // Os DOIS desfechos da tentativa de DESTRAVE que não destravou. Separados porque um é rotina
+  // (clique duplo numa linha já destravada) e o outro é alguém apontando para um id que não existe,
+  // que é sinal e não rotina.
+  "TRAVA_JA_DESTRAVADA",
+  "TRAVA_INEXISTENTE",
 ] as const;
 
 export type PortalMotivo = (typeof PORTAL_MOTIVOS)[number];

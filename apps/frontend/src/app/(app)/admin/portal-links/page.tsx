@@ -10,6 +10,7 @@ import type {
   LinkDoPortalParaCopiar,
   PaginaDoPainelPortal,
   PedidoDeAjudaDoPortal,
+  TravaDeAcessoItem,
 } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -25,6 +26,7 @@ import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { CilindroMeta } from "@/components/ui/CilindroMeta";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { Select } from "@/components/ui/Select";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { copiarTexto, AVISO_COPIA_FALHOU } from "@/lib/copiar-texto";
 import { EnviarLinkModal } from "@/components/portal/EnviarLinkModal";
@@ -62,6 +64,24 @@ import {
   type LinhaComJtiOpcional,
   type Recorte,
 } from "@/lib/portal-painel";
+import {
+  FRASE_DESTRAVE_RECUSADO,
+  FRASE_TRAVA_SUMIU,
+  OPCOES_DE_MOTIVO_DA_TRAVA,
+  OPCOES_DE_SITUACAO_DA_TRAVA,
+  OPCOES_DO_DESTRAVE,
+  ROTA_FILTROS_DAS_TRAVAS,
+  ROTA_TRAVAS,
+  ROTULO_DA_SITUACAO,
+  contarFiltrosDasTravas,
+  contarTravadas,
+  queryDasTravas,
+  rotaDestravar,
+  rotuloDaSituacao,
+  rotuloDoMotivo,
+  situacaoDaTrava,
+  type CatalogoDasTravas,
+} from "@/lib/portal-acesso-email";
 
 /**
  * GERENCIADOR DO PORTAL: o painel INTERNO onde o time acompanha a coleta de documentos.
@@ -255,10 +275,36 @@ export default function PortalLinksPage() {
   // ── PEDIDOS DE AJUDA PARA ENTRAR: a fila de quem clicou "Não consigo entrar" ──────────────────
   // É a segunda VISTA da tela, um aviso acionável para o RH. Vive ao lado do painel, com seu
   // próprio carregamento, para o badge da aba ter a contagem sem depender de a pessoa entrar nela.
-  const [vista, setVista] = useState<"PAINEL" | "PEDIDOS">("PAINEL");
+  const [vista, setVista] = useState<"PAINEL" | "PEDIDOS" | "TRAVAS">("PAINEL");
   const [pedidos, setPedidos] = useState<PedidoDeAjudaDoPortal[]>([]);
   const [pedidosCarregando, setPedidosCarregando] = useState(true);
   const [pedidosErro, setPedidosErro] = useState<string | null>(null);
+
+  // ── TRAVAS DO ACESSO POR E-MAIL: a fila de quem o sistema não conseguiu confirmar ─────────────
+  //
+  // É a TERCEIRA vista da tela, e ela mora aqui de propósito: o contrato (§6) põe as duas rotas como
+  // handlers do `PortalPainelController`, já reivindicado pelo menu `portal-links`, então a fila é
+  // deste menu e NÃO nasce menu novo (§A.23).
+  //
+  // §A.6: a linha traz nome, motivo em CÓDIGO, data, contagem e quem destravou. Nunca o CPF, nunca o
+  // e-mail, nunca o valor informado e nunca o valor esperado. Essas colunas são proibidas
+  // NOMINALMENTE no contrato (§4), porque quem opera escreve o nome da pessoa em campo livre.
+  const [travas, setTravas] = useState<TravaDeAcessoItem[]>([]);
+  const [travasCarregando, setTravasCarregando] = useState(true);
+  const [travasErro, setTravasErro] = useState<string | null>(null);
+  const [travasMotivos, setTravasMotivos] = useState<string[]>([]);
+  const [travasSituacoes, setTravasSituacoes] = useState<string[]>([]);
+  /**
+   * O CATÁLOGO DOS FILTROS DA FILA VEM DE ENDPOINT (§A.37), nunca das linhas carregadas: derivar da
+   * página encolhe a lista assim que o primeiro valor é escolhido. Indisponível, cai no catálogo
+   * fechado do contrato, que é a MESMA lista que o servidor devolve.
+   */
+  const [travasCatalogo, setTravasCatalogo] = useState<CatalogoDasTravas | null>(null);
+  /** O alvo do destrave, e o motivo escolhido. Lista fechada: não existe campo de texto livre. */
+  const [travaAlvo, setTravaAlvo] = useState<TravaDeAcessoItem | null>(null);
+  const [motivoDestrave, setMotivoDestrave] = useState<string>("");
+  const [destravando, setDestravando] = useState(false);
+  const [destraveErro, setDestraveErro] = useState<string | null>(null);
 
   /**
    * O CATÁLOGO DOS FILTROS VEM DE ENDPOINT, NUNCA DAS LINHAS CARREGADAS (§A.37).
@@ -333,6 +379,102 @@ export default function PortalLinksPage() {
     void carregarPedidos();
   }, [carregarPedidos]);
 
+  /**
+   * A FILA DAS TRAVAS. O RECORTE É DO SERVIDOR (motivo e situação viajam na query), no mesmo molde
+   * do painel: filtro que a tela oferece e a consulta ignora é pior que filtro nenhum (§A.28).
+   *
+   * Falha não derruba a tela: o painel segue e o aviso mostra o erro.
+   */
+  const carregarTravas = useCallback(async (): Promise<TravaDeAcessoItem[]> => {
+    if (!token) return [];
+    setTravasCarregando(true);
+    setTravasErro(null);
+    try {
+      const q = queryDasTravas({ motivos: travasMotivos, situacoes: travasSituacoes });
+      const r = await apiFetch<TravaDeAcessoItem[]>(
+        q ? `${ROTA_TRAVAS}?${q}` : ROTA_TRAVAS,
+        { token },
+      );
+      const lista = r ?? [];
+      setTravas(lista);
+      // DEVOLVE A LISTA, e não só grava no estado: o destrave recusado precisa RELER a linha para
+      // mostrar o motivo de agora, e ler o estado logo após um `set` devolveria o valor velho.
+      return lista;
+    } catch (e) {
+      setTravasErro(
+        e instanceof ApiError ? e.message : "Falha ao carregar as travas do acesso por e-mail.",
+      );
+      setTravas([]);
+      return [];
+    } finally {
+      setTravasCarregando(false);
+    }
+  }, [token, travasMotivos, travasSituacoes]);
+
+  // Carrega na entrada (o badge da aba precisa da contagem) e a cada troca de filtro. Sem polling.
+  useEffect(() => {
+    void carregarTravas();
+  }, [carregarTravas]);
+
+  // O catálogo é buscado UMA vez: ele é fechado e não muda durante a sessão de trabalho.
+  useEffect(() => {
+    if (!token) return;
+    apiFetch<CatalogoDasTravas>(ROTA_FILTROS_DAS_TRAVAS, { token })
+      .then((c) => setTravasCatalogo(c ?? null))
+      .catch(() => setTravasCatalogo(null));
+  }, [token]);
+
+  /**
+   * DESTRAVAR, com motivo de LISTA FECHADA e nenhum campo de texto livre.
+   *
+   * O motivo é obrigatório: sem ele a operação não sai. A trilha do destrave leva o autor da SESSÃO,
+   * nunca do corpo (contrato §7), então esta tela não manda, e não tem como mandar, quem destravou.
+   *
+   * A lista recarrega depois, porque a linha acabou de mudar de estado. O destrave é idempotente no
+   * servidor: repetir não move o carimbo.
+   */
+  const destravar = useCallback(async () => {
+    if (!token || !travaAlvo || !motivoDestrave || destravando) return;
+    setDestravando(true);
+    setDestraveErro(null);
+    try {
+      const r = await apiFetch<{ destravado: boolean }>(rotaDestravar(travaAlvo.id), {
+        method: "POST",
+        token,
+        body: { motivoCodigo: motivoDestrave },
+      });
+      // A RECUSA VEM COM STATUS 200, então "não deu erro" NÃO significa "destravou": o servidor
+      // devolve `destravado: false` quando o motivo declarado não é o da trava, quando a linha já
+      // estava destravada ou quando o id não existe. Fechar o modal aqui seria mentir na tela.
+      //
+      // OS TRÊS CASOS TÊM A MESMA CAUSA PRÁTICA: a fila mudou depois que esta tela carregou (outra
+      // pessoa destravou, ou a trava foi REABERTA com outro motivo). Então a tela RECARREGA, RELÊ a
+      // linha e pede a confirmação de novo contra o motivo DE AGORA, em vez de deixar a pessoa
+      // insistindo com o dado velho que a guarda do backend acabou de recusar.
+      if (!r?.destravado) {
+        const lista = await carregarTravas();
+        const atual = lista.find((t) => t.id === travaAlvo.id);
+        setMotivoDestrave("");
+        if (!atual) {
+          // A linha saiu da fila. Não há o que confirmar, e o modal não tem mais assunto.
+          setTravaAlvo(null);
+          setTravasErro(FRASE_TRAVA_SUMIU);
+          return;
+        }
+        setTravaAlvo(atual);
+        setDestraveErro(FRASE_DESTRAVE_RECUSADO);
+        return;
+      }
+      setTravaAlvo(null);
+      setMotivoDestrave("");
+      await carregarTravas();
+    } catch (e) {
+      setDestraveErro(e instanceof ApiError ? e.message : "Falha ao destravar o acesso.");
+    } finally {
+      setDestravando(false);
+    }
+  }, [token, travaAlvo, motivoDestrave, destravando, carregarTravas]);
+
   function trocarAba(nova: AbaDoPainelPortal) {
     // Com card aceso a aba não se aplica, e o botão está desabilitado: esta guarda é o cinto de
     // segurança do teclado, para o estado não virar "aba trocada, recorte mandando" em silêncio.
@@ -400,6 +542,53 @@ export default function PortalLinksPage() {
   );
   const ordPedidos = useOrdenacao(colunasPedidos, pedidos);
   const pedidosVisiveis = ordPedidos.itens;
+
+  /**
+   * ORDENAÇÃO DA FILA DE TRAVAS (§A.29), pela MESMA peça compartilhada. Nenhuma ordenação escrita à
+   * mão nesta tela: `useOrdenacao` mais `ColunaOrdenavel`, como no painel e nos pedidos.
+   *
+   * A SITUAÇÃO ordena pelo `rank` do rótulo (travado antes de destravado), que é a leitura de uma
+   * fila de trabalho, e o MOTIVO ordena pelo rótulo que a pessoa lê na célula, não pelo código.
+   */
+  const colunasTravas = useMemo<ColOrd<TravaDeAcessoItem>[]>(
+    () => [
+      { chave: "nome", tipo: "texto", valor: (t) => t.nome },
+      { chave: "motivo", tipo: "texto", valor: (t) => rotuloDoMotivo(t.motivoCodigo) },
+      { chave: "travadoEm", tipo: "data", valor: (t) => t.travadoEm },
+      { chave: "tentativas", tipo: "numero", valor: (t) => t.tentativas },
+      {
+        chave: "situacao",
+        tipo: "status",
+        valor: (t) => ROTULO_DA_SITUACAO[situacaoDaTrava(t)].rank,
+      },
+      { chave: "destravadoPor", tipo: "texto", valor: (t) => t.destravadoPorNome ?? "" },
+    ],
+    [],
+  );
+  const ordTravas = useOrdenacao(colunasTravas, travas);
+  const travasVisiveis = ordTravas.itens;
+  const travasAbertas = contarTravadas(travas);
+  const filtrosDasTravas = contarFiltrosDasTravas({
+    motivos: travasMotivos,
+    situacoes: travasSituacoes,
+  });
+
+  // As opções vêm do ENDPOINT quando ele responde, e do catálogo fechado do contrato quando não
+  // responde. Nos dois casos a lista é a MESMA, e em nenhum dos dois ela é derivada das linhas.
+  const opcoesDeMotivoDaTrava = useMemo(
+    () =>
+      travasCatalogo?.motivos?.length
+        ? travasCatalogo.motivos.map((m) => ({ value: m, label: rotuloDoMotivo(m) }))
+        : OPCOES_DE_MOTIVO_DA_TRAVA,
+    [travasCatalogo],
+  );
+  const opcoesDeSituacaoDaTrava = useMemo(
+    () =>
+      travasCatalogo?.situacoes?.length
+        ? travasCatalogo.situacoes.map((s) => ({ value: s, label: rotuloDaSituacao(s).label }))
+        : OPCOES_DE_SITUACAO_DA_TRAVA,
+    [travasCatalogo],
+  );
 
   /**
    * EMITIR O LINK PARA COPIAR, e ela DEIXOU DE USAR A ROTA CRUA (`rotaEmitir`).
@@ -758,6 +947,24 @@ export default function PortalLinksPage() {
               aria-label={`${pedidos.length} pedidos de ajuda`}
             >
               {pedidos.length}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          className={cn("tab", vista === "TRAVAS" && "active")}
+          onClick={() => setVista("TRAVAS")}
+          aria-pressed={vista === "TRAVAS"}
+        >
+          <span className="dot" />
+          <Icon name="lock" className="mr-1 inline-block h-3.5 w-3.5 flex-none align-middle" />
+          Travas Do Acesso Por E-mail
+          {travasAbertas > 0 && (
+            <span
+              className="ml-2 inline-flex min-w-[20px] items-center justify-center rounded-full bg-[var(--warn)] px-1.5 py-0.5 text-[11px] font-bold text-black tabular-nums"
+              aria-label={`${travasAbertas} travas em aberto`}
+            >
+              {travasAbertas}
             </span>
           )}
         </button>
@@ -1305,6 +1512,289 @@ export default function PortalLinksPage() {
             </table>
           </div>
         </GlassCard>
+      )}
+
+      {/* ── TRAVAS DO ACESSO POR E-MAIL ────────────────────────────────────────────────────────
+
+          A FILA DE QUEM O SISTEMA NÃO CONSEGUIU CONFIRMAR pela porta de e-mail. Cada linha é uma
+          pessoa que provou a posse da caixa e cujos dados não fecharam com o cadastro, ou cujo CPF
+          já pertence a outro candidato. Quem resolve é o time, com a pessoa, e é por isso que a
+          tela existe: sem ela a trava é um beco onde ninguém vê ninguém preso.
+
+          §A.6, E ESTA É A PARTE QUE NÃO PODE ESCORREGAR: a tabela não mostra CPF, não mostra
+          e-mail, não mostra o que a pessoa informou e não mostra o que o cadastro tinha. O motivo é
+          um CÓDIGO de catálogo fechado, e nada além dele diz o que houve. O destrave também não tem
+          campo de texto livre, pelo mesmo motivo (o contrato proíbe a coluna de observação por
+          nome, porque quem opera escreve o nome da pessoa em campo livre).
+
+          §A.12 máscara única, §A.20 larguras aproveitando o espaço, §A.29 ordenação por clique pela
+          peça compartilhada, §A.28/§A.37 filtros multiselect com as opções vindas do CATÁLOGO do
+          contrato, nunca das linhas carregadas. */}
+      {vista === "TRAVAS" && (
+        <GlassCard className="overflow-hidden p-2">
+          {travasErro && (
+            <p
+              className="m-2 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {travasErro}
+            </p>
+          )}
+          <div className="flex items-center justify-between gap-3 px-3 py-2">
+            <p className="text-[12.5px] text-dim">
+              Quem tentou entrar pelo e-mail e não teve os dados confirmados. Confira com a pessoa,
+              corrija o cadastro e destrave. Não se atualiza sozinho: use o botão ao lado.
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <FiltroTrigger
+                count={filtrosDasTravas}
+                onLimpar={() => {
+                  setTravasMotivos([]);
+                  setTravasSituacoes([]);
+                }}
+              >
+                <FiltroCampo label="Motivo da trava">
+                  <MultiSelect
+                    values={travasMotivos}
+                    onChange={setTravasMotivos}
+                    options={opcoesDeMotivoDaTrava}
+                    placeholder="Todos os motivos"
+                    ariaLabel="Filtrar por motivo da trava"
+                  />
+                </FiltroCampo>
+                <FiltroCampo label="Situação">
+                  <MultiSelect
+                    values={travasSituacoes}
+                    onChange={setTravasSituacoes}
+                    options={opcoesDeSituacaoDaTrava}
+                    placeholder="Todas as situações"
+                    ariaLabel="Filtrar por situação da trava"
+                  />
+                </FiltroCampo>
+              </FiltroTrigger>
+              <Button
+                variant="secondary"
+                onClick={() => void carregarTravas()}
+                className="shrink-0 px-3 py-2"
+              >
+                <Icon name="refresh" className={cn("h-4 w-4", travasCarregando && "animate-spin")} />
+                Atualizar
+              </Button>
+            </div>
+          </div>
+
+          <div className="ea-scroll overflow-x-auto">
+            <table className="ds-table ds-table--densa min-w-[980px]">
+              <thead>
+                <tr>
+                  <ColunaOrdenavel as="th" ord={ordTravas} chave="nome" className="w-[24%]">
+                    Candidato
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordTravas} chave="motivo" className="w-[20%]">
+                    Motivo Da Trava
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordTravas} chave="travadoEm" className="w-[15%]">
+                    Travado Em
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordTravas} chave="tentativas" className="w-[9%]">
+                    Tentativas
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordTravas} chave="situacao" className="w-[14%]">
+                    Situação
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordTravas} chave="destravadoPor" className="w-[11%]">
+                    Destravado Por
+                  </ColunaOrdenavel>
+                  <th className="w-[7%]">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {travasCarregando && travas.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-faint">
+                      Carregando…
+                    </td>
+                  </tr>
+                ) : travasVisiveis.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-faint">
+                      Nenhuma trava de acesso por e-mail no momento.
+                    </td>
+                  </tr>
+                ) : (
+                  travasVisiveis.map((t) => {
+                    const situacao = situacaoDaTrava(t);
+                    const rotulo = ROTULO_DA_SITUACAO[situacao];
+                    const aberta = situacao === "ABERTA";
+                    return (
+                      <tr key={t.id}>
+                        <td className="font-semibold">{caixaAlta(t.nome)}</td>
+                        <td className="text-center">
+                          <Pill tone="nt">{rotuloDoMotivo(t.motivoCodigo)}</Pill>
+                        </td>
+                        <td className="text-center text-[12.5px] text-dim tabular-nums">
+                          {formatarDataHora(t.travadoEm)}
+                        </td>
+                        {/* SÓ O NÚMERO NO PILL, e o rótulo fica no cabeçalho da coluna.
+
+                            Com a palavra dentro, o pill quebrava em duas linhas na largura desta
+                            coluna ("2" em cima, "Tentativas" embaixo). Não estava cortado, mas lia
+                            mal, e alargar a coluna obrigaria a mexer nas outras seis, que hoje somam
+                            certo (§A.20). O `title` carrega a frase inteira para quem passa o mouse,
+                            então nada de informação se perde. As LARGURAS NÃO MUDARAM. */}
+                        <td className="text-center">
+                          {t.tentativas > 1 ? (
+                            <Pill tone="wn" title={`${t.tentativas} tentativas de acesso`}>
+                              {t.tentativas}
+                            </Pill>
+                          ) : (
+                            <span className="text-[12.5px] text-dim" title="1 tentativa de acesso">
+                              1
+                            </span>
+                          )}
+                        </td>
+                        {/* O ÍCONE ACOMPANHA O ESTADO REAL, nunca é fixo (§A.12): destravado vira
+                            check verde, travado vira exclamação amarela. */}
+                        <td className="text-center">
+                          <Pill
+                            tone={rotulo.tone}
+                            title={
+                              t.destravadoEm
+                                ? `Destravado em ${formatarDataHora(t.destravadoEm)}`
+                                : undefined
+                            }
+                          >
+                            <Icon name={rotulo.icone} className="h-3 w-3 flex-none" />
+                            {rotulo.label}
+                          </Pill>
+                        </td>
+                        <td className="text-center text-dim">
+                          {t.destravadoPorNome ? caixaAlta(t.destravadoPorNome) : "não informado"}
+                        </td>
+                        <td>
+                          <div className="flex items-center justify-center gap-0.5">
+                            <button
+                              type="button"
+                              title={
+                                aberta
+                                  ? "Destravar o acesso por e-mail deste candidato"
+                                  : "Este acesso já está destravado"
+                              }
+                              aria-label={`Destravar o acesso de ${t.nome}`}
+                              disabled={!aberta}
+                              onClick={() => {
+                                setTravaAlvo(t);
+                                setMotivoDestrave("");
+                                setDestraveErro(null);
+                              }}
+                              className={cn(
+                                "grid h-8 w-[30px] flex-none place-items-center rounded-lg text-faint transition",
+                                "hover:bg-[var(--surface-2)] hover:text-accent disabled:cursor-not-allowed disabled:opacity-40",
+                              )}
+                            >
+                              <Icon name="undo" className="h-[17px] w-[17px]" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* O DESTRAVE, com motivo de LISTA FECHADA.
+
+          NÃO EXISTE CAMPO DE TEXTO LIVRE AQUI, e a ausência é a defesa: a coluna de observação é
+          proibida por nome no contrato, porque quem opera escreve o nome e o documento da pessoa em
+          campo livre, e aí a trilha do incidente passa a guardar o dado que o incidente deveria
+          proteger. O motivo é obrigatório, e o autor vem da SESSÃO no servidor, nunca do corpo.
+
+          §A.35: o seletor é o do design system, nunca o `<select>` cru. §A.41: o modal não fecha por
+          clique fora, e tem "Cancelar" e a ação no rodapé. */}
+      {travaAlvo && (
+        <Modal
+          onClose={() => {
+            setTravaAlvo(null);
+            setDestraveErro(null);
+          }}
+          className="max-w-md"
+          ariaLabel="Destravar Acesso"
+        >
+          <div className="mb-4 flex items-center gap-2">
+            <span className="grid h-9 w-9 flex-none place-items-center rounded-full bg-[var(--sico)] text-accent">
+              <Icon name="lock" className="h-4 w-4" />
+            </span>
+            <h3 className="!mb-0">Destravar Acesso</h3>
+          </div>
+
+          <p className="mb-3 text-[13px] leading-relaxed text-dim">
+            Você vai liberar o acesso por e-mail de <strong>{caixaAlta(travaAlvo.nome)}</strong>.
+            Confira os dados com a pessoa e corrija o cadastro antes de liberar: o sistema vai travar
+            de novo se a divergência continuar.
+          </p>
+
+          {/* O MOTIVO DA TRAVA À VISTA, com o mesmo Pill da coluna.
+
+              SEM ELE A TELA FAZIA UMA PERGUNTA CUJA RESPOSTA ELA ESCONDIA: o servidor recusa o
+              destrave quando o código enviado não é o da trava, e a pessoa tinha de LEMBRAR o que
+              estava na tabela, uma tela atrás. Quem errasse levava uma recusa com cara de defeito. */}
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5">
+            <span className="text-[12px] font-semibold uppercase tracking-wide text-faint">
+              Motivo desta trava
+            </span>
+            <Pill tone="nt">{rotuloDoMotivo(travaAlvo.motivoCodigo)}</Pill>
+          </div>
+
+          {/* O RÓTULO É DE CONFIRMAÇÃO, e não de justificativa.
+
+              O valor pedido NÃO é a razão de destravar: é o RECONHECIMENTO de qual trava está sendo
+              desfeita, e o servidor confere. Chamar isso de "motivo do destrave" era a origem da
+              confusão. E o campo NASCE VAZIO de propósito: prefixar a resposta certa transformaria a
+              confirmação num clique vazio, e a guarda do backend deixaria de proteger de algo. */}
+          <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wide text-faint">
+            Confirme o motivo da trava
+          </label>
+          <Select
+            value={motivoDestrave}
+            onChange={setMotivoDestrave}
+            options={OPCOES_DO_DESTRAVE}
+            placeholder="Selecionar o motivo desta trava"
+            ariaLabel="Confirme o motivo da trava"
+          />
+
+          {destraveErro && (
+            <p
+              className="mt-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {destraveErro}
+            </p>
+          )}
+
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setTravaAlvo(null);
+                setDestraveErro(null);
+              }}
+              className="px-5 py-2.5"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void destravar()}
+              disabled={!motivoDestrave || destravando}
+              className="px-5 py-2.5"
+            >
+              {destravando ? "Destravando..." : "Destravar acesso"}
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {/* O LINK APARECE UMA VEZ. Quem o perder emite outro, que é barato e mata o anterior.

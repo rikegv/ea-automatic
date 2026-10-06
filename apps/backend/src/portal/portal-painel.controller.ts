@@ -1,6 +1,10 @@
-import { Controller, Get, Query, Res } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Res } from "@nestjs/common";
 import type { Response } from "express";
+import { CurrentUser } from "../auth/decorators";
+import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
+import { DestravarAcessoDto } from "./portal-acesso-email.dto";
+import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalPainelService } from "./portal-painel.service";
 
 /**
@@ -43,7 +47,25 @@ function umSo(valor?: string | string[]): string | undefined {
  */
 @Controller("esteira/portal-painel")
 export class PortalPainelController {
-  constructor(private readonly painel: PortalPainelService) {}
+  constructor(
+    private readonly painel: PortalPainelService,
+    /**
+     * A FILA DE TRAVAS DA PORTA DE E-MAIL ENTRA NESTA CLASSE, E NÃO EM UMA NOVA, e a razão é dupla
+     * (contrato v2, seção 6):
+     *  - esta classe está FORA do prefixo `portal/` que a barreira allowlista, o que é obrigatório
+     *    para rota do TIME (o destrave desfaz uma proteção, e não pode ser alcançável de fora);
+     *  - ela já é reivindicada POR NOME pelo menu `portal-links`, pelo coringa
+     *    `PortalPainelController.*`, cuja restrição é `NENHUMA`, logo concedível a qualquer usuário,
+     *    que é exatamente o que o diretor pediu para o destrave.
+     *
+     * CLASSE NOVA NASCERIA FAIL-OPEN, e isto é medido, não temido: o `MenuGuard` indexa por
+     * `Controller.handler` e passa LIVRE por operação que nenhum menu reivindica. Uma controller
+     * nova, sem `@Roles` (que é o que o diretor pediu), ficaria ABERTA a qualquer usuário
+     * autenticado até alguém lembrar de reivindicá-la em `domain/menus.ts`, arquivo que outra sessão
+     * está reescrevendo agora. Pendurando aqui, a cobertura já existe e nada precisa ser tocado lá.
+     */
+    private readonly acesso: PortalAcessoEmailService,
+  ) {}
 
   /**
    * Os cinco contadores do funil, sobre TODO o recorte (não sobre a página).
@@ -136,5 +158,73 @@ export class PortalPainelController {
       dataAdmissaoDe: umSo(dataAdmissaoDe),
       dataAdmissaoAte: umSo(dataAdmissaoAte),
     });
+  }
+
+  // ══ A FILA DE TRAVAS DA PORTA DE E-MAIL (contrato v2, seção 6) ══════════════════════════════
+
+  /**
+   * A FILA: as travas de divergência da porta de e-mail, abertas primeiro.
+   *
+   * SEM `@Roles`, como o resto da classe: acompanhar e destravar é trabalho de consultor, e quem
+   * governa é o MENU (`portal-links`, restrição `NENHUMA`), que já reivindica esta classe pelo
+   * coringa. Ver o bloco do construtor.
+   *
+   * §A.6, O QUE ESTA RESPOSTA NÃO CARREGA: sem CPF, sem e-mail, sem data de nascimento, sem valor
+   * informado e sem campo divergente. Sai o NOME, que é dado que o time já vê na Central de
+   * Candidatos, e sem ele a fila não teria como dizer de quem está falando.
+   *
+   * `Cache-Control: no-store, private`, o mesmo das irmãs: a resposta atravessa o proxy do Next, e
+   * nem ele nem o disco do navegador guardam a lista nominal.
+   */
+  @Get("travas")
+  travas(
+    @Res({ passthrough: true }) res: Response,
+    @Query("motivos") motivos?: string | string[],
+    @Query("situacao") situacao?: string | string[],
+    @Query("nome") nome?: string | string[],
+  ) {
+    res.set({ "Cache-Control": "no-store, private" });
+    return this.acesso.listarTravas({
+      // TODO FILTRO DE LISTA É MÚLTIPLO (§A.28), pelo MESMO `parseMulti` que a Esteira e o painel
+      // usam: o parâmetro aceita repetição e vírgula, e a cláusula vira `IN`.
+      motivos: parseMulti(umSo(motivos)),
+      // `situacao` é UM valor: `ABERTA` e `DESTRAVADA` são o complemento exato uma da outra, e
+      // somá-las é o mesmo que não filtrar. Vazio é "todas".
+      situacao: umSo(situacao),
+      nome: umSo(nome),
+    });
+  }
+
+  /**
+   * O CATÁLOGO DOS FILTROS DA FILA, por ENDPOINT e não derivado das linhas carregadas (§A.37).
+   *
+   * Derivar as opções da página encolhe a lista assim que o primeiro valor é escolhido, e aí não há
+   * como somar o segundo sem limpar o filtro. Aqui as opções são o catálogo FECHADO do contrato, que
+   * não depende de haver linha.
+   */
+  @Get("travas/filtros")
+  filtrosDeTravas(@Res({ passthrough: true }) res: Response) {
+    res.set({ "Cache-Control": "no-store, private" });
+    return this.acesso.catalogoDeFiltrosDeTravas();
+  }
+
+  /**
+   * DESTRAVA uma linha da fila. IDEMPOTENTE, e a tentativa RECUSADA também vira linha de trilha.
+   *
+   * O AUTOR VEM DA SESSÃO (`@CurrentUser`) E NUNCA DO CORPO: autor vindo do corpo é autor escolhido
+   * por quem age, ou seja, trilha que o próprio ator escreve. É a régua da seção 7 do contrato, e a
+   * mesma de `PORTAL_TETO_DESTRAVADO`.
+   *
+   * O CORPO LEVA SÓ `motivoCodigo`, de catálogo FECHADO e sem texto livre, e o serviço exige que ele
+   * seja o MESMO motivo da linha: o gesto é de RECONHECIMENTO do que está sendo desfeito, e não um
+   * botão que se aperta sem olhar. Ver o bloco de `destravar` no serviço.
+   */
+  @Post("travas/:id/destravar")
+  destravarAcesso(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: DestravarAcessoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.acesso.destravar(id, dto.motivoCodigo, user);
   }
 }

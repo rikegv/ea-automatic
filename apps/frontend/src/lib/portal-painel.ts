@@ -4,6 +4,7 @@ import {
   type EstadoLinkPainel,
   type FiltrosDoPainelPortal,
   type LinhaDoPainelPortal,
+  type OrigemDeEnvioDoLink,
   type RecorteDoPainelPortal,
 } from "@ea/shared-types";
 
@@ -259,12 +260,38 @@ export type Recorte = RecorteDoPainelPortal;
  * segundo vocabulário ("Sem Origem"): quem vê a célula escrita de um jeito procura o filtro com
  * aquela palavra, e duas palavras para o mesmo estado é o começo de uma pergunta de suporte.
  */
-export const ROTULO_DA_ORIGEM: Record<string, string> = {
+/**
+ * ┌─ POR QUE O MAPA NASCE ESTRITO E SÓ DEPOIS É ALARGADO ──────────────────────────────────────┐
+ * │ Ele era `Record<string, string>` direto, e foi esse tipo que deixou passar o `AUTOATENDIMENTO`│
+ * │ novo: o catálogo do contrato cresceu, esta tela não ganhou o rótulo, o typecheck ficou verde e │
+ * │ a célula ia mostrar `AUTOATENDIMENTO` cru, em caixa alta e com underscore, enquanto a opção do │
+ * │ FILTRO (que vem do backend) já dizia "Autoatendimento". É a divergência célula/filtro que a    │
+ * │ nota logo acima chama de começo de pergunta de suporte.                                       │
+ * │                                                                                             │
+ * │ O OBJETO LITERAL É DECLARADO COM O TIPO FECHADO, e é aí que a exaustividade acontece: origem   │
+ * │ nova no contrato para de COMPILAR até ganhar rótulo, mesmo raciocínio do `Record` do backend.  │
+ * │ O EXPORT segue `Record<string, string>` de propósito, para quem indexa o mapa com uma string   │
+ * │ vinda do servidor (a montagem das opções do filtro) continuar funcionando sem mudança nenhuma. │
+ * │ Alargar na saída e fechar na entrada dá as duas coisas sem puxar o fio para outros arquivos.   │
+ * │                                                                                             │
+ * │ O SENTINELA ENTRA NO TIPO porque ele não é uma origem: `__SEM_ORIGEM` é o valor de FILTRO do   │
+ * │ link antigo, sem origem gravada, e o rótulo dele existe para a opção dizer o mesmo que a       │
+ * │ célula.                                                                                      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const ROTULOS_DA_ORIGEM: Record<OrigemDeEnvioDoLink | typeof SEM_ORIGEM_DE_ENVIO, string> = {
   AUTOMATICO: "Automático",
   MANUAL: "Manual",
   ENTREGA_A_MAO: "Entrega À Mão",
+  // `AUTOATENDIMENTO` é a PORTA DE E-MAIL: o próprio candidato pediu e o sistema enviou, sem humano
+  // nenhum clicar. Ele é distinto de `AUTOMATICO` (o gancho do funil) porque o autor gravado na
+  // linha é o dono do REGISTRO, e não quem agiu: sem o código próprio, a coluna leria autoria onde
+  // há apenas custódia.
+  AUTOATENDIMENTO: "Autoatendimento",
   [SEM_ORIGEM_DE_ENVIO]: "Não Informado",
 };
+
+export const ROTULO_DA_ORIGEM: Record<string, string> = ROTULOS_DA_ORIGEM;
 
 /**
  * A célula da coluna. Link emitido antes desta frente não tem origem, e isso NÃO é defeito: ele diz

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LinhaDoPainelPortal } from "@ea/shared-types";
-import { SEM_ORIGEM_DE_ENVIO } from "@ea/shared-types";
+import { ORIGENS_DE_ENVIO_DO_LINK, SEM_ORIGEM_DE_ENVIO } from "@ea/shared-types";
 import {
   ROTULO_DA_ORIGEM,
   ROTULO_DO_LINK,
@@ -144,10 +144,38 @@ describe("o recorte do card foi para o SERVIDOR", () => {
 });
 
 describe("a origem do envio (a coluna nova)", () => {
+  /**
+   * O CATÁLOGO É O CANÁRIO, e a lista à mão era o defeito.
+   *
+   * Este teste citava TRÊS origens escritas uma a uma, então quando o contrato ganhou
+   * `AUTOATENDIMENTO` ele continuou verde e a célula do Gerenciador ia mostrar o código cru, em
+   * caixa alta e com underscore, enquanto a opção do filtro (que vem do backend) já dizia
+   * "Autoatendimento". Derivando de `ORIGENS_DE_ENVIO_DO_LINK`, origem nova sem rótulo QUEBRA este
+   * teste sozinha, que é o que a lista à mão nunca fez.
+   */
+  it("TODA origem do catálogo tem rótulo em Title Case, e origem nova sem rótulo quebra aqui", () => {
+    for (const origem of ORIGENS_DE_ENVIO_DO_LINK) {
+      const rotulo = rotuloDaOrigem(origem);
+      // Cair no fallback é exatamente o sintoma: o rótulo IGUAL ao código quer dizer "sem rótulo".
+      expect(rotulo, `origem ${origem} está sem rótulo na tela`).not.toBe(origem);
+      // Código cru tem underscore e caixa alta; rótulo de tela não tem nenhum dos dois (§A.24).
+      expect(rotulo).not.toContain("_");
+      expect(rotulo).not.toBe(rotulo.toUpperCase());
+      expect(rotulo).not.toContain("—");
+      // Title Case (§A.24): cada palavra começa em maiúscula.
+      for (const palavra of rotulo.split(" ")) {
+        expect(palavra[0]).toBe(palavra[0].toUpperCase());
+      }
+    }
+  });
+
   it("cada origem tem rótulo em Title Case (§A.24)", () => {
     expect(rotuloDaOrigem("AUTOMATICO")).toBe("Automático");
     expect(rotuloDaOrigem("MANUAL")).toBe("Manual");
     expect(rotuloDaOrigem("ENTREGA_A_MAO")).toBe("Entrega À Mão");
+    // A porta de e-mail: o candidato pediu e o sistema enviou, sem humano nenhum clicar. Ela é
+    // distinta de `AUTOMATICO` porque o autor gravado na linha é custódia, não autoria.
+    expect(rotuloDaOrigem("AUTOATENDIMENTO")).toBe("Autoatendimento");
   });
 
   it('link antigo, SEM origem, diz "não informado" e NUNCA traço (§A.11)', () => {

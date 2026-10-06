@@ -67,11 +67,32 @@ describe("CONDIÇÃO 1: a controller nova é REIVINDICADA por menu", () => {
     (n) => n !== "constructor",
   );
 
-  it("a controller tem os três handlers esperados", () => {
+  it("a controller tem os seis handlers esperados", () => {
     // `filtros` é o catálogo das opções (§A.37), que nasceu na segunda rodada. Ele lista cliente,
     // cargo e documento do recorte inteiro: se ficasse fora do menu, qualquer sessão autenticada
     // leria o catálogo de clientes e cargos com link emitido, que é meia lista nominal.
-    expect(HANDLERS.sort()).toEqual(["candidatos", "contadores", "filtros"]);
+    //
+    // ── OS TRÊS DA PORTA DE E-MAIL (contrato v2, seção 6) ──────────────────────────────────────
+    //
+    // Eles moram NESTA classe de propósito, e não em uma nova: classe nova nasceria FAIL-OPEN,
+    // porque o `MenuGuard` indexa por `Controller.handler` e passa LIVRE por operação que nenhum
+    // menu reivindica. O coringa `PortalPainelController.*` já as alcança, então nada precisou ser
+    // tocado em `domain/menus.ts` (que outra sessão está reescrevendo).
+    //
+    // `travas` é a FILA de divergência da porta de e-mail, e ela devolve NOME de candidato: fora do
+    // menu, qualquer sessão autenticada leria a lista nominal de quem está em disputa de identidade.
+    // `filtrosDeTravas` é o catálogo das opções dela (§A.37), fechado e sem PII, mas reivindicado
+    // pela mesma régua: catálogo aberto diz quais motivos de trava existem na casa.
+    // `destravarAcesso` é o que mais precisa do menu dos três: ele DESFAZ uma proteção, e num caso
+    // (`CPF_DE_OUTRO_CANDIDATO`) o que ele desfaz é a trava de DUAS pessoas disputando o mesmo CPF.
+    expect(HANDLERS.sort()).toEqual([
+      "candidatos",
+      "contadores",
+      "destravarAcesso",
+      "filtros",
+      "filtrosDeTravas",
+      "travas",
+    ]);
   });
 
   /**
@@ -176,9 +197,18 @@ describe("CONDIÇÃO 3: o teto da página é do servidor", () => {
     expect(ARQUIVO_SERVICO).toMatch(/\.offset\(deslocamento\)/);
   });
 
-  it("as TRÊS rotas mandam `no-store, private`, como a rota do candidato", () => {
+  /**
+   * AS CINCO ROTAS DE LEITURA, e só elas: o `destravarAcesso` é POST e não entra na conta, porque
+   * resposta de POST não é cacheada pelo proxy nem pelo disco do navegador.
+   *
+   * A FILA DE TRAVAS É A QUE MAIS PRECISA DISSO, e o motivo é o mesmo que criou a regra na lista de
+   * candidatos: ela carrega NOME DE CANDIDATO, e a resposta atravessa o proxy same-origin do Next.
+   * Sem `no-store, private`, o retrato de quem está em disputa de identidade fica no cache
+   * intermediário e no disco de quem abriu a tela.
+   */
+  it("as CINCO rotas de leitura mandam `no-store, private`, como a rota do candidato", () => {
     const cabecalhos = ARQUIVO_CONTROLLER.match(/"Cache-Control": "no-store, private"/g) ?? [];
-    expect(cabecalhos).toHaveLength(3);
+    expect(cabecalhos).toHaveLength(5);
   });
 
   /**
@@ -186,7 +216,22 @@ describe("CONDIÇÃO 3: o teto da página é do servidor", () => {
    * viraria consulta dirigida a qualquer admissão da base, inclusive as que o recorte exclui.
    */
   it("a controller não aceita parâmetro de admissão", () => {
-    const parametros = [...ARQUIVO_CONTROLLER.matchAll(/@Query\("([^"]+)"\)/g)].map((m) => m[1]);
+    /**
+     * A COLETA É UM CONJUNTO, E NÃO UMA LISTA COM REPETIÇÃO, e a diferença é o que o teste afirma.
+     *
+     * A asserção é sobre QUAIS parâmetros esta classe aceita, nunca sobre quantas vezes cada nome é
+     * escrito no arquivo. `nome` aparece duas vezes (a busca da lista de candidatos e a da fila de
+     * travas), e com repetição o teste passaria a quebrar a cada handler novo que REUSE um parâmetro
+     * legítimo. Quebrar por motivo errado é o caminho mais curto para alguém afrouxar a asserção de
+     * vez, e aí o canário some.
+     *
+     * A PROTEÇÃO NÃO MUDA: o `toEqual` sobre a lista fechada continua quebrando exatamente quando
+     * deve, ou seja quando aparece um parâmetro NOVO, e os dois `not.toContain` continuam valendo
+     * sobre o conjunto.
+     */
+    const parametros = [
+      ...new Set([...ARQUIVO_CONTROLLER.matchAll(/@Query\("([^"]+)"\)/g)].map((m) => m[1])),
+    ];
     // OS FILTROS RECORTAM, NENHUM DELES ESCOLHE UMA LINHA. Esta lista é fechada de propósito: o
     // dia em que `admissaoId` (ou `cpf`) entrar aqui, a tela de acompanhamento vira consulta
     // dirigida a qualquer admissão da base, que é a condição 1 da auditoria de mapa.
@@ -198,6 +243,15 @@ describe("CONDIÇÃO 3: o teto da página é do servidor", () => {
       "dataAdmissaoDe",
       "documentos",
       "estadosLink",
+      // OS DOIS NOMES NOVOS ENTRAM EM ORDEM ALFABÉTICA, e não no fim da lista, porque a comparação é
+      // com `parametros.sort()`. São da FILA DE TRAVAS (contrato v2, seção 6), e nenhum deles é id de
+      // admissão nem ESCOLHE uma linha: `motivos` é multiselect de catálogo fechado e `situacao` é o
+      // binário aberta/destravada.
+      "motivos",
+      // `nome` APARECE UMA VEZ SÓ AQUI e é usado por DOIS handlers (a lista de candidatos e a fila de
+      // travas). Ver o bloco da coleta acima: a asserção é sobre quais parâmetros existem, não sobre
+      // quantas vezes cada um é escrito. Nos dois casos é busca por PEDAÇO do nome; busca por CPF
+      // continua não existindo em lugar nenhum desta classe.
       "nome",
       // O CARD deixou de ser filtro de tela e virou parâmetro de SERVIDOR (`recorte`), e a origem
       // do envio nasceu com o filtro junto (§A.37). Nenhum dos dois ESCOLHE uma linha: os dois
@@ -205,13 +259,30 @@ describe("CONDIÇÃO 3: o teto da página é do servidor", () => {
       "origens",
       "pagina",
       "recorte",
+      "situacao",
       "situacoes",
       "tamanho",
       "ultimoAcessoAte",
       "ultimoAcessoDe",
     ]);
     expect(parametros).not.toContain("admissaoId");
-    expect(ARQUIVO_CONTROLLER).not.toMatch(/@Param\(/);
+    expect(parametros).not.toContain("cpf");
+    /**
+     * O `@Param` DEIXOU DE SER PROIBIDO E PASSOU A SER ENUMERADO, e isto é a MESMA trava, não uma
+     * mais frouxa: a proibição em bloco era o jeito de dizer "nenhuma rota aqui aponta para uma
+     * linha escolhida por quem chama", e o destrave, que é POST e age sobre UMA linha da fila,
+     * precisa apontar para ela. Enumerar é mais forte que proibir em bloco, porque continua
+     * quebrando no dia em que alguém acrescentar um segundo `@Param`, e ainda diz qual é o único
+     * aceito.
+     *
+     * O `id` É DA TRAVA (`portal_acesso_travas.id`), NUNCA DA ADMISSÃO nem do candidato, e ele passa
+     * por `ParseUUIDPipe`: texto qualquer é recusado na borda, antes de virar `where id = $1` sobre
+     * coluna `uuid` (o que derrubaria a consulta no cast do Postgres, não devolveria zero linhas).
+     */
+    const doCaminho = [...ARQUIVO_CONTROLLER.matchAll(/@Param\("([^"]+)"/g)].map((m) => m[1]);
+    expect(doCaminho.sort()).toEqual(["id"]);
+    expect(doCaminho).not.toContain("admissaoId");
+    expect(ARQUIVO_CONTROLLER).toMatch(/@Param\("id", ParseUUIDPipe\)/);
   });
 });
 

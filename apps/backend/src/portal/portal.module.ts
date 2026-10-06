@@ -1,5 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { PortalAcessoEmailController } from "./portal-acesso-email.controller";
+import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
 import { PortalController } from "./portal.controller";
 import { PortalCorreioService } from "./portal-correio.service";
@@ -101,6 +103,12 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
   // e também na allowlist da barreira (por CAMINHO). PII-free: grava só admissão + carimbo + jti.
   controllers: [
     PortalController,
+    // ONZE CONTROLLERS. `PortalAcessoEmailController` é a PORTA DE E-MAIL do candidato: `@Public()`,
+    // sob `portal/`, e SEM `PortalSessaoGuard`, porque ela é ANTERIOR a qualquer sessão (existe
+    // justamente para quem não consegue entrar). Ela NÃO entrega sessão e NÃO abre o prontuário: o
+    // desfecho de sucesso é um e-mail com o LINK, e o link ainda pede CPF e nascimento. Precisa
+    // entrar na allowlist da barreira por CAMINHO, nunca por prefixo. Ver o cabeçalho da classe.
+    PortalAcessoEmailController,
     PortalDocumentosController,
     PortalDadosGiController,
     PortalTermoController,
@@ -117,6 +125,12 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     PortalPendenciasController,
   ],
   providers: [
+    // A PORTA DE E-MAIL. Ela REUSA `PortalEnvioService` para emitir e entregar o link, e não abre um
+    // segundo caminho de escrita em `portal_links`: aquela tabela tem UM ponto de escrita
+    // (`PortalIdentidadeService`), e é essa enumeração que torna auditável a régua do que pode ser
+    // gravado sobre um link. Ela também é injetada no `PortalPainelController`, que hospeda a fila de
+    // travas e o destrave (contrato v2, seção 6).
+    PortalAcessoEmailService,
     PortalArmazenamentoService,
     // O CORREIO é o primeiro emissor de e-mail do EA, e ele NASCE INERTE: sem a conta de serviço,
     // a chave e a caixa remetente, `configurado()` diz não e o envio RECUSA sem emitir link. O

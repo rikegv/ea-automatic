@@ -339,3 +339,93 @@ export function corpoDoEmailDoLink(dados: DadosDoEmailDoLink): EmailDoLink {
 
   return { assunto, texto: linhas.join("\n"), html };
 }
+
+/**
+ * O E-MAIL DO CÓDIGO DA PORTA DE E-MAIL. Mesma forma do irmão de cima, conteúdo OPOSTO.
+ *
+ * ┌─ POR QUE ELE MORA NESTE ARQUIVO, e não num módulo novo ────────────────────────────────────┐
+ * │ Aqui já estão o escapador de HTML, o formatador de prazo em fuso de São Paulo e a régua      │
+ * │ provada do que um e-mail do Portal pode conter. Um segundo composto num arquivo próprio      │
+ * │ duplicaria os três, e a duplicata divergiria no primeiro ajuste: é assim que um dos dois     │
+ * │ e-mails perde o escapamento sem ninguém notar. O que se acrescenta aqui é SÓ ADIÇÃO: nenhuma │
+ * │ linha de `corpoDoEmailDoLink` foi tocada (§A.26).                                            │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface EmailDoCodigo {
+  assunto: string;
+  texto: string;
+  html: string;
+}
+
+/** Dez minutos, o TTL do código (`domain/portal-acesso-email.ts`). Vira o prazo escrito no corpo. */
+export interface DadosDoEmailDoCodigo {
+  codigo: string;
+  /** Instante de vencimento do código. Vira data e hora locais no corpo. */
+  expiraEm: Date;
+  /** Quantos minutos o código vale, para a frase não depender de uma conta feita na tela. */
+  minutosDeValidade: number;
+}
+
+/**
+ * ══ O E-MAIL DO CÓDIGO, E A LISTA DO QUE ELE NÃO PODE CONTER É MAIS LONGA QUE A DO QUE PODE ════
+ *
+ * PROIBIDO no assunto e no corpo: CPF, data de nascimento, **NOME, NEM O PRIMEIRO**, telefone,
+ * cliente, cargo, operação, matrícula, id de admissão, id de candidato, QUALQUER LINK e QUALQUER
+ * token (contrato v2, seção 8).
+ *
+ * ┌─ POR QUE NEM O PRIMEIRO NOME, se o e-mail do LINK leva ─────────────────────────────────────┐
+ * │ Os dois e-mails vão para caixas DIFERENTES em termos de confiança. O do link sai para o      │
+ * │ endereço do cadastro da ADMISSÃO, de alguém que o consultor já conferiu. Este sai para um     │
+ * │ endereço DIGITADO NA TELA por quem quer que esteja do outro lado, e é justamente isso que ele │
+ * │ existe para verificar: a posse da caixa ainda NÃO foi provada quando a mensagem é montada.    │
+ * │                                                                                             │
+ * │ Medido em produção: 6 endereços são compartilhados por 12 CPFs, e 5 deles carregam DOIS NOMES │
+ * │ DIFERENTES. Escrever "Olá, Fulano" confirmaria a quem digitou um endereço que não é dele qual │
+ * │ é o nome da pessoa daquele cadastro, ou seja, transformaria o e-mail de verificação num       │
+ * │ consultor de nomes por endereço. O saudar sem nome custa uma palavra e fecha isso.            │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NENHUM LINK, e a ausência também é regra: um botão aqui seria um caminho clicável a partir de uma
+ * caixa não verificada, e o código existe exatamente para que o acesso NÃO seja um clique.
+ *
+ * PERMITIDO: o código, o prazo, a frase "se não foi você, ignore" e o contato do RH. O assunto é
+ * FIXO e neutro (§A.24, é título, então Title Case).
+ *
+ * §A.11: sem travessão em nenhuma das duas formas.
+ */
+export function corpoDoEmailDoCodigo(dados: DadosDoEmailDoCodigo): EmailDoCodigo {
+  const prazo = prazoLegivel(dados.expiraEm);
+  // O CÓDIGO É ESCAPADO IGUAL, mesmo sendo seis dígitos sorteados aqui dentro: a régua é "nada entra
+  // em HTML sem passar pelo escapador", e abrir exceção para o valor que hoje é seguro é como a
+  // exceção sobrevive à mudança que o torna inseguro.
+  const codigo = escaparHtml(dados.codigo);
+
+  const assunto = "Seu Código De Acesso";
+
+  const linhas = [
+    "Olá!",
+    "",
+    "Use o código abaixo para continuar o seu acesso:",
+    "",
+    dados.codigo,
+    "",
+    `O código vale por ${dados.minutosDeValidade} minutos e expira em ${prazo}.`,
+    "",
+    "Não compartilhe este código com ninguém. Se não foi você que pediu, ignore esta mensagem e fale com o seu contato do RH.",
+    "",
+    "Equipe de Admissão, Grupo Soulan",
+  ];
+
+  const html = [
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2933">',
+    "<p>Olá!</p>",
+    "<p>Use o código abaixo para continuar o seu acesso:</p>",
+    `<p style="font-size:28px;letter-spacing:6px;font-weight:bold;color:#0f6f5c">${codigo}</p>`,
+    `<p>O código vale por ${dados.minutosDeValidade} minutos e expira em ${escaparHtml(prazo)}.</p>`,
+    "<p>Não compartilhe este código com ninguém. Se não foi você que pediu, ignore esta mensagem e fale com o seu contato do RH.</p>",
+    "<p>Equipe de Admissão, Grupo Soulan</p>",
+    "</div>",
+  ].join("");
+
+  return { assunto, texto: linhas.join("\n"), html };
+}
