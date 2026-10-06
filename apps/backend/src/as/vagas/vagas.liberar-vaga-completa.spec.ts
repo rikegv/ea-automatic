@@ -263,6 +263,26 @@ describe("o PATCH aceita a vaga em REVISAO para ESCREVER CAMPO, e nunca para mov
     ).toBeNull();
     expect(vaga.nomeDivulgacao).toBe("Só o nome, por enquanto");
   });
+
+  it("PRESERVA `id_vacancy_pandape` ao editar: o PATCH não zera o que a varredura escreve", async () => {
+    const { service, vaga, banco } = cenario("REVISAO", {
+      idVacancyPandape: "VAGA-PANDAPE-9001",
+      envioShortlist: "2026-08-10",
+    });
+    await service.atualizar("vaga-1", { ...FORMULARIO_COMPLETO } as never, USUARIO.id);
+
+    expect(vaga.codigo, "o campo do formulário é gravado").toBe("PS-2026-901");
+    expect(
+      vaga.idVacancyPandape,
+      "o PATCH em revisão zerou o id do Pandapé: a varredura perde a vaga e duplica",
+    ).toBe("VAGA-PANDAPE-9001");
+    expect(vaga.envioShortlist).toBe("2026-08-10");
+
+    const naVaga = escritasEm(banco, "vagas", "update");
+    expect(naVaga).toHaveLength(1);
+    expect("idVacancyPandape" in naVaga[0].valores).toBe(false);
+    expect("envioShortlist" in naVaga[0].valores).toBe(false);
+  });
 });
 
 // ── (b) LIBERAR SEM OS ONZE: RECUSA COM A LISTA INTEIRA, E SEM ESCREVER NADA ─────────────────
@@ -432,6 +452,49 @@ describe("a liberação completa grava o formulário E move a vaga, na mesma tra
       "a regra da trilha é `o corpo é completo`: aplicada a um corpo vazio, ela apagaria a vaga inteira na saída da fila",
     ).toBe("Operador de Loja");
     expect(vaga.cargoId).toBe(CARGO);
+  });
+
+  /**
+   * ─ A LIBERAÇÃO PRESERVA `id_vacancy_pandape`, E ESSA É A CAUSA DA DUPLICAÇÃO DE VAGAS ─────────
+   *
+   * ┌─ O DEFEITO, MEDIDO NA PRODUÇÃO ────────────────────────────────────────────────────────────┐
+   * │ A varredura do Pandapé reconhece a vaga existente pela coluna `id_vacancy_pandape`. A        │
+   * │ liberação espalhava `camposDaTrilha` direto no UPDATE, e como NENHUM formulário manda         │
+   * │ `idVacancyPandape` nem `envioShortlist` (os dois estão em `AS_VAGA_CAMPOS_NUNCA_EDITAVEIS`),  │
+   * │ o montador os emitia como null e o UPDATE ZERAVA a coluna. Sem o id, a varredura não achava a │
+   * │ vaga e criava uma DUPLICATA no ciclo seguinte (12 min depois).                                │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O FORMULÁRIO DE COMPLETUDE NÃO TRAZ ESSES DOIS CAMPOS (eles não existem na tela), então o teste
+   * é exatamente o caminho real: vaga com o id do Pandapé gravado, corpo completo SEM o id, e a
+   * coluna tem de sair INTOCADA. `codigo` e `status`, que também estão na lista, continuam sendo
+   * escritos de propósito (o código vem do corpo, o status vira o papel ABERTURA).
+   */
+  it("PRESERVA `id_vacancy_pandape` e `envio_shortlist`: a liberação não zera o que a varredura escreve", async () => {
+    const { service, vaga, banco, codigoAbertura } = cenario("REVISAO", {
+      idVacancyPandape: "VAGA-PANDAPE-9001",
+      envioShortlist: "2026-08-10",
+    });
+    await service.liberarPendenteRevisao("vaga-1", USUARIO, { ...FORMULARIO_COMPLETO } as never);
+
+    expect(vaga.status, "a liberação não moveu a vaga").toBe(codigoAbertura);
+    expect(vaga.codigo, "o código do formulário é escrito de propósito").toBe("PS-2026-901");
+    expect(
+      vaga.idVacancyPandape,
+      "o id do Pandapé foi ZERADO na liberação: a varredura não acha a vaga e cria uma DUPLICATA",
+    ).toBe("VAGA-PANDAPE-9001");
+    expect(
+      vaga.envioShortlist,
+      "o envio da shortlist foi ZERADO na liberação, um carimbo que nenhum formulário de vaga escreve",
+    ).toBe("2026-08-10");
+
+    const naVaga = escritasEm(banco, "vagas", "update");
+    expect(naVaga, "a liberação completa é uma escrita só").toHaveLength(1);
+    expect(
+      "idVacancyPandape" in naVaga[0].valores,
+      "a chave foi para o `.set()`: escrever a coluna, mesmo que com o valor atual, é confiar no corpo, e o corpo não tem o campo",
+    ).toBe(false);
+    expect("envioShortlist" in naVaga[0].valores).toBe(false);
   });
 });
 

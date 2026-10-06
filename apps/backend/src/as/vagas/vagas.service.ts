@@ -1179,7 +1179,11 @@ export class VagasService {
       await tx
         .update(vagas)
         .set({
-          ...campos,
+          // OS CARIMBOS DE INTEGRAÇÃO (`idVacancyPandape`, `envioShortlist`) NÃO ENTRAM: o formulário
+          // nunca os manda, então o `camposDaTrilha` os emitiria como null e o UPDATE zeraria a
+          // coluna. No ramo REVISAO isso apagava o `id_vacancy_pandape` e a varredura do Pandapé
+          // criava uma vaga DUPLICATA. No RASCUNHO é no-op (a coluna já é nula). Omitir preserva.
+          ...this.semCarimbosDeIntegracao(campos),
           consultorId: lados.consultorId,
           recruiterId: lados.recruiterId,
           atualizadoEm: new Date(),
@@ -1244,6 +1248,40 @@ export class VagasService {
     atual: { posicoesOficiais: number | null },
   ): number | null {
     return dto.posicoesOficiais ?? atual.posicoesOficiais ?? null;
+  }
+
+  /**
+   * ┌─ OS CARIMBOS DE INTEGRAÇÃO QUE A TRILHA NÃO ESCREVE, E QUE A LIBERAÇÃO NÃO PODE ZERAR ──────┐
+   * │ `idVacancyPandape` e `envioShortlist` NÃO são campos de formulário de vaga: NENHUMA tela os │
+   * │ manda na abertura. Quem grava o primeiro é só o INSERT da varredura do Pandapé (e o Digai); │
+   * │ quem grava o segundo é só o fluxo de shortlist. Os dois estão em                             │
+   * │ `AS_VAGA_CAMPOS_NUNCA_EDITAVEIS` por exatamente isso.                                        │
+   * │                                                                                             │
+   * │ O PROBLEMA: `camposDaTrilha` os EMITE a partir do corpo (`texto()`/`data()` de um campo     │
+   * │ ausente devolve `null`), então espalhar esse objeto num `.set()` de UPDATE ZERA as colunas. │
+   * │ Omitir a chave no `.set()` do Drizzle deixa a coluna INTOCADA, que é o mesmo que preservá-la.│
+   * │                                                                                             │
+   * │ A CAUSA DA DUPLICAÇÃO DE VAGAS É ESTA: sem `id_vacancy_pandape`, a varredura do Pandapé não │
+   * │ reconhece a vaga existente e cria uma DUPLICATA no ciclo seguinte.                           │
+   * │                                                                                             │
+   * │ `codigo` e `status` TAMBÉM estão naquela lista, mas são escritos DE PROPÓSITO na liberação  │
+   * │ (o código vem do formulário de completude, o status vira o papel ABERTURA), e `contraparteId`│
+   * │ nem é emitido por `camposDaTrilha`. Por isso só estes DOIS são removidos aqui.               │
+   * │                                                                                             │
+   * │ O CAMINHO SEGURO JÁ EXISTE: `VagasEdicaoService` mescla o valor atual da linha e guarda via │
+   * │ `nuncaEditaveisAlterados`. Esta função é a mesma garantia para as DUAS portas que espalham  │
+   * │ `camposDaTrilha` direto num UPDATE: `atualizar` (ramo REVISAO) e `liberarPendenteRevisao`.   │
+   * └──────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  private semCarimbosDeIntegracao<T extends Record<string, unknown>>(
+    campos: T | null,
+  ): Partial<T> {
+    if (!campos) return {};
+    const { idVacancyPandape: _idVacancyPandape, envioShortlist: _envioShortlist, ...resto } = campos;
+    // O `resto` é `Omit<T, ...>`, e o TS estrito do `nest build` (não o `tsc --noEmit`) não o aceita
+    // como `Partial<T>` para um T genérico: a remoção das duas chaves não prova a atribuição sozinha.
+    // O cast é seguro porque Omit de T sempre satisfaz Partial de T; só o compilador não deduz.
+    return resto as Partial<T>;
   }
 
   /**
@@ -3817,7 +3855,12 @@ export class VagasService {
           // O FORMULÁRIO INTEIRO E A SAÍDA DA FILA NA MESMA ESCRITA: ou a vaga sai COMPLETA, ou ela
           // não sai. Duas chamadas deixariam a vaga preenchida e ainda na fila quando a segunda
           // falhasse, com a retentativa tendo de adivinhar onde parou.
-          ...(campos ?? {}),
+          //
+          // OS CARIMBOS DE INTEGRAÇÃO (`idVacancyPandape`, `envioShortlist`) SÃO OMITIDOS: o
+          // formulário de completude não os traz, então o `camposDaTrilha` os emitiria como null e
+          // o UPDATE apagaria o `id_vacancy_pandape`. Sem ele, a varredura do Pandapé não reconhece
+          // a vaga e cria uma DUPLICATA no ciclo seguinte. Omitir a chave deixa a coluna intocada.
+          ...this.semCarimbosDeIntegracao(campos),
           status: codigoAbertura,
           /*
            * O CARIMBO MANUAL NASCE LIMPO AQUI (Frente B, ponto 2). A vaga espelhada nunca foi
