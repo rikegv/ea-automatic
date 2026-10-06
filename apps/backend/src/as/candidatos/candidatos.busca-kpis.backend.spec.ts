@@ -41,7 +41,13 @@ describe("os KPIs do `buscar` refletem a base filtrada, e nao a pagina", () => {
 
     // OS KPIS veem as 5, nao as 2 carregadas: a prova de que a agregacao nao leva o `limit`.
     expect(pagina.kpis).toBeDefined();
-    expect(pagina.kpis!.porEtapa).toEqual({ CAPTACAO: 3, TRIAGEM: 2 });
+    /*
+     * `porEtapa` CONTA SO QUEM ESTA EM SELECAO (06/10/2026): a quinta candidatura e TRIAGEM mas
+     * DESCARTADO, entao ela NAO entra no `porEtapa` (a situacao vence a etapa) e TRIAGEM e 1, nao 2.
+     * Ela aparece no `porSituacao` como DESCARTADO. Antes desta correcao o card de etapa somava o
+     * descartado e o clique no card vinha vazio.
+     */
+    expect(pagina.kpis!.porEtapa).toEqual({ CAPTACAO: 3, TRIAGEM: 1 });
     expect(pagina.kpis!.porSituacao).toEqual({ ATIVO: 4, DESCARTADO: 1 });
   });
 

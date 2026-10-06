@@ -64,6 +64,19 @@ export interface BuscaCandidatos {
   limite?: number;
   /** De qual linha a página começa, para o "carregar mais". */
   offset?: number;
+  /**
+   * ─ O FILTRO DO CARD, PARA O CLIQUE TRAZER DA BASE INTEIRA O QUE O CARD CONTOU ─────────────────
+   *
+   * O número do card vem do servidor (a base filtrada INTEIRA); o clique tem de trazer EXATAMENTE
+   * essas pessoas, e não só as linhas já carregadas, senão quem o card contou e não estava na página
+   * some. O backend restringe as PESSOAS por estes dois filtros, pela régua do `cardDaCandidatura`:
+   *   - `filtroCardEtapa`:    só quem tem candidatura ATIVO naquela etapa (card de ETAPA);
+   *   - `filtroCardSituacao`: só quem tem candidatura naquela situação (card de DESFECHO).
+   * O KPI dos cards NÃO leva este filtro (o backend o conta sobre a base SEM card), então clicar num
+   * card não zera os outros. §A.6: viajam no CORPO do POST, como todo o resto; nunca em URL.
+   */
+  filtroCardEtapa?: string;
+  filtroCardSituacao?: string;
 }
 
 /**
@@ -94,6 +107,8 @@ export function buscarCandidatos(
   if (filtros.semCandidatura) body.semCandidatura = true;
   if (filtros.limite) body.limite = filtros.limite;
   if (filtros.offset) body.offset = filtros.offset;
+  if (filtros.filtroCardEtapa) body.filtroCardEtapa = filtros.filtroCardEtapa;
+  if (filtros.filtroCardSituacao) body.filtroCardSituacao = filtros.filtroCardSituacao;
   return apiFetch<AsCandidatosPagina>("/as/candidatos/buscar", {
     method: "POST",
     token,
@@ -114,6 +129,25 @@ export function avisoDeCorte(pagina: {
 }): string | null {
   if (!pagina.truncado) return null;
   return `Mostrando ${pagina.itens.length} de ${pagina.total} candidatos. Use a busca para encontrar quem não está na lista.`;
+}
+
+/**
+ * ─ A FRASE DO PROGRESSO DA CARGA INCREMENTAL (item 4), em um lugar só e com teste ──────────────
+ *
+ * A tela carrega a página 1 na abertura (200) e, logo depois, pré-busca as páginas seguintes EM
+ * SEGUNDO PLANO, anexando a um cache em memória, até cobrir `total`. Esta função é só o texto do
+ * indicador: ela diz quantos já entraram no cache e quantos a base tem, nunca QUEM.
+ *
+ * §A.6: o indicador é CONTAGEM pura, sem nome e sem CPF. §A.11: sem travessão. §A.24: isto é frase
+ * de apoio, não título, então só a primeira letra é maiúscula.
+ */
+export function fraseDeProgressoDeCarga(carregados: number, total: number): string {
+  if (total <= 0) return "";
+  // SEPARADOR DE MILHAR pt-BR (item 3 do diretor): "82068" lê mal, "82.068" lê de longe. O ponto é
+  // o agrupador do pt-BR, e `Intl.NumberFormat` resolve isso sem a tela montar a máscara à mão.
+  const fmt = new Intl.NumberFormat("pt-BR");
+  if (carregados >= total) return `Todos os ${fmt.format(total)} candidatos foram carregados.`;
+  return `Carregados ${fmt.format(carregados)} de ${fmt.format(total)} candidatos.`;
 }
 
 /**
@@ -514,6 +548,29 @@ export function cardDaCandidatura(
  */
 export const CARD_TOTAL = "total";
 export const CARD_SEM_VAGA = "semVaga";
+
+/**
+ * ─ O CARD ATIVO TRADUZIDO NO FILTRO QUE O SERVIDOR ENTENDE ─────────────────────────────────────
+ *
+ * É a ponte entre o card clicado e os dois filtros que o backend passou a aceitar. A régua é a do
+ * `cardDaCandidatura` (ATIVO conta pela ETAPA, o resto pela SITUAÇÃO): card de ETAPA manda
+ * `filtroCardEtapa`, card de DESFECHO manda `filtroCardSituacao`, e os dois reservados (o Total e o
+ * "Sem Vaga") não mandam nenhum, porque o Total é a base inteira e o "Sem Vaga" é a AUSÊNCIA de
+ * candidatura, resolvida no cliente (o servidor não a filtra sem passar pelo CPF).
+ *
+ * QUEM É CARD DE ETAPA se decide pelo CATÁLOGO (os códigos de etapa ativos e inativos), nunca por
+ * uma lista à mão: etapa nova do diretor entra como filtro de etapa sem ninguém tocar aqui. Um
+ * código que não é de etapa é, por eliminação, de situação, que é a outra metade da régua do card.
+ */
+export function filtroDeCard(
+  cardAtivo: string,
+  codigosDeEtapa: readonly string[],
+): Pick<BuscaCandidatos, "filtroCardEtapa" | "filtroCardSituacao"> {
+  if (cardAtivo === CARD_TOTAL || cardAtivo === CARD_SEM_VAGA) return {};
+  return codigosDeEtapa.includes(cardAtivo)
+    ? { filtroCardEtapa: cardAtivo }
+    : { filtroCardSituacao: cardAtivo };
+}
 
 /**
  * A FRASE DA VAGA CHEIA É DO BACKEND, MAS NÃO SERVE EM TODO CONTEXTO.

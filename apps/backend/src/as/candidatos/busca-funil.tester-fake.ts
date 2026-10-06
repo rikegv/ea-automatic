@@ -211,8 +211,19 @@ export function bancoDaBuscaComFunil(cenario: {
        */
       if (q.grupo.length > 0) {
         const porEtapa = q.grupo.join(" ").includes("etapa");
+        /*
+         * `porEtapa` CONTA SÓ CANDIDATURA ATIVO (em seleção): a situação vence a etapa, igual ao
+         * `kpisDoFunil`. O recorte chega na CLÁUSULA (`situacao = 'ATIVO'`), e o fingido a HONRA em
+         * vez de ignorá-la, senão ele mentiria: diria que APROVACAO tem 393 quando o banco real
+         * devolve 0, e o teste da regra passaria sobre uma contagem que a produção não produz.
+         * `porSituacao` não traz esse recorte na cláusula e por isso conta todas.
+         */
+        const soAtivo = porEtapa && q.where.includes("ATIVO");
+        const fonte = soAtivo
+          ? candidaturas.filter((c) => (c.situacao ?? "ATIVO") === "ATIVO")
+          : candidaturas;
         const mapa = new Map<string, number>();
-        for (const c of candidaturas) {
+        for (const c of fonte) {
           const chave = porEtapa ? (c.etapa ?? "CAPTACAO") : (c.situacao ?? "ATIVO");
           mapa.set(chave, (mapa.get(chave) ?? 0) + 1);
         }

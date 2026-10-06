@@ -46,7 +46,7 @@
  * estado, KPI clicável como filtro), §A.11 (sem travessão), §A.24 (title case em título e tag).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CANDIDATO_ORIGEM_LABEL,
@@ -62,7 +62,7 @@ import {
   type VagaListItem,
 } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
 import { ehDoPapelDaVaga, useStatusVaga } from "@/lib/as-status-vaga";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -81,6 +81,8 @@ import {
   CARD_SEM_VAGA,
   CARD_TOTAL,
   dataHoraBr,
+  filtroDeCard,
+  fraseDeProgressoDeCarga,
   funilNaoVeio,
   mensagemDoErro,
   opcoesDeCandidatos,
@@ -96,6 +98,23 @@ import { FichaCandidatoModal } from "@/components/as/candidatos/FichaCandidatoMo
 import { TrocarVagaModal } from "@/components/as/candidatos/TrocarVagaModal";
 import { MoverCandidaturaModal } from "@/components/as/candidatos/MoverCandidaturaModal";
 import { RegistrarContatoModal } from "@/components/as/candidatos/RegistrarContatoModal";
+
+/**
+ * ─ O FREIO DA CARGA INCREMENTAL (item 4 da Central de Candidatos) ────────────────────────────────
+ *
+ * A base tem dezenas de milhares de candidatos. A página 1 (200) continua abrindo a tela na hora
+ * (item 1); as páginas SEGUINTES são pré-buscadas em SEGUNDO PLANO, uma a cada 1,5s, bem abaixo do
+ * teto GLOBAL de 120 req/min que a VM compartilha (Pandapé, Digai, GI, Central de Vagas). O ritmo é
+ * uma CADEIA DE setTimeout (nunca setInterval), que pausa quando a aba perde foco e retoma quando
+ * volta, para de vez ao cobrir o `total`, e em 429 faz backoff em vez de martelar.
+ */
+const CARGA_INTERVALO_MS = 1500;
+/** Página de fundo maior que a inicial: menos requisições para cobrir a base inteira (o backend
+ *  aceita até 500). A página 1 segue em 200 e não muda. */
+const CARGA_PAGINA_FUNDO = 500;
+/** 429: espera e repete o MESMO offset, dobrando a espera até um teto. Nunca martela. */
+const CARGA_BACKOFF_INICIAL_MS = 4000;
+const CARGA_BACKOFF_MAX_MS = 60000;
 
 /**
  * Uma linha da tabela: a pessoa mais, quando existe, a candidatura dela e a vaga correspondente.
@@ -147,6 +166,52 @@ export default function CentralDeCandidatosPage() {
   /** AS OPÇÕES DOS FILTROS, da base de candidatos (§A.37), não de `/as/vagas`. */
   const [opcoes, setOpcoes] = useState<AsCandidatosOpcoes | null>(null);
 
+  /**
+   * ─ O CACHE DA CARGA INCREMENTAL VIVE SÓ AQUI, NA MEMÓRIA DO COMPONENTE (R1/R2) ────────────────
+   *
+   * O acumulado exibido é o próprio estado `pessoas`: a carga de fundo ANEXA a ele. `vistosRef` é o
+   * conjunto de ids de candidato já anexados, para não duplicar linha ao emendar páginas. `cargaTimer`
+   * guarda o setTimeout pendente da cadeia, para poder cancelá-lo.
+   *
+   * NADA DISTO ENCOSTA EM localStorage, sessionStorage, IndexedDB, Cache API NEM cookie: é estado e
+   * ref de React, descartados quando a tela sai. O efeito de desmontagem logo abaixo ainda zera o
+   * `vistosRef` e mata o timer de propósito, para a sessão não deixar rastro em memória (R2).
+   */
+  const vistosRef = useRef<Set<string>>(new Set());
+  const cargaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * O GATILHO DA CARGA DE FUNDO, escrito SÓ quando a página 1 termina (ver `carregar`). Ele carrega
+   * os filtros que produziram a página 1 e o `total` dela, e nunca os filtros VIVOS: estes mudam
+   * 300ms antes de `carregar` rodar (a busca é adiada), e iniciar a carga de fundo a partir deles
+   * emendaria páginas de um filtro novo sobre a lista do filtro antigo. `buscandoTexto` desliga a
+   * carga de fundo: com busca por nome ou CPF ativa, a tela mantém o comportamento de hoje (item 4).
+   */
+  const [baseCarga, setBaseCarga] = useState<{
+    origem?: AsCandidatoOrigem;
+    vagaId?: string;
+    /**
+     * O FILTRO DO CARD VIAJA JUNTO, para a carga de fundo varrer o MESMO subconjunto que a página 1
+     * trouxe. Sem ele aqui, o fundo emendaria a base inteira sobre uma lista que o card restringiu.
+     */
+    filtroCardEtapa?: string;
+    filtroCardSituacao?: string;
+    total: number;
+    offsetInicial: number;
+    buscandoTexto: boolean;
+  } | null>(null);
+  /**
+   * ─ O TOTAL E O "SEM VAGA" DA BASE INTEIRA, QUE NÃO PODEM MUDAR AO CLICAR NUM CARD (§A.12) ─────
+   *
+   * Os cards de etapa e de desfecho vêm de `kpisBase`, que o backend conta SEM o filtro de card, e
+   * por isso não zeram quando um card fica ativo. O Total e o "Sem Vaga" NÃO vêm do KPI: o Total era
+   * o `total` da resposta e o "Sem Vaga" é contado nas linhas carregadas. Com o filtro de card, a
+   * resposta passa a trazer só o subconjunto, então os dois encolheriam ao clicar em OUTRO card, que
+   * é exatamente o que a §A.12 proíbe. Estes dois guardam o valor da BASE INTEIRA, capturado só
+   * quando nenhum card de etapa/situação filtra o servidor (ver o efeito de captura logo abaixo).
+   */
+  const [totalSemCard, setTotalSemCard] = useState(0);
+  const [semVagaSemCard, setSemVagaSemCard] = useState(0);
+
   // ── FILTROS. `nome`, `cpf` e `origem` vão para o backend (no CORPO do POST); `cliente` e `etapa`
   // são resolvidos aqui, porque a busca do backend não tem esses eixos e o volume da tela é pequeno.
   const [busca, setBusca] = useState("");
@@ -170,6 +235,9 @@ export default function CentralDeCandidatosPage() {
    * inclusive numa etapa inativada depois.
    */
   const { etapas: catalogoEtapas, ativas: etapasAtivas } = useEtapas();
+  // SÓ OS CÓDIGOS, memoizados, para `filtroDeCard` saber quando um card é de ETAPA (os demais são de
+  // situação). Memoizado para não recriar `carregar` a cada render só por o catálogo mudar de forma.
+  const codigosDeEtapa = useMemo(() => catalogoEtapas.map((e) => e.codigo), [catalogoEtapas]);
   const [fCandidatos, setFCandidatos] = useState<string[]>([]);
   const [cpfBusca, setCpfBusca] = useState("");
   const [fVaga, setFVaga] = useState("");
@@ -222,6 +290,10 @@ export default function CentralDeCandidatosPage() {
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro(null);
+    // O CARD ATIVO VIRA FILTRO DO SERVIDOR (bug do clique): o número do card vem da base inteira, e
+    // o clique precisa trazer essas pessoas da base inteira, não só as linhas já carregadas. Total e
+    // "Sem Vaga" não mandam filtro (ver `filtroDeCard`), então a busca deles segue a base completa.
+    const cardFiltro = filtroDeCard(cardAtivo, codigosDeEtapa);
     try {
       const [listaVagas, listaPessoas] = await Promise.all([
         apiFetch<VagaListItem[]>("/as/vagas", { token }),
@@ -231,6 +303,7 @@ export default function CentralDeCandidatosPage() {
             cpf: cpfBusca.replace(/\D/g, ""),
             origem: fOrigem || undefined,
             vagaId: fVaga || undefined,
+            ...cardFiltro,
           },
           token,
         ),
@@ -245,12 +318,29 @@ export default function CentralDeCandidatosPage() {
       // enviar): ausente, o funil cai no fallback de contar as linhas carregadas, logo abaixo.
       setTotalBase(listaPessoas.total);
       setKpisBase(listaPessoas.kpis ?? null);
+      // R1/R2: o acumulador de dedup é REDEFINIDO para os ids da página 1. É memória de componente,
+      // nunca storage, e nasce de novo a cada carga para não arrastar ids de um filtro anterior.
+      vistosRef.current = new Set(listaPessoas.itens.map((p) => p.id));
+      // O GATILHO DA CARGA DE FUNDO só é escrito aqui, no fim da página 1, com os filtros que a
+      // produziram. Isso evita a corrida de iniciar a carga com filtro novo sobre a lista antiga.
+      setBaseCarga({
+        origem: fOrigem || undefined,
+        vagaId: fVaga || undefined,
+        filtroCardEtapa: cardFiltro.filtroCardEtapa,
+        filtroCardSituacao: cardFiltro.filtroCardSituacao,
+        total: listaPessoas.total,
+        offsetInicial: listaPessoas.itens.length,
+        buscandoTexto: busca.trim() !== "" || cpfBusca.replace(/\D/g, "") !== "",
+      });
     } catch (err) {
       setErro(mensagemDoErro(err, "Falha ao carregar a Central de Candidatos."));
     } finally {
       setCarregando(false);
     }
-  }, [token, busca, cpfBusca, fOrigem, fVaga]);
+    // `cardAtivo` ENTRA NAS DEPENDÊNCIAS para a busca ser REFEITA ao clicar num card: antes o card só
+    // filtrava no cliente, e quem não estava na página não aparecia. `codigosDeEtapa` entra porque
+    // `filtroDeCard` precisa dele para saber se o card é de etapa ou de situação.
+  }, [token, busca, cpfBusca, fOrigem, fVaga, cardAtivo, codigosDeEtapa]);
 
   /**
    * ─ OS MODAIS DE AÇÃO PEDEM A CANDIDATURA INTEIRA, E A LISTA NÃO A TEM MAIS ───────────────────
@@ -332,6 +422,150 @@ export default function CentralDeCandidatosPage() {
       vivo = false;
     };
   }, [token]);
+
+  /**
+   * ─ A CARGA INCREMENTAL COM FREIO (item 4), E AS TRAVAS DE SEGURANÇA QUE ELA CARREGA ───────────
+   *
+   * Depois da página 1, esta cadeia pré-busca as páginas seguintes em segundo plano, EMENDANDO ao
+   * cache em memória (`pessoas`), até cobrir o `total`. O efeito só começa quando `baseCarga` é
+   * escrito (fim da página 1), então ele nunca corre contra o filtro vivo.
+   *
+   *   - FONTE ÚNICA (R3): só `POST /as/candidatos/buscar`, com offset/limite no CORPO (R4). A ficha
+   *     e o painel da vaga NUNCA entram aqui, para a carga em massa não trazer CPF nenhum.
+   *   - RITMO (R7): uma página a cada 1,5s por CADEIA de setTimeout, nunca setInterval.
+   *   - PAUSA POR FOCO (R7): aba oculta (`visibilitychange`) ou janela desfocada (`blur`) param de
+   *     agendar a próxima; `visibilitychange` visível e `focus` retomam. Um ciclo em voo quando o
+   *     foco se perde confere `pausado()` antes de agendar o seguinte, então ele para sozinho.
+   *   - 429 (R7): espera e repete o MESMO offset, dobrando o atraso até o teto. Não martela.
+   *   - SILÊNCIO SEGURO (R5): nenhum nome, linha ou array vai para o log. O 429 loga só status e
+   *     offset (números). Outro erro de fundo para a cadeia sem derrubar a tela (a página 1 fica).
+   */
+  useEffect(() => {
+    if (!baseCarga || baseCarga.buscandoTexto) return;
+    if (baseCarga.total <= baseCarga.offsetInicial) return;
+
+    const { origem, vagaId, filtroCardEtapa, filtroCardSituacao } = baseCarga;
+    let cancelado = false;
+    let desfocado = false;
+    let esperandoFoco = false;
+    let proximoOffset = baseCarga.offsetInicial;
+    let atrasoBackoff = CARGA_BACKOFF_INICIAL_MS;
+
+    const pausado = () =>
+      desfocado ||
+      (typeof document !== "undefined" && document.visibilityState === "hidden");
+
+    const agendar = (atraso: number) => {
+      if (cancelado) return;
+      if (pausado()) {
+        esperandoFoco = true;
+        return;
+      }
+      cargaTimer.current = setTimeout(() => void rodar(), atraso);
+    };
+
+    const rodar = async () => {
+      if (cancelado) return;
+      if (pausado()) {
+        esperandoFoco = true;
+        return;
+      }
+      try {
+        const pagina = await buscarCandidatos(
+          {
+            origem,
+            vagaId,
+            filtroCardEtapa,
+            filtroCardSituacao,
+            offset: proximoOffset,
+            limite: CARGA_PAGINA_FUNDO,
+          },
+          token,
+        );
+        if (cancelado) return;
+        atrasoBackoff = CARGA_BACKOFF_INICIAL_MS;
+        // DEDUP POR ID ao emendar: ordenação estável não deve sobrepor, mas a base é viva.
+        setPessoas((atual) => {
+          const resultado = atual.slice();
+          for (const p of pagina.itens) {
+            if (!vistosRef.current.has(p.id)) {
+              vistosRef.current.add(p.id);
+              resultado.push(p);
+            }
+          }
+          return resultado;
+        });
+        proximoOffset += pagina.itens.length;
+        // PARA de vez ao cobrir o total, ou quando a página vem incompleta (fim real da base).
+        if (proximoOffset >= pagina.total || pagina.itens.length < CARGA_PAGINA_FUNDO) return;
+        agendar(CARGA_INTERVALO_MS);
+      } catch (err) {
+        if (cancelado) return;
+        const status = err instanceof ApiError ? err.status : 0;
+        if (status !== 429) return; // outro erro de fundo: para em silêncio, a tela não cai.
+        // R5: só status e offset (números) no log, nunca nome, linha nem o array carregado.
+        console.warn(
+          `[central-candidatos] carga incremental: 429 no offset ${proximoOffset}, aguardando ${atrasoBackoff}ms`,
+        );
+        const espera = atrasoBackoff;
+        atrasoBackoff = Math.min(atrasoBackoff * 2, CARGA_BACKOFF_MAX_MS);
+        agendar(espera);
+      }
+    };
+
+    const retomar = () => {
+      if (cancelado || !esperandoFoco || pausado()) return;
+      esperandoFoco = false;
+      agendar(CARGA_INTERVALO_MS);
+    };
+    const aoDesfocar = () => {
+      desfocado = true;
+      esperandoFoco = true;
+      if (cargaTimer.current) {
+        clearTimeout(cargaTimer.current);
+        cargaTimer.current = null;
+      }
+    };
+    const aoFocar = () => {
+      desfocado = false;
+      retomar();
+    };
+    const aoMudarVisibilidade = () => {
+      if (pausado()) aoDesfocar();
+      else retomar();
+    };
+
+    agendar(CARGA_INTERVALO_MS);
+    document.addEventListener("visibilitychange", aoMudarVisibilidade);
+    window.addEventListener("focus", aoFocar);
+    window.addEventListener("blur", aoDesfocar);
+
+    return () => {
+      cancelado = true;
+      if (cargaTimer.current) {
+        clearTimeout(cargaTimer.current);
+        cargaTimer.current = null;
+      }
+      document.removeEventListener("visibilitychange", aoMudarVisibilidade);
+      window.removeEventListener("focus", aoFocar);
+      window.removeEventListener("blur", aoDesfocar);
+    };
+  }, [baseCarga, token]);
+
+  /**
+   * R2: NO FIM DA SESSÃO/TELA, O CACHE É DESCARTADO DE PROPÓSITO. O estado `pessoas` some com o
+   * componente, mas o acumulador de dedup e o timer de fundo são zerados aqui explicitamente, para
+   * nenhuma linha carregada sobreviver à desmontagem em memória.
+   */
+  useEffect(() => {
+    return () => {
+      vistosRef.current = new Set();
+      if (cargaTimer.current) {
+        clearTimeout(cargaTimer.current);
+        cargaTimer.current = null;
+      }
+    };
+  }, []);
 
   const vagaPorId = useMemo(() => new Map(vagas.map((v) => [v.id, v])), [vagas]);
 
@@ -461,14 +695,44 @@ export default function CentralDeCandidatosPage() {
    * O QUE NÃO VEM DO CATÁLOGO SÃO OS DOIS CARDS QUE NÃO SAEM DE UMA CANDIDATURA: o `total` e o
    * "Sem Vaga", que é a pessoa na base ainda não alocada, ou seja, a AUSÊNCIA de candidatura.
    */
+  /**
+   * O "SEM VAGA" DAS LINHAS CARREGADAS: a pessoa na base que não está em vaga nenhuma (ausência de
+   * candidatura), fora a linha cujo funil não veio (que não se sabe classificar). É a contagem LOCAL,
+   * que o snapshot abaixo congela como número da base inteira quando nenhum card filtra o servidor.
+   */
+  const semVagaLocal = useMemo(
+    () => linhasSemCard.filter((l) => !l.candidatura && !l.funilIndisponivel).length,
+    [linhasSemCard],
+  );
+
+  /**
+   * ─ O SNAPSHOT DA BASE INTEIRA PARA O TOTAL E O "SEM VAGA" (§A.12: card não muda ao clicar) ─────
+   *
+   * Sem card de etapa/situação ativo (Total ou "Sem Vaga"), a busca devolve a base inteira, então
+   * `totalBase` e `semVagaLocal` são os números reais da base. Com um card ativo, a busca devolve só
+   * o subconjunto, e recontá-los dali faria os dois encolherem ao clicar em OUTRO card. Capturados
+   * aqui só quando o servidor NÃO está restringido por card, eles continuam mostrando a base inteira.
+   */
+  const semFiltroDeCardAtivo = cardAtivo === CARD_TOTAL || cardAtivo === CARD_SEM_VAGA;
+  useEffect(() => {
+    if (carregando || !semFiltroDeCardAtivo) return;
+    setTotalSemCard(totalBase);
+    setSemVagaSemCard(semVagaLocal);
+  }, [carregando, semFiltroDeCardAtivo, totalBase, semVagaLocal]);
+
+  // O NÚMERO EXIBIDO: vivo enquanto nenhum card de etapa/situação filtra o servidor; o snapshot da
+  // base inteira quando um filtra. Assim clicar num card NÃO mexe no Total nem no "Sem Vaga".
+  const totalExibido = semFiltroDeCardAtivo ? totalBase : totalSemCard;
+  const semVagaExibido = semFiltroDeCardAtivo ? semVagaLocal : semVagaSemCard;
+
   const funil = useMemo(() => {
     /*
      * ─ OS NÚMEROS DOS CARDS SÃO OS REAIS DA BASE, E NÃO A CONTAGEM DAS LINHAS CARREGADAS (item 3) ─
      *
      * A tela carrega só a página (200), então contar as linhas faria o KPI dizer que existem 200
      * candidatos quando há dezenas de milhares. `kpisBase` (`porEtapa`/`porSituacao`) é a contagem
-     * agregada do servidor sobre o conjunto FILTRADO inteiro, antes do corte de página. O clique no
-     * card continua filtrando as linhas já carregadas; o que muda é só o NÚMERO exibido.
+     * agregada do servidor sobre o conjunto FILTRADO inteiro, antes do corte de página, e o backend
+     * NÃO aplica o filtro de card a ele: por isso clicar num card não zera as etapas nem os desfechos.
      *
      * A CONTAGEM LOCAL FICA DE FALLBACK: `kpis` é campo OPCIONAL no contrato (o backend desta frente
      * sobe em paralelo). Enquanto ele não vier, a fileira conta as linhas carregadas, como antes, em
@@ -476,14 +740,8 @@ export default function CentralDeCandidatosPage() {
      */
     const porEtapaLocal: Record<string, number> = {};
     const porDesfechoLocal: Record<string, number> = {};
-    let semVaga = 0;
     for (const l of linhasSemCard) {
-      if (!l.candidatura) {
-        // A LINHA SEM FUNIL NÃO CONTA COMO "SEM VAGA": não se sabe se ela tem vaga, e um card que
-        // soma o desconhecido ao vazio é a mesma mentira da coluna, só em número.
-        if (!l.funilIndisponivel) semVaga += 1;
-        continue;
-      }
+      if (!l.candidatura) continue;
       const chave = cardDaCandidatura(l.candidatura.etapa, l.candidatura.situacao);
       // A SITUAÇÃO VENCE A ETAPA: quem já recebeu decisão sai da contagem de etapa e entra na de
       // desfecho, mesmo tendo uma etapa gravada na linha. É a régua do contrato do backend.
@@ -493,17 +751,14 @@ export default function CentralDeCandidatosPage() {
     const porEtapa = kpisBase?.porEtapa ?? porEtapaLocal;
     const porDesfecho = kpisBase?.porSituacao ?? porDesfechoLocal;
     return {
-      // TOTAL É SEMPRE O NÚMERO REAL DA BASE FILTRADA (`total` é campo obrigatório da resposta), e
-      // não a contagem das linhas carregadas.
-      total: totalBase,
-      // "SEM VAGA" SEGUE DA CONTAGEM LOCAL: o servidor não envia esse número, e ele é a ausência de
-      // candidatura (quem está na base e não foi alocado). Com o teto de 200 ele pode subcontar, que
-      // é a mesma limitação do corte de página que o aviso logo acima declara.
-      semVaga,
+      // TOTAL E "SEM VAGA" VÊM DO SNAPSHOT DA BASE INTEIRA (ver acima), nunca do subconjunto que o
+      // filtro de card devolve: um filtro que muda o próprio número que mostra não serve de nada.
+      total: totalExibido,
+      semVaga: semVagaExibido,
       etapas: cardsDeEtapa(catalogoEtapas, porEtapa),
       desfechos: cardsDeDesfecho(porDesfecho),
     };
-  }, [linhasSemCard, catalogoEtapas, kpisBase, totalBase]);
+  }, [linhasSemCard, catalogoEtapas, kpisBase, totalExibido, semVagaExibido]);
 
   const linhas = useMemo(() => {
     if (cardAtivo === CARD_TOTAL) return linhasSemCard;
@@ -670,6 +925,17 @@ export default function CentralDeCandidatosPage() {
     setFOrigem("");
   }
 
+  /**
+   * ─ O ESTADO DA CARGA, PARA O INDICADOR E PARA O AVISO DE CORTE (item 4) ──────────────────────
+   *
+   * Com busca por nome ou CPF ativa, a tela mantém o comportamento de hoje: a página do servidor,
+   * com o aviso de corte quando sobra gente. SEM busca de texto, a carga de fundo acumula a base
+   * inteira, então o indicador de progresso toma o lugar do aviso de corte, que diria "use a busca"
+   * justamente quando a carga de fundo torna isso desnecessário.
+   */
+  const buscandoTexto = busca.trim() !== "" || cpfBusca.replace(/\D/g, "") !== "";
+  const carregadosNaBase = Math.min(pessoas.length, totalBase);
+
   return (
     <>
       <PageHead
@@ -803,10 +1069,25 @@ export default function CentralDeCandidatosPage() {
       )}
 
       {/* O CORTE DA BUSCA (Frente D, ponto 15). A lista sempre teve teto; o que não podia continuar
-          é ele ser invisível, porque a tela passava a apresentar uma janela como se fosse a base. */}
-      {avisoCorte && (
+          é ele ser invisível, porque a tela passava a apresentar uma janela como se fosse a base.
+          SÓ APARECE NA BUSCA POR TEXTO: sem ela, a carga de fundo acumula a base inteira e o
+          indicador de progresso logo abaixo substitui este aviso (item 4). */}
+      {buscandoTexto && avisoCorte && (
         <p className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-dim">
           {avisoCorte}
+        </p>
+      )}
+
+      {/* O INDICADOR DE PROGRESSO DA CARGA INCREMENTAL (item 4). Mostra só a CONTAGEM (§A.6: nunca
+          nome nem CPF): "Carregados X de N candidatos" enquanto a carga de fundo roda, e "Todos os N
+          candidatos foram carregados" ao cobrir a base. §A.11 sem travessão, §A.24 frase de apoio. */}
+      {!carregando && !buscandoTexto && totalBase > 0 && (
+        <p
+          className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-dim"
+          role="status"
+          aria-live="polite"
+        >
+          {fraseDeProgressoDeCarga(carregadosNaBase, totalBase)}
         </p>
       )}
 

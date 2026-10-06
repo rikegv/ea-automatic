@@ -281,6 +281,42 @@ export class BuscarCandidatosDto {
   @IsInt()
   @Min(0)
   offset?: number;
+
+  /**
+   * ─ O CLIQUE NO CARD FILTRA A BASE INTEIRA, E NÃO SÓ A PÁGINA (06/10/2026) ──────────────────────
+   *
+   * ┌─ O DEFEITO QUE OS DOIS CAMPOS CONSERTAM ───────────────────────────────────────────────────┐
+   * │ O NÚMERO do card vem de `kpisDaBusca` (servidor, base inteira), mas o FILTRO ao clicar era   │
+   * │ só no navegador, sobre as linhas carregadas: quem não estava na página sumia. O card dizia   │
+   * │ 393 e a lista filtrada vinha vazia. Estes campos empurram o filtro do card para o SERVIDOR,  │
+   * │ sobre a base inteira, pela MESMA régua do `cardDaCandidatura`.                               │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A RÉGUA É "A SITUAÇÃO VENCE A ETAPA", a mesma de `kpisDoFunil`/`cardDaCandidatura`:
+   *   - `filtroCardEtapa`   → só quem tem candidatura `etapa = <valor>` E `situacao = 'ATIVO'`
+   *     (candidatura não-ATIVO conta no card de desfecho, nunca no card da etapa);
+   *   - `filtroCardSituacao`→ só quem tem candidatura `situacao = <valor>`, em qualquer etapa.
+   * O front manda UM ou OUTRO, conforme o card clicado.
+   *
+   * SEM `@IsIn`, pela mesma razão do `MoverEtapaDto`: a lista de etapas é DADO do diretor
+   * (`as_etapas_funil`) e um `@IsIn` congelado recusaria a etapa nova e aceitaria a inativada. A
+   * situação é vocabulário fechado, mas quem casa é a cláusula `exists` no banco, não um decorator:
+   * valor desconhecido simplesmente não encontra candidatura e a lista vem vazia, sem derrubar a
+   * chamada. O DTO defende só a FORMA (string, dentro do tamanho da coluna de etapa).
+   *
+   * §A.6: são códigos de catálogo (etapa/situação), nenhum dado pessoal.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(40)
+  filtroCardEtapa?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(40)
+  filtroCardSituacao?: string;
 }
 
 /** Alocar a pessoa numa vaga: nasce em CAPTACAO e ATIVO, e ATIVO não consome posição. */

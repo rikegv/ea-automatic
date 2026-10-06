@@ -36,7 +36,7 @@ function somaDosValores(r: Record<string, number> | undefined): number {
 }
 
 describe("KPI da Central de Candidatos conta o conjunto FILTRADO, nao a pagina", () => {
-  it("com 500 candidaturas e pagina de 200, os KPIs somam 500 e a pagina traz 200", async () => {
+  it("com 500 candidaturas e pagina de 200, os KPIs contam a base inteira (porEtapa so em selecao)", async () => {
     // 300 CAPTACAO + 200 TRIAGEM; 400 ATIVO + 100 DESCARTADO. Uma candidatura por pessoa.
     const { candidatos, candidaturas } = base(500, (i) => {
       const etapa = i < 300 ? "CAPTACAO" : "TRIAGEM";
@@ -61,8 +61,13 @@ describe("KPI da Central de Candidatos conta o conjunto FILTRADO, nao a pagina",
     const porEtapa = somaDosValores(pagina.kpis!.porEtapa);
     const porSituacao = somaDosValores(pagina.kpis!.porSituacao);
 
-    expect(porEtapa, "a soma de `porEtapa` tem de bater com a base filtrada inteira").toBe(500);
-    expect(porSituacao, "a soma de `porSituacao` tem de bater com a base filtrada inteira").toBe(500);
+    /*
+     * `porEtapa` CONTA SO QUEM ESTA EM SELECAO (06/10/2026): a soma e 400 (os ATIVO), e NAO 500,
+     * porque as 100 DESCARTADO contam no desfecho, nao no card de etapa (a situacao vence a etapa).
+     * `porSituacao` segue contando TODAS, entao soma 500.
+     */
+    expect(porEtapa, "porEtapa soma so os em selecao (400), nao a base inteira").toBe(400);
+    expect(porSituacao, "porSituacao conta TODAS as candidaturas da base filtrada").toBe(500);
 
     // A TRAVA DIRETA DO DEFEITO: o KPI NUNCA pode ser a contagem das linhas retornadas.
     expect(porEtapa, "KPI derivado da pagina somaria 200").not.toBe(pagina.itens.length);
@@ -82,8 +87,14 @@ describe("KPI da Central de Candidatos conta o conjunto FILTRADO, nao a pagina",
 
     const pagina = await service.buscar({});
 
+    /*
+     * CAPTACAO sao os indices < 300, TODOS ATIVO (ATIVO e < 400), entao os 300 ficam no porEtapa.
+     * TRIAGEM sao os indices [300, 500): os de [300, 400) sao ATIVO (100) e os de [400, 500) sao
+     * DESCARTADO (100). Por isso porEtapa.TRIAGEM e 100, nao 200: os 100 descartados vao para o
+     * porSituacao.DESCARTADO. Esta e a regra "a situacao vence a etapa".
+     */
     expect(pagina.kpis!.porEtapa.CAPTACAO).toBe(300);
-    expect(pagina.kpis!.porEtapa.TRIAGEM).toBe(200);
+    expect(pagina.kpis!.porEtapa.TRIAGEM).toBe(100);
     expect(pagina.kpis!.porSituacao.ATIVO).toBe(400);
     expect(pagina.kpis!.porSituacao.DESCARTADO).toBe(100);
   });

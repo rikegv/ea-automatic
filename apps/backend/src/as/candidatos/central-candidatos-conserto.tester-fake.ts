@@ -270,6 +270,13 @@ export function bancoDaCentral(cenario: {
 
   function candidaturasFiltradas(w: string): CandidaturaFingida[] {
     const statusCitados = STATUS_DE_VAGA.filter((st) => w.includes(st));
+    /*
+     * O RECORTE `situacao = 'ATIVO'` do `porEtapa` do KPI: a cláusula o carrega, e o fingido o HONRA
+     * para não mentir. Sem isto o `porEtapa` contaria descartado junto (393 em vez de 0) e o teste da
+     * regra passaria sobre um número que o banco real não devolve. Só a agregação `porEtapa` traz o
+     * recorte; `porSituacao`, o funil e as opções não, e por isso ele é lido da própria cláusula.
+     */
+    const soAtivo = /"situacao"\s*=\s*'?ATIVO'?/i.test(w);
     // ids de candidato citados na clausula, SO quando ha de fato um `candidato_id in (...)` (o
     // funil). O KPI junta candidatos por ON e nao lista ids no WHERE: sem este gate, um id curto de
     // teste casaria por acaso dentro do texto do filtro de nome e o KPI contaria errado.
@@ -281,6 +288,7 @@ export function bancoDaCentral(cenario: {
       const cand = candidatoPorId.get(c.candidatoId);
       if (!cand) return false;
       if (idsCitados.length > 0 && !idsCitados.includes(c.candidatoId)) return false;
+      if (soAtivo && (c.situacao ?? "ATIVO") !== "ATIVO") return false;
       if (!candidatoPassaNoWhere(cand, w)) return false;
       if (statusCitados.length > 0) {
         const v = vagaPorId.get(c.vagaId);
@@ -302,6 +310,36 @@ export function bancoDaCentral(cenario: {
       // semCandidatura: not exists candidatura viva
       if (q.where.includes("not exists")) {
         pessoas = pessoas.filter((p) => !temVivaNaBase(p.id));
+      }
+      /*
+       * FILTROS DE CARD (clique no card), lidos da cláusula `exists` e HONRADOS, como o Postgres
+       * faria: a pessoa só entra se TIVER a candidatura que casa. Card de ETAPA exige `etapa = X` E
+       * `situacao = ATIVO` (a situação vence a etapa); card de SITUAÇÃO exige só `situacao = Y`. Eles
+       * entram SÓ nesta consulta de lista, nunca nas agregações do KPI (é a prova de que clicar num
+       * card não zera os outros).
+       */
+      const cardEtapa = q.where.match(
+        /"etapa"\s*=\s*([A-Za-z0-9_]+)\s+and\s+"as_candidaturas"\."situacao"\s*=\s*ATIVO/i,
+      )?.[1];
+      if (cardEtapa) {
+        pessoas = pessoas.filter((p) =>
+          candidaturas.some(
+            (c) =>
+              c.candidatoId === p.id &&
+              (c.etapa ?? "CAPTACAO") === cardEtapa &&
+              (c.situacao ?? "ATIVO") === "ATIVO",
+          ),
+        );
+      }
+      const cardSituacao = q.where.match(
+        /candidato_id"\s*=\s*"as_candidatos"\."id"\s+and\s+"as_candidaturas"\."situacao"\s*=\s*([A-Za-z0-9_]+)\s*\)/i,
+      )?.[1];
+      if (cardSituacao) {
+        pessoas = pessoas.filter((p) =>
+          candidaturas.some(
+            (c) => c.candidatoId === p.id && (c.situacao ?? "ATIVO") === cardSituacao,
+          ),
+        );
       }
       const total = pessoas.length;
       const de = q.offset ?? 0;

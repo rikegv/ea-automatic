@@ -662,6 +662,39 @@ export class CandidatosService {
       );
     }
 
+    /*
+     * ┌─ OS FILTROS DE CARD ENTRAM SÓ NA LISTA, NUNCA NO KPI (06/10/2026) ─────────────────────────┐
+     * │ Clicar num card passou a filtrar a LISTA pela BASE INTEIRA (antes era só sobre a página     │
+     * │ carregada, e quem não estava nela sumia). MAS os KPIs continuam contados sobre a base SEM    │
+     * │ este filtro: clicar num card NÃO pode zerar os outros cards. Por isso a régua do card entra  │
+     * │ num array SEPARADO (`filtrosLista`), e o `kpisDaBusca` logo abaixo recebe `filtros` (a base),│
+     * │ jamais `filtrosLista`.                                                                       │
+     * │                                                                                             │
+     * │ A RÉGUA É A DO `cardDaCandidatura` (a situação vence a etapa): card de ETAPA casa só         │
+     * │ candidatura ATIVO naquela etapa; card de SITUAÇÃO casa a situação, em qualquer etapa. Os     │
+     * │ dois são `exists` sobre as candidaturas da pessoa, então a pessoa entra na lista se, e só     │
+     * │ se, TIVER a candidatura que casa, independente da página.                                   │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const filtrosLista = [...filtros];
+    const cardEtapa = dto.filtroCardEtapa?.trim();
+    if (cardEtapa) {
+      filtrosLista.push(
+        sql`exists (select 1 from ${asCandidaturas}
+                    where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                      and ${asCandidaturas.etapa} = ${cardEtapa}
+                      and ${asCandidaturas.situacao} = ${"ATIVO"})`,
+      );
+    }
+    const cardSituacao = dto.filtroCardSituacao?.trim();
+    if (cardSituacao) {
+      filtrosLista.push(
+        sql`exists (select 1 from ${asCandidaturas}
+                    where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                      and ${asCandidaturas.situacao} = ${cardSituacao})`,
+      );
+    }
+
     const linhas = await this.db
       .select({
         id: asCandidatos.id,
@@ -702,7 +735,8 @@ export class CandidatosService {
         total: sql<number>`count(*) over ()`,
       })
       .from(asCandidatos)
-      .where(filtros.length > 0 ? and(...filtros) : undefined)
+      // A LISTA LEVA OS FILTROS DE CARD (`filtrosLista`); os KPIs abaixo levam só a base (`filtros`).
+      .where(filtrosLista.length > 0 ? and(...filtrosLista) : undefined)
       /*
        * O DESEMPATE POR `id` NÃO É ENFEITE: sem ele, duas pessoas cadastradas no MESMO instante
        * (uma importação de planilha grava em lote) têm ordem indefinida entre uma página e a
@@ -803,6 +837,23 @@ export class CandidatosService {
    * pede o codigo da etapa/situacao e um `count`, nenhum identificador.
    */
   private async kpisDaBusca(filtro: SQL | undefined): Promise<AsCandidatosKpis> {
+    /*
+     * ┌─ `porEtapa` CONTA SÓ QUEM ESTÁ EM SELEÇÃO (`situacao = 'ATIVO'`), e isso RESTAURA O CONTRATO ─┐
+     * │ A RÉGUA é a mesma de `kpisDoFunil` e do `cardDaCandidatura`: a SITUAÇÃO vence a etapa. Toda   │
+     * │ candidatura tem uma etapa gravada, inclusive a descartada (é ela que diz ONDE a saída         │
+     * │ aconteceu), então contar por etapa SEM olhar a situação enchia o card de etapa com gente que  │
+     * │ já saiu: APROVACAO mostrava 393 com ZERO ATIVO, e o clique no card (que filtra ATIVO naquela  │
+     * │ etapa) trazia vazio. Com o `'ATIVO'` aqui, o número do card volta a bater com o que o clique  │
+     * │ encontra, e a invariante `soma(porEtapa) === emSelecao` passa a valer no servidor.           │
+     * │                                                                                             │
+     * │ `porSituacao` FICA COMO ESTÁ (agrupa por situação, TODAS), porque é justamente ele que conta  │
+     * │ os desfechos (APROVADO, DESCARTADO, etc.). Só o `porEtapa` ganha o recorte de seleção.       │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const filtroEmSelecao = and(
+      ...(filtro ? [filtro] : []),
+      eq(asCandidaturas.situacao, "ATIVO"),
+    );
     const porEtapaLinhas = await this.db
       .select({
         chave: asCandidaturas.etapa,
@@ -810,7 +861,7 @@ export class CandidatosService {
       })
       .from(asCandidaturas)
       .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
-      .where(filtro)
+      .where(filtroEmSelecao)
       .groupBy(asCandidaturas.etapa);
 
     const porSituacaoLinhas = await this.db
