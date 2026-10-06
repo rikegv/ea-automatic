@@ -20824,3 +20824,40 @@ cadeia de setTimeout (1 pagina de 500 a cada 1,5s), pausa por visibilitychange/b
 focus, parada no total, backoff 429, cache so em memoria do componente descartado no unmount.
 Gate verde, seguranca APROVOU o codigo (R1-R8), tester 32 casos (73 verdes) + 6 gaps de teste de
 integracao registrados (comportamento do efeito React, nao testavel em unidade sem harness pesado).
+
+---
+
+## 2026-10-06 (parte 2) - Estrategia PERMANENTE de publicacao (A.49) + Clientes/Candidatos NO AR em producao
+
+**A regra permanente (A.49, gravada no CLAUDE.md).** Publicacao em producao passa a buildar SO do
+que esta commitado no `origin/main`, de um worktree PRISTINO e descartavel (`/home/henrique/apps/ea-build`),
+trocando os ARTEFATOS (`apps/backend/dist`, `apps/frontend/.next`, `packages/shared-types/dist`) no
+worktree servido, SEM nunca ler nem apagar o fonte sujo de nenhuma sessao. Mecanismo:
+`scripts/publicar-producao.sh` (flock de deploy unico; assercao de worktree limpo; segredos em
+runtime, gitignored; backup timestamped + health + rollback automatico). Resolve o problema que
+travou os deploys o dia inteiro: o tree compartilhado sujo deixa de ser dependencia da publicacao.
+
+**Publicado agora, pelo caminho limpo.** `origin/main @ 032a49a` (que inclui Clientes `e49ee70` E os
+itens 1-3 da Central de Candidatos `a3b2f40`, resposta do diretor a Q2: subir tudo que esta em
+origin/main e validado). Build isolado no worktree pristino (deps iguais; shared-types + backend +
+frontend exit 0), artefato trocado no `ea-release-portal`, restart unico. Health: backend
+`3011/api/health` ok, frontend `3010/login` 200, ambos `active`.
+
+**Prova medida contra producao (nao contra o fonte).** Bundle servido contem "Importar Planilha"; a
+dist servida tem o claim RBAC em `menus.js`; as rotas de importacao respondem 401 (existe + gated),
+contra 404 de rota inexistente. O fonte sujo da sessao Candidatos no `ea-release-portal`
+(`candidatos.*`, `shared-types/src/index.ts`) ficou INTOCADO (so os diretorios de artefato foram
+trocados), confirmando a garantia 3 da A.49.
+
+**A.27, producao intacta.** Contagens antes -> depois: clientes `265/248 -> 265/248` (frente
+publicada, inalterada), admissoes `3060 -> 3060`, candidatos `3017 -> 3017`, usuarios `60 -> 60`.
+as_candidaturas `104241 -> 104244` (+3): trafego vivo de webhook/operacao entre os dois snapshots,
+nao efeito do deploy (a publicacao nao escreve candidatura). Rollback: artefatos anteriores (commit
+servido `c28d8e0`) em `ea-release-portal/*.bak-20261006-deploy-clientes`.
+
+**Auditoria (A.38).** `seguranca` auditou o MECANISMO de deploy: APROVADO nos 4 dominios sensiveis
+(sem segredo no bundle, sem `.env` no artefato, sem CPF, RBAC fechado para nao-Master). VETOU por um
+ponto de correcao: o build estava no ref `eab7456`, 2 commits atras de `origin/main`, porque a sessao
+Candidatos empurrou enquanto se buildava. Destravado conforme a condicao que o proprio `seguranca`
+deu: rebuild do ref correto (`032a49a` = origin/main), e as checagens A.6 re-conferidas no artefato
+novo. Boa pegada: evitou publicar sob premissa falsa ("release src defasado e bomba").

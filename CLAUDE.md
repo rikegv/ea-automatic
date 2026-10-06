@@ -1439,3 +1439,48 @@ resolvido pelo próprio valor escolhido.
 
 *(Decisão do diretor, 06/10/2026, após validar na tela que o registro com `false` aparece onde ele
 cadastra. Registro detalhado no DIARIO.)*
+
+## A.49: PRODUCAO SOBE DO origin/main POR WORKTREE LIMPO, NUNCA DO TREE DE SESSAO (regra permanente)
+
+**Toda publicacao em producao builda SO do que esta COMMITADO no `origin/main`, a partir de um
+worktree PRISTINO e descartavel, e troca os ARTEFATOS na producao. O build NUNCA sai do tree de uma
+sessao.** O mecanismo e o `scripts/publicar-producao.sh`; esta secao e a regra que ele cumpre.
+
+**O PROBLEMA QUE ISTO RESOLVE.** Producao roda de um worktree servido (`ea-release-portal`) que
+varias sessoes compartilham e sujam com trabalho nao-commitado. Buildar DALI arrastava o solto de
+outra frente para producao, e cada deploy virava negociacao entre sessoes: a fabrica ficava travada
+o dia inteiro esperando as outras commitarem ou guardarem o que deixaram no tree. A chave e que os
+servicos servem ARTEFATO (`node dist/main.js`, `next start` lendo `.next`), nao o fonte: entao o
+deploy pode buildar o artefato longe do tree servido e so trocar o resultado.
+
+**AS CINCO GARANTIAS:**
+1. **Build so do commitado.** Um worktree pristino em `origin/main` (`git worktree`), com assercao
+   de `git status` vazio (os `.env` sao gitignored e nao contam). Nenhum arquivo nao-commitado de
+   nenhuma sessao pode entrar no artefato. O que sobe e, por construcao, o que ja foi validado
+   (§A.21/§A.25: nada chega ao `origin/main` sem gate verde e validacao do diretor).
+2. **Frentes INDEPENDENTES, sem esperar ninguem.** Tudo que esta no `origin/main` sobe no proximo
+   deploy; a frente ainda nao commitada simplesmente nao esta la e nao e publicada. Zero negociacao
+   entre sessoes. Publicam-se varias frentes validadas de uma vez, nao uma por vez.
+3. **O solto das sessoes FICA no tree delas, intocado.** O deploy nao le nem apaga o fonte do
+   worktree servido: troca APENAS os diretorios de artefato (`apps/backend/dist`,
+   `apps/frontend/.next`, `packages/shared-types/dist`). O trabalho nao-commitado de outra sessao no
+   worktree servido continua exatamente onde estava.
+4. **Segredo nunca vaza (§A.6).** Os `.env` (backend, 164 KB de tokens e de/para; frontend
+   `.env.production`) sao copiados em runtime do worktree servido para o de build, sao gitignored, e
+   nunca entram em commit, em log nem no bundle do Next (so `NEXT_PUBLIC_*` e exposto).
+5. **Restart unico, serializado, com rollback.** Um `flock` garante um deploy por vez. O build pesado
+   acontece OFFLINE no worktree de build (producao segue servindo o artefato velho); so a troca e o
+   restart tocam producao, e a janela e de segundos. Antes da troca, backup timestamped dos artefatos
+   servidos (`*.bak-<ts>`); health em `3011/api/health` e `3010/login`; health vermelho dispara
+   ROLLBACK automatico (volta o backup e reinicia). Blue-green (segundo backend + flip do upstream do
+   Caddy) fica como evolucao futura se zero-downtime virar requisito; hoje nao e.
+
+**O WORKTREE DE BUILD (`/home/henrique/apps/ea-build`) E DESCARTAVEL E OFF-LIMITS A EDICAO.** Nenhuma
+sessao edita, abre ou usa esse worktree para nada: ele existe so para o script buildar e e resetado a
+cada deploy. Editar o worktree de build, ou buildar dentro do worktree servido, reintroduz exatamente
+o problema que esta regra elimina.
+
+**A §A.7 (gate de push) e a §A.25 (validou, sobe e commita) continuam inteiras.** Esta secao nao muda
+O QUE pode subir (so o validado, que e o que chega ao `origin/main`), muda COMO sobe: de um artefato
+limpo do `origin/main`, nunca do tree sujo de uma sessao. *(Decisao do diretor, 06/10/2026, apos os
+deploys travarem o dia todo no tree compartilhado sujo. Proposta do coordenador, mandada registrar.)*
