@@ -75,6 +75,14 @@ export interface RespostaDoLeitor {
     motivo: string;
     camposConferidos?: string[];
     divergenciasCadastro?: string[];
+    /**
+     * AUTENTICIDADE suspeita (§A.38): o leitor desconfia de via NÃO oficial. Ortogonal ao `status`
+     * (um VALIDADO continua VALIDADO); o que muda é o DESTINO (ver `decidirDestino`). Só vem quando
+     * há SINAIS DE AUTENTICIDADE cadastrados; ausente = `undefined` = sem suspeita.
+     * §A.6: `autenticidadeMotivo` é o CRITÉRIO visual, NUNCA o dado lido.
+     */
+    autenticidadeSuspeita?: boolean;
+    autenticidadeMotivo?: string;
   } | null;
   /**
    * ACRÉSCIMO do leitor, não troca: `auditoria` responde "este documento serve?" e continua igual;
@@ -92,7 +100,13 @@ export interface PedidoDeLeitura {
   tipoDocumentoCodigo: string;
   tipoDocumentoNome: string;
   candidato: { nome: string; cpf: string };
+  /** Regras de CONFORMIDADE (categoria CONFORMIDADE): dirigem o `status`, como sempre. */
   regras: { descricaoRegra: string }[];
+  /**
+   * SINAIS DE AUTENTICIDADE (categoria AUTENTICIDADE, §A.38). Bloco separado do `regras`; vazio =
+   * sem sinais cadastrados, e o leitor não emite suspeita (comportamento idêntico ao de hoje).
+   */
+  sinaisAutenticidade?: { descricaoRegra: string }[];
 }
 
 /** Recusa do leitor mapeada para o vocabulário fechado da trilha (`PORTAL_MOTIVOS`). */
