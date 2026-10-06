@@ -20670,3 +20670,96 @@ Commit pela metade: o `ed10e72` subiu o USO dos campos de autenticidade sem a DE
 falha pegou o sync do GI e o `tables.ts`/`enums.ts`, sempre descoberto por quem foi buildar depois.
 **Criterio de PUBLICACAO nao e criterio de COMMIT: todo commit tem de deixar o `main` compilando
 sozinho.** (Proposta de virar regra permanente §A.48, aguardando confirmacao do diretor.)
+
+---
+
+## 06/10/2026: Central de Candidatos, regressão corrigida + KPI real + cliente/cargo e vaga, EM PRODUÇÃO (aguardando validação)
+
+Diagnóstico validado pelo diretor (`docs/DIAGNOSTICO-CENTRAL-CANDIDATOS.md`), mapa e veto em
+`docs/MAPA-CENTRAL-CANDIDATOS-CONSERTO.md`. Construído o que o `seguranca` aprovou; a carga incremental
+dos 81 mil ao browser foi **VETADA** (reverte o controle de §A.6 do teto de 200) e vai ao diretor.
+
+**O que subiu (aprovado):**
+1. **Regressão corrigida (a que eu causei em 05/10).** Cliente/cargo deixaram de ser cruzados contra
+   `GET /as/vagas` (que a frente da Central de Vagas filtrou para só liberadas) e passaram a vir da
+   PROJEÇÃO do próprio `buscar` (`funilDaPagina` ganhou `leftJoin clientes/cargos`, `clienteNome =
+   coalesce(nomeOperacao, razaoSocial)`, `cargoNome`). `leftJoin`, não inner: vaga em revisão fica, com
+   cliente/cargo nulos. **Medido na produção: 24.429 candidatos voltam a mostrar o cargo** (os que a
+   regressão zerou), 4.977 mostram cliente.
+2. **Filtros desacoplados de `/as/vagas`.** Novo `GET /as/candidatos/opcoes` (clientes/cargos/vagas
+   distintos da base de candidatos) alimenta os filtros. A tela só chama `/as/vagas` para a alocação
+   manual agora.
+3. **KPI com o número REAL.** Total e por etapa/situação vêm de contagem no servidor sobre a base
+   FILTRADA inteira, não das 200 linhas carregadas. Prova visual: o card Total mostra **81.605**,
+   Captação **102.870**, não 200.
+4. **Ficha** já mostrava a vaga por candidatura; confirmado.
+
+**Dado faltando (não é bug, registrado):** 94% sem cliente porque a vaga (espelho Pandapé) está em
+revisão e só ganha cliente ao ser liberada.
+
+**Fábrica (§A.38):** `seguranca` auditou o mapa (VETOU a carga incremental, aprovou o resto com 3
+condições, todas aplicadas: colunas nominais, /opcoes na CandidatosController, KPI group-by só código).
+`tester` independente: 36 testes, e a rodada de mutação matou 6 de 6 (as mutações `innerJoin`/sem
+coalesce expuseram e fecharam uma lacuna do fingido). Suíte `src/as/candidatos`: 783 verdes. Prova de
+banco REAL (integração) confirmou o leftJoin/coalesce que o fingido só modela.
+
+**Publicação (cópia nominal, restart coordenado §A.39):** backend dist de candidatos + shared-types
+(tipos, sem mudança de runtime) copiados; frontend buildado em cópia irmã, `.next` trocado. No MESMO
+restart subiu, por coordenação, o fix do 9c em `vagas.service.js` (commit 698bb0a, não-duplicação de
+vaga do Pandapé): ele copiou o próprio dist, eu disparei um restart só. GI intacto, contagens intactas
+(81.605 candidatos, 544 vagas), health 200.
+
+**Pendente de decisão do diretor:** navegar os 81 mil. A carga incremental ao browser foi vetada;
+alternativa §A.6-ok é paginação dirigida pelo servidor (o `buscar` já tem offset/limite).
+
+---
+
+## 2026-10-06, sessão Central de Vagas: duplicação de vagas do Pandapé (causa, limpeza, reference)
+
+Pacote de 3 itens, na ordem que o diretor definiu, todos no ar e provados.
+
+**Diagnóstico (medido em produção, não deduzido).** O Pandapé reimportava vaga JÁ liberada como
+duplicata. Causa: a liberação (`liberarPendenteRevisao`) e o PATCH de edição em revisão (`atualizar`,
+ramo REVISAO) espalhavam `...camposDaTrilha(dto)` num UPDATE; o montador emite `idVacancyPandape` e
+`envioShortlist` a partir do corpo, e nenhum formulário de vaga carrega esses dois, então o UPDATE os
+gravava `null`. Zerar `vagas.id_vacancy_pandape` cegava a varredura (que reconhece a vaga por essa
+coluna, `ingestao-repositorio.ts`), e ela criava nova vaga 12 min depois. Estado medido: 24 vagas
+ABERTA sem id, cada uma com uma duplicata PENDENTE_REVISAO e candidaturas repetidas.
+
+**Item 1 (causa), commit 698bb0a, NO AR.** Helper `semCarimbosDeIntegracao` remove `idVacancyPandape`
+e `envioShortlist` do objeto antes do `.set()` nas duas portas; omitir a chave no Drizzle deixa a
+coluna intocada. `camposDaTrilha`, create e `VagasEdicaoService` não tocados. §A.26: o alcance
+revelou que `envioShortlist` (hoje vazio em toda a base) sofria o mesmo zeramento, e que `atualizar`
+compartilhava o furo, os dois cobertos. Gate: 74/74 testes (backend + cobertura independente do
+tester), typecheck do config REAL do build (`tsconfig.build.json`, não só `tsc --noEmit`) limpo. Um
+TS2322 que só o `nest build` pegava foi corrigido (cast de retorno) após aviso de sessão par (travava
+o build compartilhado). `seguranca` NÃO acionado no item 1 (muda id de ATS e data, não CPF/auth/RBAC).
+Publicado por cópia nominal de `dist/as/vagas/vagas.service.js` no `ea-release-portal` + restart
+coordenado com a sessão de Candidatos (um restart só para as duas frentes).
+
+**Item 2 (limpeza), commit 8278850, EXECUTADO.** Runner `db/consolida-duplicatas-vaga-pandape.ts`,
+dry-run por padrão, transacional por par, idempotente. Por par: restaura o id em Row A, reaponta a
+matrícula `as_varredura_vagas` B→A, move as candidaturas únicas para A, promove a mantida quando B
+estava mais avançada, apaga as redundantes e por fim a Row B. `seguranca` auditou o plano e VETOU 1
+ponto (regressão `ENVIADO_PARA_ADMISSAO`→`ATIVO` num caso real), corrigido com `rankAvanco` derivado
+do domínio; re-auditou o código e APROVOU. Backup antes em `~/backups/ea-prod/
+ea_automatic_antes_item2_20261006-160512.sql.gz`. Medido depois: vagas 544→520, ABERTA-sem-id 24→0,
+pares do bug 0, candidaturas 108.466→103.616 (4.850 redundantes), candidatos 81.605 inalterado,
+0 órfãs, 297 movidas, 1 promovida, 0 falhas. As 24 Row A ficaram com id + matrícula, então a varredura
+volta a reconhecê-las (não re-duplica).
+
+**Item 3 (reference), commit c8fc6eb, NO AR.** O `codigo` recebe o `reference` do Pandapé, que REPETE
+na origem; a `travaDuplicidadeDeCodigo` tratava `codigo` como chave única e prendia a 2ª vaga de cada
+reference. Nova função pura `codigoColideComVagaManual`: colide só entre duas vagas MANUAIS (ambas sem
+id). `arquiteto` mapeou o alcance (nada mais usa `codigo` como chave; `vagaPorCodigo` sem chamador; o
+deep-link `?vaga=codigo` é ambiguidade pré-existente, fora do escopo). Gate 85/85; `tester` 4 casos +
+bordas; `seguranca` APROVOU (sem misroteamento de candidatura, duplicata manual ainda barra). Publicado
+por cópia nominal de `vagas.service.js` + `domain/vaga.js` + restart do ea-backend (coordenado com a
+sessão par, que confirmou GI/rota de candidatos intactos). Prova: reference 332225 = 31 vagas, todas
+Pandapé com id distinto, 0 manuais → a trava nova não barra nenhuma; 43 vagas destravadas no total.
+
+**Estado da fábrica (§A.34/§A.38/§A.39):** coordenador orquestrou; `backend` construiu os 3; `tester`
+independente cobriu 1 e 3; `arquiteto` mapeou 3; `seguranca` auditou 2 e 3 (vetou e liberou o 2). Os 3
+commits em `origin/main`; produção (ea-release-portal) reiniciada 2x, health 200 nas duas. Aberto:
+liberar de verdade uma das 43 destravadas exige vincular cliente (passo operacional do time), não
+feito pela fábrica.
