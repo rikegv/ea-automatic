@@ -20574,3 +20574,54 @@ acessa.
 | coordenador | reenvio ao vivo dos dois gemeos, acompanhamento do consumo, consolidacao | o diretor validou na tela |
 
 *(Decisao do diretor, 06/10/2026, apos validar na tela que o 32 (false) aparece onde ele cadastra.)*
+
+## 06/10/2026, ENCERRAMENTO DA SESSAO DO GI: a ponte COMPLETA em producao, o ponto de retomada
+
+Registro de fechamento para a proxima sessao retomar sem redescobrir. Tudo medido no artefato
+servido (`ea-release-portal/apps/backend/dist` e `.env`), nao no fonte.
+
+### A PONTE ESTA COMPLETA EM PRODUCAO, do lado da fabrica
+
+- **Commit `985d893`** no `main` (local e `origin/main`), em cima do `c28d8e0` do Portal. Tree LIMPO,
+  nada do GI pendente.
+- **Gatilho AUTOMATICO LIGADO, nao e mais stub.** O `auditoria.service.js` servido chama
+  `.enviar(admissaoId, contexto)` dentro do `if (transicionou)`; o `enviar()` delega a
+  `enviarComGuardas`; o stub `enviarAoGi: async () => ({})` sumiu. Medido: `enviarComGuardas`=7,
+  `async enviar(_admissaoId)`=0.
+- **Flag `GI_DISPARO_ARMADO=true`** armada no `.env` servido.
+- **apiSinc = FALSE** (env ausente = default; so `"true"` explicito ligaria). O `true` desvia para a
+  **Admissao Digital**, modulo que o time nao usa, e por isso o registro "sumia" da vista; `false`
+  roteia para o GI normal (tela de Cadastro de Funcionarios). Modelo em **§A.48** e no DIARIO.
+- **Duas travas no ar:** origem (allowlist `ORIGENS_AUTORIZADAS_A_ENVIAR_AO_GI` = so MANUAL, que cobre
+  A&S + cadastro manual; Pandape pelo webhook NAO vai, ja e enviado por fora); encerramento
+  (`FAROIS_ENCERRADOS` + `admissaoEncerrada` em `enviarComGuardas`, a porta unica: declinado e
+  rescindido nao saem por caminho nenhum, nem por SUPER_ADMIN).
+- **Insumos:** `GI_DEPARA_MUNICIPIOS_IBGE` com 5571 municipios, `GI_PARES_EMPRESA_FILIAL` com 127
+  pares, os dois no `.env` de producao.
+- **Zero envios reais** ate agora (`gi_enviado_em` nao nulo = 0). Nada disparou no boot.
+
+### COMO O AUTOMATICO SE COMPORTA HOJE
+
+Admissao do novo fluxo (A&S ou manual) que fecha a auditoria vai ao GI **automatica, sem clique**, se:
+origem MANUAL, farol vivo (nao encerrado nem pausado), e passar as guardas de contratacao (a mais
+comum de barrar e salario sem unidade declarada, `GI_SALARIO_SEM_UNIDADE`).
+
+**O sub-disparo, DECISAO DO DIRETOR, NAO MEXER:** admissao concluida por **aceite** da Esteira (com
+documento obrigatorio pendente) NAO vai sozinha, porque quando a regua fecha depois nao ha transicao.
+Ela sai pelo **botao manual**. Isso e deliberado.
+
+### SAUDE DA PRODUCAO (06/10, no encerramento)
+
+backend 3011 = 200, ingress 3010 = 200, `ea-backend`/`ea-frontend`/`ea-proxy` ativos.
+Backup e rollback do ato de publicacao em `~/ea-rollback-gi-gatilho-20261006-130352` (dist do conjunto
++ `.env` + dump do banco).
+
+### O PONTO DE RETOMADA, a unica coisa pendente
+
+**O teste pratico do diretor:** ele cria a admissao com os documentos REAIS dele, percorre sem
+roteiro, e ve o registro **nascer na tela de Cadastro de Funcionarios do GI** (porque e `false`), em
+vez de sumir. Terreno medido em `docs/TERRENO-TESTE-DO-DIRETOR-GI.md` (o risco e o tipo de contrato
+nao casar com o vinculo do cliente, e o sistema deixa errar de proposito, como ele pediu). Nada no
+codigo bloqueia esse teste; e acao do diretor.
+
+*(Encerramento da sessao do GI, 06/10/2026, a pedido do diretor para reduzir sessoes ativas.)*
