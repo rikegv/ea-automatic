@@ -20763,3 +20763,39 @@ independente cobriu 1 e 3; `arquiteto` mapeou 3; `seguranca` auditou 2 e 3 (veto
 commits em `origin/main`; produção (ea-release-portal) reiniciada 2x, health 200 nas duas. Aberto:
 liberar de verdade uma das 43 destravadas exige vincular cliente (passo operacional do time), não
 feito pela fábrica.
+
+---
+
+## 2026-10-06 — Menu Clientes: busca por todas as colunas + importacao em massa (commit+push; producao BLOQUEADA por coordenacao)
+
+**O que subiu.** Commit `e49ee70` em `origin/main` (ff `b50a023..e49ee70`), recorte NOMINAL (§A.14,
+18 arquivos, so do menu Clientes). Duas frentes validadas pelo diretor na 3120 (OST
+`docs/OST-CLIENTES-BUSCA-E-IMPORT.md`):
+1. Busca da tela de Clientes casando o termo em TODAS as colunas (codigo, razao social, CNPJ, nome de
+   operacao, empresa Soulan, CNPJ do vinculo, tipo de servico, status), via `casaBuscaCliente`
+   (`lib/clientes-busca.ts`). E-logico com os filtros existentes, nenhum removido.
+2. Cadastro em massa por planilha: botao "Importar Planilha" + modal (fecha por Cancelar/Confirmar,
+   §A.41), modelo xlsx/csv de 4 colunas, previa sem gravar, 6 motivos de recusa por linha, lote
+   tolerante, relatorio final. 3 rotas novas gated no menu `clientes` (Master/Super Admin),
+   reivindicadas nominalmente em `domain/menus.ts`; `confirmar` re-valida server-side, DTO limita a 2000.
+
+**Gate (§A.21/§A.40), medido nesta sessao no checkout de dev.** Backend: testes clientes+cnpj 45
+passam (4 arquivos). Frontend: testes clientes 19 passam (3 arquivos). Typecheck backend exit 0,
+frontend exit 0 (o working tree carrega trabalho solto de outras sessoes e MESMO ASSIM compila: sem
+colisao de gate). Sem travessao introduzido (§A.11; os U+2014 remanescentes em `clientes.controller.ts`
+e `clientes.service.ts` sao comentarios PRE-EXISTENTES fora dos hunks da OST, nao tocados por §A.14).
+Auditoria documentada na OST: `seguranca` APROVADO (RBAC), `tester` 42 testes independentes.
+
+**§A.27, producao intacta.** Contagem de clientes em producao (`ea_automatic` @ ea-db:5433) ANTES:
+`265 total / 248 ativos`. Nada foi gravado nem alterado em producao nesta sessao (so commit+push).
+
+**PRODUCAO (3010) NAO FOI PUBLICADA. Bloqueio de coordenacao (§A.42 excecao, §A.39).** Producao roda
+do worktree `ea-release-portal` (branch `main-publicacao` @ `c28d8e0`), que neste momento esta:
+(a) 9 commits ATRAS de `origin/main` e NAO contem o `e49ee70`; (b) SUJO com trabalho UNCOMMITTED de
+outra sessao viva (Central de Candidatos): `as/candidatos/candidatos.controller.ts`,
+`candidatos.service.ts`, `app/(app)/as/candidatos/page.tsx`, `lib/as-candidatos.ts` e
+`packages/shared-types/src/index.ts`. Buildar/reiniciar ali agora publicaria 9 commits alheios MAIS o
+solto nao revisado dessa sessao (inclusive o `shared-types` compartilhado, risco §A.39), e o restart
+e a acao que o diretor reservou ("So o Rike coordena / Coordenem o restart"). A publicacao em
+producao fica para quando a sessao Candidatos liberar o worktree e o diretor coordenar o restart; o
+codigo ja esta em `origin/main`, pronto.
