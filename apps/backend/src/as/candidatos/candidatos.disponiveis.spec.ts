@@ -114,7 +114,11 @@ function bancoDaBusca(cenario: { linhas?: number; total?: number } = {}) {
    * e quem cobre a forma e a paginacao do funil sao os arquivos proprios daquela frente.
    */
   const cadeiaDoFunil: Record<string, unknown> = {};
-  for (const passo of ["from", "innerJoin", "leftJoin", "where", "orderBy"]) {
+  // `groupBy` entrou com os KPIs (06/10/2026): o `buscar` passou a agregar etapa/situacao numa
+  // consulta propria, que NAO pede `candidaturasAtivas` e por isso cai aqui, nesta cadeia inerte.
+  // Ela devolve `[]`, e os KPIs ficam vazios: este arquivo afere a consulta PAGINADA e o corte, nao
+  // os KPIs, cobertos pelos arquivos proprios daquela frente.
+  for (const passo of ["from", "innerJoin", "leftJoin", "where", "orderBy", "groupBy"]) {
     cadeiaDoFunil[passo] = () => cadeiaDoFunil;
   }
   cadeiaDoFunil.then = (ok: (v: unknown) => unknown, falha?: (e: unknown) => unknown) =>

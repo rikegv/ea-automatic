@@ -3072,10 +3072,53 @@ export interface AsCandidaturaNaLista {
   vagaId: string;
   vagaCodigo: string | null;
   vagaNome: string | null;
+  /**
+   * CLIENTE e CARGO da VAGA, na propria projecao do funil (06/10/2026).
+   *
+   * Antes a Central de Candidatos cruzava a `vagaId` contra o mapa de `GET /as/vagas` para achar
+   * cliente/cargo. A frente da Central de Vagas (05/10) fez aquela rota devolver so vaga liberada,
+   * entao cliente/cargo da vaga em revisao sumiram da tela, embora a vaga exista. Trazer os dois aqui,
+   * do mesmo join com `vagas` que ja monta vagaNome, elimina a dependencia e a regressao.
+   *
+   * §A.6: sao atributos da VAGA (operacao/razao do cliente, nome do cargo), nao dado pessoal do
+   * candidato. Nulo quando a vaga nao tem cliente/cargo resolvido (a maioria, espelho Pandape em
+   * revisao: o cliente so nasce quando o time libera a vaga, nao e bug).
+   */
+  clienteNome: string | null;
+  cargoNome: string | null;
   etapa: CandidaturaEtapa;
   situacao: CandidaturaSituacao;
   /** Quando falamos com esta pessoa pela ultima vez. Nulo quer dizer que nao houve contato. */
   ultimoContatoEm: string | null;
+}
+
+/**
+ * OS NUMEROS REAIS DA BASE, para o KPI nao mentir (06/10/2026, decisao do diretor).
+ *
+ * A tela carrega uma pagina (200) e, se o KPI contasse as linhas carregadas, o time acharia que so
+ * existem 200 candidatos. Estes numeros vem de CONTAGEM no servidor sobre o conjunto FILTRADO inteiro
+ * (os mesmos filtros do `buscar`, antes do corte de pagina), nunca da pagina. §A.6: sao agregados, nao
+ * trazem ninguem identificado.
+ */
+export interface AsCandidatosKpis {
+  /** Candidaturas por etapa, no conjunto filtrado inteiro. Chave = codigo da etapa. */
+  porEtapa: Record<string, number>;
+  /** Candidaturas por situacao, no conjunto filtrado inteiro. Chave = codigo da situacao. */
+  porSituacao: Record<string, number>;
+}
+
+/**
+ * AS OPCOES DOS FILTROS da Central de Candidatos, da BASE DE CANDIDATOS e nao de `/as/vagas`.
+ *
+ * Servidas por endpoint proprio (§A.37: opcao de filtro vem de endpoint, nunca das linhas carregadas),
+ * com os clientes, cargos e vagas DISTINTOS que aparecem nas candidaturas. Desacopla a tela do
+ * `/as/vagas` filtrado pela Central de Vagas, que so traz liberadas e encolhia estes filtros.
+ * §A.6: rotulo e codigo de catalogo, nenhum dado pessoal.
+ */
+export interface AsCandidatosOpcoes {
+  clientes: { codCliente: string; nome: string }[];
+  cargos: { id: string; nome: string }[];
+  vagas: { id: string; codigo: string | null; nome: string | null }[];
 }
 
 export interface AsCandidatoListItem {
@@ -3180,6 +3223,12 @@ export interface AsCandidatosPagina {
   offset: number;
   /** Sobrou gente além desta página? Derivado, nunca gravado. */
   truncado: boolean;
+  /**
+   * OS NUMEROS REAIS DA BASE FILTRADA, para o KPI (06/10/2026). `total` acima ja e o numero real de
+   * candidatos; `kpis` acrescenta a quebra por etapa e por situacao, tambem do conjunto inteiro e nao
+   * da pagina. Opcional para nao quebrar chamadores antigos: ausente = nao calculado nesta resposta.
+   */
+  kpis?: AsCandidatosKpis;
 }
 
 /**

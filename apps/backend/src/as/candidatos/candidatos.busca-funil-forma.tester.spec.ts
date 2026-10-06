@@ -24,9 +24,18 @@ import { bancoDaBuscaComFunil } from "./busca-funil.tester-fake";
  * OFERECER pessoas: com a projecao larga, o modal de alocar viraria vitrine do motivo da recusa.
  */
 
-/** A lista FECHADA do contrato `AsCandidaturaNaLista`, em ordem alfabetica. */
-const OITO_CAMPOS = [
+/**
+ * A lista FECHADA do contrato `AsCandidaturaNaLista`, em ordem alfabetica.
+ *
+ * `clienteNome` e `cargoNome` ENTRARAM em 06/10/2026: cliente e cargo da VAGA passaram a vir do
+ * proprio funil, para a tela parar de cruzar contra `/as/vagas` (que a Central de Vagas filtrou para
+ * so liberada). Sao ATRIBUTOS DA VAGA, nao dado pessoal do candidato (§A.6), e por isso entram na
+ * lista FECHADA em vez de na lista de PROIBIDOS logo abaixo.
+ */
+const CAMPOS = [
   "candidatoId",
+  "cargoNome",
+  "clienteNome",
   "etapa",
   "id",
   "situacao",
@@ -70,8 +79,8 @@ function cenarioDeUmaPessoaComUmaCandidatura() {
   });
 }
 
-describe("a candidatura que a LISTA devolve tem lista FECHADA de oito campos", () => {
-  it("devolve EXATAMENTE os oito campos do contrato, nem um a mais", async () => {
+describe("a candidatura que a LISTA devolve tem lista FECHADA de dez campos", () => {
+  it("devolve EXATAMENTE os dez campos do contrato, nem um a mais", async () => {
     const { service } = cenarioDeUmaPessoaComUmaCandidatura();
     const pagina = await service.buscar({});
 
@@ -85,7 +94,7 @@ describe("a candidatura que a LISTA devolve tem lista FECHADA de oito campos", (
     expect(
       Object.keys(candidaturas![0]).sort(),
       "campo a mais na projecao da lista e exatamente o defeito do `substituidoCpf`: ninguem o mostra e ele desce para a base inteira.",
-    ).toEqual(OITO_CAMPOS);
+    ).toEqual(CAMPOS);
   });
 
   it.each(PROIBIDOS)("NAO devolve `%s`", async (campo) => {

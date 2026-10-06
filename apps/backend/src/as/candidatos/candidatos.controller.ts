@@ -514,6 +514,21 @@ export class CandidatosController {
     );
   }
 
+  /**
+   * AS OPCOES DOS FILTROS da Central de Candidatos: clientes, cargos e vagas DISTINTOS das
+   * candidaturas (§A.37). Desacopla a tela de `/as/vagas`, que so traz vaga liberada.
+   *
+   * CAMINHO FIXO, DECLARADO ANTES DE `:id`: sem isto o Nest casaria "opcoes" como id de candidato e
+   * o `ParseUUIDPipe` da ficha devolveria 400. Mesma razao da ordem de `buscar` e `candidaturas/...`.
+   *
+   * GET e SEM `@Roles`, como as demais leituras: nao sai dado pessoal nenhum (so rotulo/codigo de
+   * catalogo), e quem restringe o modulo inteiro e o menu `as-candidatos` no `MenuGuard`.
+   */
+  @Get("opcoes")
+  opcoes() {
+    return this.candidatos.opcoes();
+  }
+
   // ── ROTAS COM `:id` DE CANDIDATO (por último) ─────────────────────────────
 
   /** A FICHA: o único lugar em que o CPF e os dados de contato saem do backend (§A.6). */

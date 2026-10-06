@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CANDIDATURA_SITUACOES, ETAPAS_FUNIL_SEMENTE } from "@ea/shared-types";
 import { ApiError } from "./api";
 import {
+  avisoDeCorte,
   caminhoAteEtapa,
   destinosDeEtapa,
   ehTravaDeVagaCheia,
@@ -10,6 +11,7 @@ import {
   formatCpf,
   cardDaCandidatura,
   funilNaoVeio,
+  opcoesDeCandidatos,
   reentradaPrecisaCiencia,
 } from "./as-candidatos";
 
@@ -320,6 +322,43 @@ describe("bancoPrecisaCiencia (o TERCEIRO 409 do módulo: avisa, não bloqueia)"
     expect(bancoPrecisaCiencia(new ApiError(corpo.message, 404, corpo))).toBeNull();
     expect(bancoPrecisaCiencia(new Error("Falha de rede"))).toBeNull();
     expect(bancoPrecisaCiencia(null)).toBeNull();
+  });
+});
+
+describe("avisoDeCorte (o teto da busca, que deixou de ser invisível)", () => {
+  it("não avisa quando a página não foi truncada", () => {
+    expect(avisoDeCorte({ itens: [1, 2], total: 2, truncado: false })).toBeNull();
+  });
+
+  it("avisa com o X de Y quando sobrou gente além da página", () => {
+    const frase = avisoDeCorte({ itens: new Array(200).fill(0), total: 1480, truncado: true });
+    expect(frase).toContain("200 de 1480");
+    // §A.11: sem travessão em texto apresentável.
+    expect(frase).not.toContain("—");
+  });
+});
+
+describe("opcoesDeCandidatos (os filtros vêm do endpoint próprio, não de /as/vagas: §A.37)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("chama GET /api/as/candidatos/opcoes e devolve clientes, cargos e vagas da base", async () => {
+    const corpo = {
+      clientes: [{ codCliente: "0001", nome: "Operação Alfa" }],
+      cargos: [{ id: "c1", nome: "Atendente" }],
+      vagas: [{ id: "v1", codigo: "VAGA-1", nome: "Atendente Noturno" }],
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(corpo), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const opcoes = await opcoesDeCandidatos("tok");
+    expect(opcoes).toEqual(corpo);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("/api/as/candidatos/opcoes");
+    // §A.6: é um GET de catálogo, sem corpo e sem dado pessoal na URL.
+    expect((init as RequestInit).method).toBe("GET");
+    expect((init as RequestInit).body).toBeUndefined();
   });
 });
 

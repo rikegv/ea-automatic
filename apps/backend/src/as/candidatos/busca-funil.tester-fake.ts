@@ -57,6 +57,9 @@ export interface CandidaturaFingida {
   vagaId: string;
   vagaCodigo?: string | null;
   vagaNome?: string | null;
+  /** Cliente e cargo da VAGA, projetados pelo funil desde 06/10/2026. Nulos quando a vaga nao tem. */
+  clienteNome?: string | null;
+  cargoNome?: string | null;
   etapa?: string;
   situacao?: string;
   ultimoContatoEm?: Date | null;
@@ -92,6 +95,8 @@ interface ConsultaRegistrada {
   selecao: string[];
   /** As expressoes de `orderBy`, renderizadas, para o fingido ordenar como o banco ordenaria. */
   ordem: string[];
+  /** As expressoes de `groupBy`, renderizadas: quando ha, a consulta e uma AGREGACAO (os KPIs). */
+  grupo: string[];
 }
 
 function nomeDaTabela(t: unknown): string {
@@ -132,6 +137,8 @@ function linhaDeCandidatura(c: CandidaturaFingida) {
     candidatura: crua,
     vagaCodigo: c.vagaCodigo ?? null,
     vagaNome: c.vagaNome ?? null,
+    clienteNome: c.clienteNome ?? null,
+    cargoNome: c.cargoNome ?? null,
     vaga: { id: c.vagaId, codigo: c.vagaCodigo ?? null, nomeDivulgacao: c.vagaNome ?? null },
     candidatoNome: "NAO DEVE SER USADO",
     autor: null,
@@ -195,6 +202,23 @@ export function bancoDaBuscaComFunil(cenario: {
     }
 
     if (q.tabela === "as_candidaturas") {
+      /*
+       * A AGREGACAO DOS KPIS, simulada como o banco a daria: group by etapa OU situacao, `count(*)`
+       * sobre TODAS as candidaturas do cenario, SEM `limit`. E isto que prova a propriedade que
+       * importa: os KPIs nao veem a pagina, veem o conjunto inteiro. Se o `buscar` um dia aplicar o
+       * `limit` a esta consulta, a contagem desta funcao deixaria de bater com o cenario e o teste
+       * morreria aqui, em vez de na operacao lendo "95 de 81 mil".
+       */
+      if (q.grupo.length > 0) {
+        const porEtapa = q.grupo.join(" ").includes("etapa");
+        const mapa = new Map<string, number>();
+        for (const c of candidaturas) {
+          const chave = porEtapa ? (c.etapa ?? "CAPTACAO") : (c.situacao ?? "ATIVO");
+          mapa.set(chave, (mapa.get(chave) ?? 0) + 1);
+        }
+        return [...mapa].map(([chave, quantidade]) => ({ chave, quantidade }));
+      }
+
       const ids = pessoas.map((p) => p.id).filter((id) => q.where.includes(id));
       const porId = ids.length > 0 ? candidaturas.filter((c) => ids.includes(c.candidatoId)) : [];
       const statusCitados = STATUS_DE_VAGA.filter((s) => q.where.includes(s));
@@ -226,7 +250,6 @@ export function bancoDaBuscaComFunil(cenario: {
 
   function construtor(q: ConsultaRegistrada) {
     const chain: Record<string, unknown> = {};
-    const mesmo = () => chain;
     chain.from = (t: unknown) => {
       q.tabela = nomeDaTabela(t);
       return chain;
@@ -247,7 +270,10 @@ export function bancoDaBuscaComFunil(cenario: {
       q.ordem = cols.map(textoDe);
       return chain;
     };
-    chain.groupBy = mesmo;
+    chain.groupBy = (...cols: unknown[]) => {
+      q.grupo = cols.map(textoDe);
+      return chain;
+    };
     chain.limit = (n: number) => {
       q.limite = n;
       return chain;
@@ -272,6 +298,7 @@ export function bancoDaBuscaComFunil(cenario: {
         offset: null,
         selecao: Object.keys(selecao ?? {}),
         ordem: [],
+        grupo: [],
       };
       consultas.push(q);
       return construtor(q);
@@ -288,6 +315,7 @@ export function bancoDaBuscaComFunil(cenario: {
             offset: null,
             selecao: [],
             ordem: [],
+            grupo: [],
           };
           consultas.push(q);
           return resolver(q);

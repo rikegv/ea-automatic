@@ -24,9 +24,14 @@
  * │ Agora são DUAS chamadas por carregamento, e o funil vem junto de cada pessoa da página.      │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * DE ONDE VEM CADA COLUNA:
- *   - a PESSOA e as CANDIDATURAS dela (vaga, etapa, situação, último contato) vêm de `POST /buscar`;
- *   - CLIENTE e CARGO vêm da vaga, em `GET /as/vagas`, que também alimenta os filtros.
+ * DE ONDE VEM CADA COLUNA (conserto da regressão, 06/10):
+ *   - a PESSOA e as CANDIDATURAS dela (vaga, CLIENTE, CARGO, etapa, situação, último contato) vêm
+ *     TODAS de `POST /buscar`, na projeção `AsCandidaturaNaLista`. Cliente e cargo deixaram de vir do
+ *     cruzamento com `GET /as/vagas`: a Central de Vagas (05/10) passou a devolver só vaga LIBERADA,
+ *     e a vaga em revisão (94% da base) sumia dali, apagando cliente e cargo de quase toda linha;
+ *   - os FILTROS de cliente e vaga vêm de `GET /as/candidatos/opcoes` (§A.37), não de `/as/vagas`;
+ *   - `GET /as/vagas` ainda é chamado, mas SÓ para a alocação manual (as vagas que recebem candidato)
+ *     e para o "Ver vaga" da ficha. Nenhuma COLUNA nem FILTRO depende mais dele.
  * Uma linha é uma CANDIDATURA, e quem ainda não foi alocada aparece com a vaga em branco: pessoa sem
  * candidatura é pessoa NA BASE, não cadastro pela metade.
  *
@@ -50,6 +55,8 @@ import {
   candidaturaViva,
   type AsCandidatoListItem,
   type AsCandidatoOrigem,
+  type AsCandidatosKpis,
+  type AsCandidatosOpcoes,
   type AsCandidaturaItem,
   type AsCandidaturaNaLista,
   type VagaListItem,
@@ -76,6 +83,7 @@ import {
   dataHoraBr,
   funilNaoVeio,
   mensagemDoErro,
+  opcoesDeCandidatos,
   painelDaVaga,
 } from "@/lib/as-candidatos";
 import { cardsDeDesfecho, cardsDeEtapa, type CardDeFunil } from "@/lib/as-vagas-funil";
@@ -104,7 +112,6 @@ interface Linha {
   candidatura: AsCandidaturaNaLista | null;
   /** O funil desta pessoa não veio na busca. Diferente de "ela não tem vaga". */
   funilIndisponivel: boolean;
-  vaga: VagaListItem | null;
 }
 
 export default function CentralDeCandidatosPage() {
@@ -126,6 +133,19 @@ export default function CentralDeCandidatosPage() {
   const [erro, setErro] = useState<string | null>(null);
   /** O aviso do corte da busca: nulo é "a lista está inteira". */
   const [avisoCorte, setAvisoCorte] = useState<string | null>(null);
+  /**
+   * OS NÚMEROS REAIS DA BASE, e não a contagem das linhas carregadas (item 3 do diretor). `totalBase`
+   * é quantos candidatos casam com o filtro; `kpisBase` é a quebra por etapa e por situação, ambos do
+   * conjunto FILTRADO INTEIRO do servidor. O KPI deixou de mentir "só existem 200 candidatos".
+   *
+   * A TELA CONTINUA CARREGANDO SÓ A PÁGINA (200), com o aviso de corte: o teto é guarda deliberada de
+   * §A.6 contra despejar a base inteira no navegador. O que muda é só o NÚMERO do card, que passa a
+   * vir do servidor em vez de contar as linhas carregadas.
+   */
+  const [totalBase, setTotalBase] = useState(0);
+  const [kpisBase, setKpisBase] = useState<AsCandidatosKpis | null>(null);
+  /** AS OPÇÕES DOS FILTROS, da base de candidatos (§A.37), não de `/as/vagas`. */
+  const [opcoes, setOpcoes] = useState<AsCandidatosOpcoes | null>(null);
 
   // ── FILTROS. `nome`, `cpf` e `origem` vão para o backend (no CORPO do POST); `cliente` e `etapa`
   // são resolvidos aqui, porque a busca do backend não tem esses eixos e o volume da tela é pequeno.
@@ -220,6 +240,11 @@ export default function CentralDeCandidatosPage() {
       // gente além dela. A tela usa o aviso logo abaixo do contador de linhas.
       setPessoas(listaPessoas.itens);
       setAvisoCorte(avisoDeCorte(listaPessoas));
+      // OS NÚMEROS REAIS DA BASE (item 3): `total` e `kpis` vêm do conjunto FILTRADO inteiro do
+      // servidor, não da página carregada. `kpis` é opcional no contrato (o backend pode ainda não
+      // enviar): ausente, o funil cai no fallback de contar as linhas carregadas, logo abaixo.
+      setTotalBase(listaPessoas.total);
+      setKpisBase(listaPessoas.kpis ?? null);
     } catch (err) {
       setErro(mensagemDoErro(err, "Falha ao carregar a Central de Candidatos."));
     } finally {
@@ -288,6 +313,26 @@ export default function CentralDeCandidatosPage() {
     return () => clearTimeout(t);
   }, [carregar]);
 
+  /**
+   * AS OPÇÕES DOS FILTROS, uma vez por sessão e não a cada tecla (§A.37): é o catálogo dos clientes,
+   * cargos e vagas DISTINTOS da base de candidatos, independente do filtro de busca. Falhar aqui não
+   * derruba a tela, só deixa os filtros de cliente e vaga sem opções, então o erro é silencioso e a
+   * lista segue carregando normalmente.
+   */
+  useEffect(() => {
+    let vivo = true;
+    opcoesDeCandidatos(token)
+      .then((o) => {
+        if (vivo) setOpcoes(o);
+      })
+      .catch(() => {
+        /* filtros sem opções não impedem a busca; §A.6 não entra aqui (só catálogo). */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [token]);
+
   const vagaPorId = useMemo(() => new Map(vagas.map((v) => [v.id, v])), [vagas]);
 
   /**
@@ -325,32 +370,29 @@ export default function CentralDeCandidatosPage() {
          * nenhuma", que é estado legítimo e continua sendo "Vaga Não Alocada".
          */
         if (p.candidaturas === undefined) {
-          return [
-            { chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: true, vaga: null },
-          ];
+          return [{ chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: true }];
         }
         const minhas = p.candidaturas.filter((c) => !fVaga || c.vagaId === fVaga);
         if (minhas.length === 0) {
           return fVaga
             ? []
-            : [{ chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: false, vaga: null }];
+            : [{ chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: false }];
         }
+        /*
+         * CLIENTE, CARGO E VAGA VÊM TODOS DA PRÓPRIA PROJEÇÃO (`AsCandidaturaNaLista`), e não mais do
+         * cruzamento com `GET /as/vagas` (conserto da regressão, 06/10). A Central de Vagas (05/10)
+         * fez aquela rota devolver só vaga LIBERADA, então a vaga em revisão (94% da base) sumia da
+         * lista e cliente/cargo pintavam vazio embora a vaga exista. A linha deixou de carregar o
+         * objeto da vaga: a tabela lê `clienteNome`/`cargoNome`/`vagaNome` da candidatura.
+         */
         return minhas.map((c) => ({
           chave: c.id,
           pessoa: p,
           candidatura: c,
           funilIndisponivel: false,
-          /*
-           * CLIENTE E CARGO CONTINUAM VINDO DE `/as/vagas`, que é filtrada por status: a vaga
-           * encerrada ou em revisão não está lá, e a célula diz "não informado". A COLUNA VAGA NÃO
-           * DEPENDE MAIS DISSO, de propósito: ela lê `vagaNome`/`vagaCodigo` da própria projeção,
-           * senão a linha que TEM vaga pintaria vazio e o 429 teria sido trocado por uma cegueira
-           * mais discreta (todas as vagas das candidatas que o diretor procurou estão em revisão).
-           */
-          vaga: vagaPorId.get(c.vagaId) ?? null,
         }));
       }),
-    [pessoas, vagaPorId, fVaga],
+    [pessoas, fVaga],
   );
 
   /**
@@ -376,7 +418,11 @@ export default function CentralDeCandidatosPage() {
         if (escopo === "historico" && emAndamento) return false;
         // LISTA VAZIA É "TODOS" (§A.28): sem isso a tela abriria vazia esperando alguém marcar.
         if (fCandidatos.length > 0 && !fCandidatos.includes(l.pessoa.id)) return false;
-        if (fCliente && l.vaga?.codCliente !== fCliente) return false;
+        // O FILTRO DE CLIENTE CASA PELO NOME DE EXIBIÇÃO, e não mais por `codCliente`: a projeção da
+        // candidatura carrega `clienteNome` (coalesce operação/razão), não o código, e a opção do
+        // filtro vem do mesmo nome, via `/as/candidatos/opcoes`. Linha sem candidatura não tem
+        // cliente, então sai quando o filtro está ativo, que é o comportamento de antes.
+        if (fCliente && l.candidatura?.clienteNome !== fCliente) return false;
         /*
          * O FILTRO DE ETAPA SÓ ALCANÇA QUEM ESTÁ VIVO (peça P1 do bug 1), e era aqui que a contagem
          * distorcia: a comparação olhava só `etapa`, então filtrar "Triagem" trazia junto quem foi
@@ -416,8 +462,20 @@ export default function CentralDeCandidatosPage() {
    * "Sem Vaga", que é a pessoa na base ainda não alocada, ou seja, a AUSÊNCIA de candidatura.
    */
   const funil = useMemo(() => {
-    const porEtapa: Record<string, number> = {};
-    const porDesfecho: Record<string, number> = {};
+    /*
+     * ─ OS NÚMEROS DOS CARDS SÃO OS REAIS DA BASE, E NÃO A CONTAGEM DAS LINHAS CARREGADAS (item 3) ─
+     *
+     * A tela carrega só a página (200), então contar as linhas faria o KPI dizer que existem 200
+     * candidatos quando há dezenas de milhares. `kpisBase` (`porEtapa`/`porSituacao`) é a contagem
+     * agregada do servidor sobre o conjunto FILTRADO inteiro, antes do corte de página. O clique no
+     * card continua filtrando as linhas já carregadas; o que muda é só o NÚMERO exibido.
+     *
+     * A CONTAGEM LOCAL FICA DE FALLBACK: `kpis` é campo OPCIONAL no contrato (o backend desta frente
+     * sobe em paralelo). Enquanto ele não vier, a fileira conta as linhas carregadas, como antes, em
+     * vez de aparecer zerada.
+     */
+    const porEtapaLocal: Record<string, number> = {};
+    const porDesfechoLocal: Record<string, number> = {};
     let semVaga = 0;
     for (const l of linhasSemCard) {
       if (!l.candidatura) {
@@ -429,16 +487,23 @@ export default function CentralDeCandidatosPage() {
       const chave = cardDaCandidatura(l.candidatura.etapa, l.candidatura.situacao);
       // A SITUAÇÃO VENCE A ETAPA: quem já recebeu decisão sai da contagem de etapa e entra na de
       // desfecho, mesmo tendo uma etapa gravada na linha. É a régua do contrato do backend.
-      const alvo = l.candidatura.situacao === "ATIVO" ? porEtapa : porDesfecho;
+      const alvo = l.candidatura.situacao === "ATIVO" ? porEtapaLocal : porDesfechoLocal;
       alvo[chave] = (alvo[chave] ?? 0) + 1;
     }
+    const porEtapa = kpisBase?.porEtapa ?? porEtapaLocal;
+    const porDesfecho = kpisBase?.porSituacao ?? porDesfechoLocal;
     return {
-      total: linhasSemCard.length,
+      // TOTAL É SEMPRE O NÚMERO REAL DA BASE FILTRADA (`total` é campo obrigatório da resposta), e
+      // não a contagem das linhas carregadas.
+      total: totalBase,
+      // "SEM VAGA" SEGUE DA CONTAGEM LOCAL: o servidor não envia esse número, e ele é a ausência de
+      // candidatura (quem está na base e não foi alocado). Com o teto de 200 ele pode subcontar, que
+      // é a mesma limitação do corte de página que o aviso logo acima declara.
       semVaga,
       etapas: cardsDeEtapa(catalogoEtapas, porEtapa),
       desfechos: cardsDeDesfecho(porDesfecho),
     };
-  }, [linhasSemCard, catalogoEtapas]);
+  }, [linhasSemCard, catalogoEtapas, kpisBase, totalBase]);
 
   const linhas = useMemo(() => {
     if (cardAtivo === CARD_TOTAL) return linhasSemCard;
@@ -487,8 +552,8 @@ export default function CentralDeCandidatosPage() {
         // O mesmo texto que a célula mostra: nome de divulgação e, na falta dele, o código.
         valor: (l) => l.candidatura?.vagaNome ?? l.candidatura?.vagaCodigo ?? null,
       },
-      { chave: "cliente", tipo: "texto", valor: (l) => l.vaga?.clienteNome ?? null },
-      { chave: "cargo", tipo: "texto", valor: (l) => l.vaga?.cargoNome ?? null },
+      { chave: "cliente", tipo: "texto", valor: (l) => l.candidatura?.clienteNome ?? null },
+      { chave: "cargo", tipo: "texto", valor: (l) => l.candidatura?.cargoNome ?? null },
       {
         chave: "etapa",
         tipo: "status",
@@ -518,22 +583,34 @@ export default function CentralDeCandidatosPage() {
   const ord = useOrdenacao(colunasOrdenaveis, linhas);
   const visiveis = ord.itens;
 
+  /**
+   * AS OPÇÕES DE VAGA E DE CLIENTE VÊM DE `/as/candidatos/opcoes` (§A.37), não de `/as/vagas`. A
+   * Central de Vagas (05/10) fez `/as/vagas` devolver só vaga LIBERADA, e com isso estes dois filtros
+   * encolhiam para as 6% liberadas, escondendo o cliente e a vaga de quase toda a base. O endpoint de
+   * opções traz os DISTINTOS que de fato aparecem nas candidaturas, qualquer que seja o status.
+   */
   const optVagas = useMemo(
     () =>
-      vagas.map((v) => ({
+      (opcoes?.vagas ?? []).map((v) => ({
         value: v.id,
-        label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome",
+        label: v.nome ?? v.codigo ?? "Vaga sem nome",
         hint: v.codigo ?? undefined,
       })),
-    [vagas],
+    [opcoes],
   );
 
-  /** Os clientes que de fato têm vaga aberta no sistema. Filtro só oferece o que existe. */
+  /**
+   * O FILTRO DE CLIENTE CASA PELO NOME, porque a projeção da candidatura carrega `clienteNome` e não
+   * o código (a opção por código não teria como ser aplicada na linha). Nomes repetidos são
+   * deduplicados, para o mesmo rótulo não aparecer duas vezes no seletor.
+   */
   const optClientes = useMemo(() => {
-    const mapa = new Map<string, string>();
-    for (const v of vagas) if (v.codCliente) mapa.set(v.codCliente, v.clienteNome ?? v.codCliente);
-    return [...mapa].map(([value, label]) => ({ value, label, hint: value }));
-  }, [vagas]);
+    const nomes = new Set<string>();
+    for (const c of opcoes?.clientes ?? []) if (c.nome) nomes.add(c.nome);
+    return [...nomes]
+      .sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }))
+      .map((nome) => ({ value: nome, label: nome }));
+  }, [opcoes]);
 
   /**
    * ─ AS VAGAS QUE PODEM RECEBER ALOCAÇÃO MANUAL, E A RÉGUA NÃO É "RECEBE CANDIDATO" ─────────────
@@ -910,14 +987,14 @@ export default function CentralDeCandidatosPage() {
                     </td>
                     <td className="text-center">
                       {l.candidatura ? (
-                        (l.vaga?.clienteNome ?? "não informado")
+                        (l.candidatura.clienteNome ?? "não informado")
                       ) : (
                         <CelulaSemCandidatura linha={l} />
                       )}
                     </td>
                     <td className="text-center">
                       {l.candidatura ? (
-                        (l.vaga?.cargoNome ?? "não informado")
+                        (l.candidatura.cargoNome ?? "não informado")
                       ) : (
                         <CelulaSemCandidatura linha={l} />
                       )}

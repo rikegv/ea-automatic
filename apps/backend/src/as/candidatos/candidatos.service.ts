@@ -16,6 +16,8 @@ import type {
   AsCandidaturaEtapaItem,
   AsCandidatoFicha,
   AsCandidatoListItem,
+  AsCandidatosKpis,
+  AsCandidatosOpcoes,
   AsCandidatosPagina,
   AsCandidaturaEncerrada,
   AsCandidaturaItem,
@@ -46,6 +48,8 @@ import {
   asCandidaturas,
   asContatos,
   asRetencaoEventos,
+  cargos,
+  clientes,
   usuarios,
   vagas,
 } from "../../db/schema";
@@ -740,6 +744,22 @@ export class CandidatosService {
       dto.semCandidatura === true,
     );
 
+    /*
+     * ┌─ OS KPIS CONTAM O CONJUNTO FILTRADO INTEIRO, NUNCA A PAGINA (06/10/2026) ──────────────────┐
+     * │ `total` acima ja e o numero real de candidatos. Os cards de etapa/situacao precisavam do    │
+     * │ mesmo tratamento: a tela os derivava das linhas CARREGADAS, entao com 200 de 81 mil o time  │
+     * │ lia "95 em Captacao" quando sao dezenas de milhares. Estas agregacoes rodam sobre os MESMOS  │
+     * │ `filtros` do `buscar`, antes do `limit`, num join candidatos+candidaturas, e devolvem a      │
+     * │ quebra da BASE filtrada. §A.6: sao agregados, nenhum identificado desce.                     │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * SEM FUNIL, SEM KPI: a chamada `semCandidatura: true` oferece gente para alocacao e nao tem
+     * coluna de funil (ver `funilDaPagina`); contar etapa/situacao ali seria trabalho jogado fora.
+     */
+    const kpis = dto.semCandidatura
+      ? undefined
+      : await this.kpisDaBusca(filtros.length > 0 ? and(...filtros) : undefined);
+
     const itens: AsCandidatoListItem[] = linhas.map((l) => ({
       id: l.id,
       nome: l.nome,
@@ -768,6 +788,93 @@ export class CandidatosService {
       // TRUNCADO É DERIVADO, e nunca um flag gravado à parte: dois números que deveriam concordar
       // discordam no primeiro ajuste. Sobrou alguém além do que esta página mostra?
       truncado: offset + itens.length < total,
+      // AUSENTE quando nao calculado (chamada `semCandidatura`), nunca `{}`: ver o tipo.
+      ...(kpis ? { kpis } : {}),
+    };
+  }
+
+  /*
+   * A QUEBRA POR ETAPA E POR SITUACAO DO CONJUNTO FILTRADO INTEIRO, em DUAS agregacoes baratas.
+   *
+   * O JOIN e `candidatos INNER candidaturas`, e as DUAS agregacoes partem do MESMO filtro recebido,
+   * que e o `and(...filtros)` montado pelo `buscar`. Como os filtros referem colunas de
+   * `as_candidatos` (cpf, nome, origem) e subconsultas em `ID_DO_CANDIDATO` (`as_candidatos.id`), o
+   * join precisa ter a tabela de candidatos como fonte para elas resolverem. §A.6: o `select` so
+   * pede o codigo da etapa/situacao e um `count`, nenhum identificador.
+   */
+  private async kpisDaBusca(filtro: SQL | undefined): Promise<AsCandidatosKpis> {
+    const porEtapaLinhas = await this.db
+      .select({
+        chave: asCandidaturas.etapa,
+        quantidade: sql<number>`count(*)::int`,
+      })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .where(filtro)
+      .groupBy(asCandidaturas.etapa);
+
+    const porSituacaoLinhas = await this.db
+      .select({
+        chave: asCandidaturas.situacao,
+        quantidade: sql<number>`count(*)::int`,
+      })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .where(filtro)
+      .groupBy(asCandidaturas.situacao);
+
+    const porEtapa: Record<string, number> = {};
+    for (const l of porEtapaLinhas) porEtapa[l.chave] = Number(l.quantidade ?? 0);
+    const porSituacao: Record<string, number> = {};
+    for (const l of porSituacaoLinhas) porSituacao[l.chave] = Number(l.quantidade ?? 0);
+
+    return { porEtapa, porSituacao };
+  }
+
+  /*
+   * ─ AS OPCOES DOS FILTROS, DA BASE DE CANDIDATOS E NAO DE `/as/vagas` (06/10/2026) ───────────────
+   *
+   * Os clientes, cargos e vagas DISTINTOS que aparecem NAS CANDIDATURAS. Desacopla a Central de
+   * Candidatos do `/as/vagas` filtrado pela Central de Vagas, que so traz liberadas e encolhia estes
+   * filtros (a vaga em revisao, 94% da base, nao aparecia). §A.37: a opcao do filtro vem de endpoint,
+   * nunca das linhas carregadas. §A.6: so rotulo e codigo de catalogo, nenhum dado pessoal.
+   *
+   * TRES CONSULTAS DISTINTAS, e nao uma com tres colunas: uma vaga sem cliente nao pode sumir da
+   * lista de vagas so porque o cliente dela e nulo, e distinct sobre a tripla daria uma linha por
+   * combinacao. Cada eixo e um `distinct` proprio, com os nulos descartados onde nao fazem sentido.
+   */
+  async opcoes(): Promise<AsCandidatosOpcoes> {
+    const clientesLinhas = await this.db
+      .selectDistinct({
+        codCliente: clientes.codCliente,
+        nome: sql<string>`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial})`,
+      })
+      .from(asCandidaturas)
+      .innerJoin(vagas, eq(vagas.id, asCandidaturas.vagaId))
+      .innerJoin(clientes, eq(clientes.codCliente, vagas.codCliente))
+      .orderBy(sql`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial})`);
+
+    const cargosLinhas = await this.db
+      .selectDistinct({ id: cargos.id, nome: cargos.nome })
+      .from(asCandidaturas)
+      .innerJoin(vagas, eq(vagas.id, asCandidaturas.vagaId))
+      .innerJoin(cargos, eq(cargos.id, vagas.cargoId))
+      .orderBy(cargos.nome);
+
+    const vagasLinhas = await this.db
+      .selectDistinct({
+        id: vagas.id,
+        codigo: vagas.codigo,
+        nome: vagas.nomeDivulgacao,
+      })
+      .from(asCandidaturas)
+      .innerJoin(vagas, eq(vagas.id, asCandidaturas.vagaId))
+      .orderBy(vagas.nomeDivulgacao);
+
+    return {
+      clientes: clientesLinhas.map((l) => ({ codCliente: l.codCliente, nome: l.nome })),
+      cargos: cargosLinhas.map((l) => ({ id: l.id, nome: l.nome })),
+      vagas: vagasLinhas.map((l) => ({ id: l.id, codigo: l.codigo, nome: l.nome })),
     };
   }
 
@@ -3703,9 +3810,34 @@ export class CandidatosService {
         ultimoContatoEm: asCandidaturas.ultimoContatoEm,
         vagaCodigo: vagas.codigo,
         vagaNome: vagas.nomeDivulgacao,
+        /*
+         * CLIENTE E CARGO VEM DAQUI, DO MESMO FUNIL, e nao mais do mapa de `/as/vagas` (06/10/2026).
+         *
+         * ┌─ POR QUE MUDOU DE FONTE ───────────────────────────────────────────────────────────────┐
+         * │ A Central de Candidatos cruzava a `vagaId` de cada candidatura contra `GET /as/vagas`    │
+         * │ para achar cliente/cargo. A Central de Vagas (05/10) passou a devolver so vaga LIBERADA, │
+         * │ entao a vaga em revisao (94% da base) sumiu daquele mapa e o cargo passou a pintar       │
+         * │ "nao informado" numa linha que TEM cargo. Trazer os dois do join com `vagas` que ja      │
+         * │ monta `vagaNome` desacopla a tela e corrige a regressao de uma vez.                       │
+         * └──────────────────────────────────────────────────────────────────────────────────────────┘
+         *
+         * `leftJoin`, e NAO inner: a vaga em revisao tem `cod_cliente`/`cargo_id` NULOS (o cliente so
+         * nasce quando o time libera a vaga), e um inner apagaria a candidatura inteira, trocando a
+         * regressao por uma cegueira pior. SEM filtro de status da vaga: o `innerJoin(vagas)` acima
+         * ja traz a vaga em revisao, e e ela que interessa aqui.
+         *
+         * §A.6: cliente (operacao/razao) e cargo sao atributos da VAGA, nao dado pessoal do candidato.
+         * `coalesce(nomeOperacao, razaoSocial)` e o mesmo rotulo que o resto do sistema usa.
+         */
+        clienteNome: sql<
+          string | null
+        >`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial})`,
+        cargoNome: cargos.nome,
       })
       .from(asCandidaturas)
       .innerJoin(vagas, eq(vagas.id, asCandidaturas.vagaId))
+      .leftJoin(clientes, eq(clientes.codCliente, vagas.codCliente))
+      .leftJoin(cargos, eq(cargos.id, vagas.cargoId))
       .where(inArray(asCandidaturas.candidatoId, ids))
       // A MAIS RECENTE PRIMEIRO, a mesma ordem de `candidaturasPor`: a tela mostra a primeira.
       .orderBy(desc(asCandidaturas.alocadoEm));
@@ -3718,6 +3850,8 @@ export class CandidatosService {
         vagaId: l.vagaId,
         vagaCodigo: l.vagaCodigo,
         vagaNome: l.vagaNome,
+        clienteNome: l.clienteNome,
+        cargoNome: l.cargoNome,
         etapa: l.etapa,
         situacao: l.situacao,
         // TEXTO ISO, e nunca o `Date` cru do driver: a tela espera texto, e o erro de um objeto

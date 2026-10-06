@@ -28,6 +28,7 @@ import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
   type AsCandidatoFicha,
   type AsCandidatoOrigem,
+  type AsCandidatosOpcoes,
   type AsCandidatosPagina,
   type AsCandidaturaItem,
   type AsContatoItem,
@@ -113,6 +114,18 @@ export function avisoDeCorte(pagina: {
 }): string | null {
   if (!pagina.truncado) return null;
   return `Mostrando ${pagina.itens.length} de ${pagina.total} candidatos. Use a busca para encontrar quem não está na lista.`;
+}
+
+/**
+ * AS OPÇÕES DOS FILTROS da Central de Candidatos, da BASE DE CANDIDATOS e não de `/as/vagas`.
+ *
+ * §A.37: opção de filtro vem de ENDPOINT, nunca das linhas carregadas. A frente da Central de Vagas
+ * (05/10) fez `/as/vagas` devolver só vaga LIBERADA, então os filtros de cliente e vaga desta tela
+ * encolhiam para as liberadas (6% da base). Este endpoint traz os clientes, cargos e vagas DISTINTOS
+ * que aparecem nas candidaturas, independente do status da vaga. §A.6: rótulo e código de catálogo.
+ */
+export function opcoesDeCandidatos(token: string | null): Promise<AsCandidatosOpcoes> {
+  return apiFetch<AsCandidatosOpcoes>("/as/candidatos/opcoes", { token });
 }
 
 /**
