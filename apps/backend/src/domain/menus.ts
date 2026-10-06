@@ -429,6 +429,14 @@ export const MENUS: MenuDef[] = [
       "ClientesController.comerciais",
       "ClientesController.reativar",
       "ClientesController.remove",
+      // IMPORTAÇÃO EM MASSA DE CLIENTES POR PLANILHA: reivindicada NOMINALMENTE, pela mesma razão do
+      // `create`. Cadastrar cliente em lote é ADMINISTRAÇÃO (Master / Super Admin). Sem estas três
+      // linhas, os handlers seriam ABERTOS por construção (`menu.guard.ts` devolve `true` para
+      // operação não reivindicada) e qualquer sessão autenticada cadastraria clientes em massa. O
+      // NOME do método é a autorização: renomear sem mexer aqui reabre a rota.
+      "ClientesController.importarModelo",
+      "ClientesController.importarPrevia",
+      "ClientesController.importarConfirmar",
       // LOJAS DO CLIENTE (cenário 1, etapa 1): NENHUMA operação do `LojasController` é reivindicada
       // aqui, e a ausência é DELIBERADA, não esquecimento. Decisão do diretor (Q3, 01/09/2026):
       // cadastrar e importar loja é trabalho de QUALQUER consultor autenticado, não privilégio de

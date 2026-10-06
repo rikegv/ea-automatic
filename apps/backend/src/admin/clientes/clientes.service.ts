@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import ExcelJS from "exceljs";
 import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
@@ -19,9 +20,20 @@ import {
 } from "../../db/schema";
 import { segmentoEscolhido } from "../../as/segmentos/segmentos.service";
 import { comercialEscolhido } from "../../as/comerciais/comerciais.service";
-import type { CreateClienteDto, UpdateClienteDto } from "./clientes.dto";
+import type { CreateClienteDto, LinhaImportacaoClienteDto, UpdateClienteDto } from "./clientes.dto";
 import { opcaoIdDoVinculo, VINCULO_OPCOES } from "./vinculo-opcoes";
 import { ROTULO_TIPO_SERVICO } from "../../domain/vinculo";
+import {
+  ErroLeituraPlanilha,
+  lerPlanilha,
+  numeroDaLinhaNoArquivo,
+} from "../../planilha/leitor";
+import {
+  avaliarImportacao,
+  mapearColunas,
+  type GradeParaImportacao,
+  type LinhaRecusada,
+} from "./clientes-importacao";
 
 /** Faróis de admissão "em andamento" (afetados ao inativar o cliente). Excluídos os terminais. */
 const FAROIS_TERMINAIS = ["ADMISSAO_CONCLUIDA", "DECLINOU", "RESCISAO"] as const;
@@ -381,5 +393,146 @@ export class ClientesService {
       .returning({ cod: clientes.codCliente });
     if (!row) throw new NotFoundException("Cliente não encontrado");
     return { ok: true, ativo: true };
+  }
+
+  // ── IMPORTAÇÃO EM MASSA POR PLANILHA ───────────────────────────────────────
+
+  /** A mensagem única de arquivo sem as colunas obrigatórias. §A.11: sem travessão. */
+  private static readonly SEM_COLUNAS_OBRIGATORIAS =
+    "Não encontrei as colunas obrigatórias. O modelo precisa de Código do Cliente e Razão Social.";
+
+  /** Todos os códigos já no banco, como Set, para a régua de duplicata conferir. */
+  private async codigosExistentes(): Promise<Set<string>> {
+    const linhas = await this.db.select({ cod: clientes.codCliente }).from(clientes);
+    return new Set(linhas.map((l) => l.cod));
+  }
+
+  /**
+   * PRÉVIA: lê a planilha, casa as colunas e diz o que vai acontecer, SEM GRAVAR NADA.
+   *
+   * DUAS ETAPAS, e a primeira não escreve, pelo mesmo motivo das lojas e das matrículas: importação
+   * que grava direto é importação que ninguém confere, e o estrago aparece depois.
+   *
+   * COLUNA OBRIGATÓRIA AUSENTE RECUSA O ARQUIVO INTEIRO (400), e não vira recusa por linha: sem a
+   * coluna do código ou da razão social não há o que avaliar linha a linha, e o certo é a pessoa
+   * corrigir o cabeçalho ou baixar o modelo.
+   *
+   * §A.6: o arquivo vive em memória, não passa por staging e nada do conteúdo é logado.
+   */
+  async previaImportacao(buffer: Buffer, aba?: string) {
+    let grade;
+    try {
+      grade = await lerPlanilha(buffer, { aba });
+    } catch (err) {
+      if (err instanceof ErroLeituraPlanilha) throw new BadRequestException(err.message);
+      throw err;
+    }
+
+    const mapa = mapearColunas(grade.cabecalho);
+    if (mapa.colCodigo === null || mapa.colRazao === null) {
+      throw new BadRequestException(ClientesService.SEM_COLUNAS_OBRIGATORIAS);
+    }
+
+    const existentes = await this.codigosExistentes();
+    const resultado = avaliarImportacao(grade, mapa, existentes, (i) =>
+      numeroDaLinhaNoArquivo(grade, i),
+    );
+
+    return {
+      colunas: grade.cabecalho,
+      mapa,
+      ...resultado,
+      abaUsada: grade.abaUsada,
+      abasDisponiveis: grade.abasDisponiveis,
+    };
+  }
+
+  /**
+   * CONFIRMA a importação. Recebe as LINHAS que a prévia mostrou, não o arquivo, e RE-VALIDA no
+   * servidor contra o banco atual: não se confia no corpo do cliente para manter os invariantes do
+   * `create` (código único, razão social presente, CNPJ válido).
+   *
+   * INSERÇÃO TOLERANTE, linha a linha: cada insert é protegido, e um conflito de PK por corrida (dois
+   * imports do mesmo código ao mesmo tempo) vira recusa "Código já cadastrado" em vez de derrubar o
+   * lote inteiro. Não é transacional de propósito: uma linha problemática não deve desfazer as boas.
+   *
+   * §A.6: nada do conteúdo (CNPJ, razão social) é logado.
+   */
+  async confirmarImportacao(linhas: LinhaImportacaoClienteDto[]) {
+    // Reconstrói a grade a partir das linhas recebidas, com um cabeçalho fixo e conhecido, e deixa a
+    // MESMA régua da prévia decidir. O número da linha do arquivo vem do que a tela guardou.
+    const grade: GradeParaImportacao = {
+      cabecalho: ["codigo", "cnpj", "razao social", "nome operacao"],
+      linhas: linhas.map((l) => [
+        l.codCliente ?? "",
+        l.cnpj ?? "",
+        l.razaoSocial ?? "",
+        l.nomeOperacao ?? "",
+      ]),
+    };
+    const mapa = { colCodigo: 0, colCnpj: 1, colRazao: 2, colOperacao: 3 };
+
+    const existentes = await this.codigosExistentes();
+    const { aEntrar, recusadas } = avaliarImportacao(
+      grade,
+      mapa,
+      existentes,
+      (i) => linhas[i]?.linha ?? i + 2,
+    );
+
+    let entraram = 0;
+    const recusadasFinais: LinhaRecusada[] = [...recusadas];
+    for (const l of aEntrar) {
+      try {
+        await this.db.insert(clientes).values({
+          codCliente: l.codCliente,
+          cnpj: l.cnpj,
+          razaoSocial: l.razaoSocial,
+          nomeOperacao: l.nomeOperacao,
+        });
+        entraram += 1;
+      } catch {
+        // Conflito de PK por corrida (ou qualquer falha de gravação daquela linha): recusa aquela
+        // linha e segue, sem derrubar o lote. §A.6: o erro não é logado (poderia carregar o valor).
+        recusadasFinais.push({
+          linha: l.linha,
+          codCliente: l.codCliente,
+          motivo: "Código já cadastrado",
+        });
+      }
+    }
+
+    return { relatorio: { entraram, recusadas: recusadasFinais } };
+  }
+
+  /**
+   * MODELO da planilha de importação: só o cabeçalho, sem linha de exemplo. Os quatro rótulos são
+   * exatamente os que o `mapearColunas` reconhece. §A.11: sem travessão.
+   */
+  async modeloImportacao(
+    formato: "xlsx" | "csv",
+  ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    const cabecalho = ["Código do Cliente", "CNPJ", "Razão Social", "Nome da Operação"];
+
+    if (formato === "csv") {
+      // BOM utf-8 para o Excel abrir com acento certo; separador ponto e vírgula, padrão pt-BR.
+      const conteudo = "﻿" + cabecalho.join(";") + "\r\n";
+      return {
+        buffer: Buffer.from(conteudo, "utf8"),
+        filename: "modelo-clientes.csv",
+        contentType: "text/csv; charset=utf-8",
+      };
+    }
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Clientes");
+    ws.columns = cabecalho.map((rotulo) => ({ header: rotulo, width: Math.max(16, rotulo.length + 4) }));
+    ws.getRow(1).font = { bold: true };
+    const buffer = await wb.xlsx.writeBuffer();
+    return {
+      buffer: Buffer.from(buffer),
+      filename: "modelo-clientes.xlsx",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
   }
 }

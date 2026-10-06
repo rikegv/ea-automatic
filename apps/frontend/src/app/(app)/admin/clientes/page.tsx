@@ -13,6 +13,8 @@ import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { useSegmentos } from "@/lib/as-segmentos";
 import { useComerciais } from "@/lib/as-comerciais";
+import { casaBuscaCliente } from "@/lib/clientes-busca";
+import { ImportarClientesModal } from "@/components/admin/ImportarClientesModal";
 import { LojasDoCliente } from "@/components/admin/LojasDoCliente";
 import { GrupoDoCliente } from "@/components/admin/GrupoDoCliente";
 import { GruposClienteLivreto } from "@/components/admin/GruposClienteLivreto";
@@ -143,6 +145,8 @@ export default function ClientesPage() {
      administra cliente administra grupo (decisão do diretor), e um menu novo nasceria invisível
      para todo mundo até ser liberado um a um (§A.23). */
   const [gruposAberto, setGruposAberto] = useState(false);
+  // Modal de cadastro em massa por planilha (ao lado de "Cadastrar Grupos").
+  const [importarAberto, setImportarAberto] = useState(false);
   // Opções de vínculo (cacheadas no mount) e a opção escolhida no select da edição.
   const [opcoesVinculo, setOpcoesVinculo] = useState<VinculoOpcao[]>([]);
   const [vinculoSel, setVinculoSel] = useState<string>("");
@@ -182,25 +186,16 @@ export default function ClientesPage() {
   }, [token]);
 
   const visiveis = useMemo(() => {
-    const q = busca.trim().toLowerCase();
+    // A BUSCA CASA TODAS AS COLUNAS QUE A TABELA MOSTRA (pedido do diretor): código, razão social,
+    // CNPJ, nome de operação, empresa (Soulan), CNPJ do vínculo, tipo de serviço e o rótulo de
+    // status. Antes casava só razão social, código e nome de operação. A régua vive em
+    // `casaBuscaCliente` (função pura, régua `normBusca` da Esteira), então o teste do tester guarda
+    // o match de verdade em vez de uma réplica.
     return rows.filter((c) => {
       if (filtro === "ativos" && !c.ativo) return false;
       if (filtro === "inativos" && c.ativo) return false;
       if (filtroTipo && c.tipoServico !== filtroTipo) return false;
-      // A busca casa os TRÊS: razão social, código e NOME DE OPERAÇÃO (pedido do diretor,
-      // 01/09/2026). O nome de operação entrou porque é por ele que o time procura na maioria das
-      // vezes: a razão social do CRM é "NIBS PARTICIPACOES S.A.", e ninguém digita isso para achar o
-      // CRM. É `nomeOperacao ?? ""` porque a coluna é nulável e cliente sem operação não pode sumir
-      // da busca por causa disso.
-      if (
-        q &&
-        !(
-          c.razaoSocial.toLowerCase().includes(q) ||
-          c.codCliente.toLowerCase().includes(q) ||
-          (c.nomeOperacao ?? "").toLowerCase().includes(q)
-        )
-      )
-        return false;
+      if (!casaBuscaCliente(c, busca)) return false;
       if (soPendencia && !temPendencia(c)) return false;
       return true;
     });
@@ -621,6 +616,16 @@ export default function ClientesPage() {
         <Button onClick={() => setGruposAberto(true)} className="px-4 py-1.5 text-[13px]">
           Cadastrar Grupos
         </Button>
+        {/* IMPORTAR PLANILHA: cadastro em massa de clientes por planilha, ao lado de Cadastrar
+            Grupos. O modal lê o arquivo (prévia), mostra o que entra e o que é recusado por linha,
+            e só grava no "Confirmar Importação". Recarrega a lista ao concluir. */}
+        <Button
+          variant="secondary"
+          onClick={() => setImportarAberto(true)}
+          className="px-4 py-1.5 text-[13px]"
+        >
+          Importar Planilha
+        </Button>
         <span aria-hidden className="mx-1 h-5 w-px bg-[var(--border)]" />
         {(["ativos", "inativos", "todos"] as Filtro[]).map((f) => (
           <button
@@ -671,8 +676,8 @@ export default function ClientesPage() {
         <input
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar por razão social ou código"
-          aria-label="Buscar cliente por razão social ou código"
+          placeholder="Buscar em todas as colunas"
+          aria-label="Buscar cliente em todas as colunas"
           className="ds-input h-auto w-auto min-w-[16rem] py-1.5"
         />
 
@@ -766,6 +771,15 @@ export default function ClientesPage() {
       </GlassCard>
 
       {gruposAberto && <GruposClienteLivreto onFechar={() => setGruposAberto(false)} />}
+      {importarAberto && (
+        <ImportarClientesModal
+          onClose={() => setImportarAberto(false)}
+          onConcluido={() => {
+            setImportarAberto(false);
+            void load();
+          }}
+        />
+      )}
     </>
   );
 }

@@ -1,5 +1,8 @@
 import { TIPO_MARCACAO, type TipoMarcacao } from "@ea/shared-types";
+import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
@@ -9,6 +12,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from "class-validator";
 
 export class CreateClienteDto {
@@ -55,6 +59,49 @@ export class CreateClienteDto {
   @IsInt()
   @Min(1)
   comercialId?: number | null;
+}
+
+/**
+ * Uma linha aprovada na prévia da importação em massa de clientes. O CONFIRMAR grava exatamente
+ * estas linhas e NÃO relê o arquivo: o que a pessoa viu na tela é o que vai para o banco. O service
+ * ainda re-valida cada linha contra o banco atual (não confia no cliente).
+ *
+ * `cnpj` e `nomeOperacao` opcionais, espelhando as colunas opcionais do schema. `razaoSocial`
+ * obrigatória, porque sem ela a linha não pode nascer (coluna NOT NULL).
+ */
+export class LinhaImportacaoClienteDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  codCliente!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(18)
+  cnpj?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  razaoSocial!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  nomeOperacao?: string;
+
+  /** Número da linha no arquivo. Só informativo, para a tela referenciar a planilha da pessoa. */
+  @IsOptional()
+  @IsInt()
+  linha?: number;
+}
+
+export class AplicarImportacaoClientesDto {
+  @IsArray()
+  @ArrayMaxSize(2000, { message: "Máximo de 2.000 clientes por importação." })
+  @ValidateNested({ each: true })
+  @Type(() => LinhaImportacaoClienteDto)
+  linhas!: LinhaImportacaoClienteDto[];
 }
 
 export class DefinirVinculoDto {

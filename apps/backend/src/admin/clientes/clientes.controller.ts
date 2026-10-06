@@ -1,7 +1,30 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  StreamableFile,
+  UploadedFile,
+  UseFilters,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import type { Response } from "express";
 import { ClientesService } from "./clientes.service";
-import { CreateClienteDto, DefinirVinculoDto, UpdateClienteDto } from "./clientes.dto";
+import {
+  AplicarImportacaoClientesDto,
+  CreateClienteDto,
+  DefinirVinculoDto,
+  UpdateClienteDto,
+} from "./clientes.dto";
 import { Roles } from "../../auth/decorators";
+import { exigirPlanilhaNoTeto, OPCOES_UPLOAD_PLANILHA } from "../../planilha/upload";
+import { FiltroUploadPlanilha } from "../../planilha/upload-erro.filter";
 
 /**
  * Catálogo de CLIENTES.
@@ -56,6 +79,52 @@ export class ClientesController {
   @Get("comerciais")
   comerciais(@Query("incluirInativos") incluirInativos?: string) {
     return this.clientes.comerciais(incluirInativos === "1" || incluirInativos === "true");
+  }
+
+  /**
+   * ─ IMPORTAÇÃO EM MASSA DE CLIENTES POR PLANILHA ──────────────────────────────────────────────
+   *
+   * AS TRÊS ROTAS SÃO REIVINDICADAS NOMINALMENTE no menu `clientes` (`domain/menus.ts`:
+   * `ClientesController.importarModelo/importarPrevia/importarConfirmar`), porque cadastrar cliente
+   * em massa é ADMINISTRAÇÃO, não trabalho de consultor. Handler que menu nenhum reivindica é ABERTO
+   * por construção (`menu.guard.ts` devolve `true`), então SEM as linhas no menu qualquer sessão
+   * autenticada cadastraria clientes em lote. O NOME do método é parte da autorização: renomear sem
+   * mexer no menu REABRE a rota, em silêncio.
+   *
+   * DECLARADAS ANTES das rotas `:codCliente`: o Nest casa rotas na ordem de declaração.
+   */
+
+  /** MODELO da planilha (só cabeçalho). `?formato=csv` baixa CSV; o padrão é xlsx. */
+  @Get("importacao/modelo")
+  async importarModelo(
+    @Res({ passthrough: true }) res: Response,
+    @Query("formato") formato?: string,
+  ): Promise<StreamableFile> {
+    const alvo = formato === "csv" ? "csv" : "xlsx";
+    const { buffer, filename, contentType } = await this.clientes.modeloImportacao(alvo);
+    res.set({
+      "Content-Type": contentType,
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    });
+    return new StreamableFile(buffer);
+  }
+
+  /**
+   * PRÉVIA: lê a planilha e diz o que vai acontecer, SEM GRAVAR NADA. O arquivo vai no corpo
+   * (multipart), nunca em query string (§A.6).
+   */
+  @Post("importacao/previa")
+  @UseFilters(FiltroUploadPlanilha)
+  @UseInterceptors(FileInterceptor("file", OPCOES_UPLOAD_PLANILHA))
+  importarPrevia(@UploadedFile() file?: Express.Multer.File, @Body("aba") aba?: string) {
+    const arquivo = exigirPlanilhaNoTeto(file);
+    return this.clientes.previaImportacao(arquivo, aba);
+  }
+
+  /** CONFIRMA: grava as linhas que a prévia mostrou, re-validando no servidor. */
+  @Post("importacao/confirmar")
+  importarConfirmar(@Body() dto: AplicarImportacaoClientesDto) {
+    return this.clientes.confirmarImportacao(dto.linhas);
   }
 
   @Post()
