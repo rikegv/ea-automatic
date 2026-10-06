@@ -41,6 +41,51 @@ export function codigoJaUsado(codigo: string, existentes: string[]): boolean {
   return existentes.some((e) => normalizarCodigoVaga(e) === alvo);
 }
 
+/** Uma linha de vaga reduzida ao que a trava de código precisa: o código e a identidade do Pandapé. */
+export interface VagaParaTravaDeCodigo {
+  codigo: string;
+  idVacancyPandape: string | null | undefined;
+}
+
+/**
+ * SEM IDENTIDADE DE INTEGRAÇÃO: a vaga foi cadastrada à mão, o `id_vacancy_pandape` é nulo (ou vazio).
+ * Nulo, indefinido e string em branco são a mesma resposta: "não veio do Pandapé".
+ */
+function semIdentidadePandape(id: string | null | undefined): boolean {
+  return id === null || id === undefined || id.trim() === "";
+}
+
+/**
+ * A TRAVA DE DUPLICIDADE DESACOPLADA DO `reference` DO PANDAPÉ (correção do diretor, 06/10).
+ *
+ * O `codigo` recebe o `reference` do Pandapé, que é atributo de ORIGEM e o Pandapé REUSA entre vagas
+ * distintas: medido, 7 references em 42 vagas, cada uma com `id_vacancy_pandape` próprio e distinto
+ * (o pior caso, o reference 332225, aparece em 30 vagas). A `codigoJaUsado` acima tratava o código
+ * como chave única e barrava a segunda vaga de cada reference, prendendo processos seletivos reais na
+ * fila. A IDENTIDADE da vaga-Pandapé é o `id_vacancy_pandape`, não o código: é por ele que a varredura
+ * casa a vaga, nunca pelo reference.
+ *
+ * A COLISÃO VERDADEIRA é só entre duas vagas MANUAIS: quem digita o número à mão não tem identidade de
+ * integração (id nulo), então dois iguais são o mesmo processo cadastrado duas vezes. Vaga-Pandapé (id
+ * setado) não disputa pelo código, porque a identidade dela é o id; e manual contra Pandapé também não,
+ * porque um dos lados tem id e o outro não.
+ *
+ * REGRA: bloqueia SÓ quando a vaga atual é manual (id vazio) E existe outra linha de MESMO código que
+ * também é manual (id vazio). `codigoJaUsado` fica para quem não carrega o contexto do id.
+ */
+export function codigoColideComVagaManual(
+  codigo: string,
+  existentes: ReadonlyArray<VagaParaTravaDeCodigo>,
+  idVacancyPandapeAtual: string | null | undefined,
+): boolean {
+  // A vaga atual veio do Pandapé: sua identidade é o id, o código repetido é só o reference de origem.
+  if (!semIdentidadePandape(idVacancyPandapeAtual)) return false;
+  const alvo = normalizarCodigoVaga(codigo);
+  return existentes.some(
+    (e) => semIdentidadePandape(e.idVacancyPandape) && normalizarCodigoVaga(e.codigo) === alvo,
+  );
+}
+
 /**
  * A CONTRAPARTE DA ABERTURA (frente 2 da OST de 22/08).
  *

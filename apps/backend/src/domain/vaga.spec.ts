@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  codigoColideComVagaManual,
   codigoJaUsado,
   excessoDePosicoes,
   ladosDaVaga,
@@ -38,6 +39,88 @@ describe("codigoJaUsado (a trava um código = um processo seletivo)", () => {
 
   it("sem nenhuma vaga cadastrada, nada conflita", () => {
     expect(codigoJaUsado("511805", [])).toBe(false);
+  });
+});
+
+/**
+ * A TRAVA DESACOPLADA DO `reference` DO PANDAPÉ (correção do diretor, 06/10).
+ *
+ * O `codigo` recebe o `reference` do Pandapé, que o Pandapé REUSA entre vagas distintas (medido: 7
+ * references em 42 vagas, cada uma com `id_vacancy_pandape` próprio). A identidade da vaga-Pandapé é
+ * o id, não o reference. Estes quatro casos são a decisão do diretor, e são o que a régua tem de
+ * satisfazer.
+ */
+describe("codigoColideComVagaManual (a trava que olha a identidade, não o reference)", () => {
+  it("CASO 1: duas vagas-Pandapé distintas (ids diferentes) com o MESMO reference, ambas liberam", () => {
+    // Gravando a 2ª (id "VAC-B"); a 1ª (id "VAC-A") já está na base com o mesmo código. Hoje a 2ª
+    // batia na trava; agora não, porque a identidade de cada uma é o seu id.
+    expect(
+      codigoColideComVagaManual(
+        "332225",
+        [{ codigo: "332225", idVacancyPandape: "VAC-A" }],
+        "VAC-B",
+      ),
+    ).toBe(false);
+  });
+
+  it("CASO 2: duas vagas MANUAIS (id nulo) com o mesmo código, a 2ª AINDA é barrada", () => {
+    // A trava não morreu: dois números digitados à mão iguais são o mesmo processo cadastrado duas vezes.
+    expect(
+      codigoColideComVagaManual("511805", [{ codigo: "511805", idVacancyPandape: null }], null),
+    ).toBe(true);
+  });
+
+  it("CASO 3: manual (id nulo) com código igual ao reference de uma vaga-Pandapé (id setado), NÃO barra", () => {
+    expect(
+      codigoColideComVagaManual(
+        "332225",
+        [{ codigo: "332225", idVacancyPandape: "VAC-A" }],
+        null,
+      ),
+    ).toBe(false);
+  });
+
+  it("CASO 4: editar/re-liberar a própria vaga não acusa colisão consigo mesma", () => {
+    // A própria vaga sai da lista de existentes (a consulta usa `ne(id, ignorarVagaId)`): sem outra
+    // linha de mesmo código, nada colide, inclusive quando ela é manual.
+    expect(codigoColideComVagaManual("511805", [], null)).toBe(false);
+    expect(codigoColideComVagaManual("332225", [], "VAC-A")).toBe(false);
+  });
+
+  it("vaga-Pandapé nova (id setado) com código igual ao de uma MANUAL existente também não colide", () => {
+    // A ponta contrária do caso 3: o que importa para a vaga-Pandapé é o id, e o manual não disputa com id.
+    expect(
+      codigoColideComVagaManual("511805", [{ codigo: "511805", idVacancyPandape: null }], "VAC-A"),
+    ).toBe(false);
+  });
+
+  it("entre várias linhas, basta UMA outra manual de mesmo código para a manual atual ser barrada", () => {
+    expect(
+      codigoColideComVagaManual(
+        "332225",
+        [
+          { codigo: "332225", idVacancyPandape: "VAC-A" },
+          { codigo: "332225", idVacancyPandape: "VAC-B" },
+          { codigo: "332225", idVacancyPandape: null },
+        ],
+        null,
+      ),
+    ).toBe(true);
+  });
+
+  it("a comparação de código segue normalizada (espaço e caixa) entre duas manuais", () => {
+    expect(
+      codigoColideComVagaManual(" sl123 ", [{ codigo: "SL123", idVacancyPandape: null }], null),
+    ).toBe(true);
+  });
+
+  it("id vazio ou só espaço conta como MANUAL (não veio do Pandapé)", () => {
+    expect(
+      codigoColideComVagaManual("511805", [{ codigo: "511805", idVacancyPandape: "" }], "   "),
+    ).toBe(true);
+    expect(
+      codigoColideComVagaManual("511805", [{ codigo: "511805", idVacancyPandape: undefined }], undefined),
+    ).toBe(true);
   });
 });
 

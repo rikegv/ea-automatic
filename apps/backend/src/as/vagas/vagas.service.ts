@@ -99,7 +99,7 @@ import {
   tetoDoLado,
 } from "../../domain/candidatura";
 import {
-  codigoJaUsado,
+  codigoColideComVagaManual,
   ladosDaVaga,
   statusVivoDaVaga,
   escolaridadeVivaDaVaga,
@@ -995,7 +995,9 @@ export class VagasService {
     const campos = this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId, herdaveis);
     this.travaObrigatorios(regua, campos, status);
 
-    await this.travaDuplicidadeDeCodigo(campos.codigo, null);
+    // A IDENTIDADE VAI JUNTO: no create a vaga é inserida com o `id_vacancy_pandape` do corpo, então
+    // é ele que diz se a vaga é manual (nulo) ou veio do Pandapé.
+    await this.travaDuplicidadeDeCodigo(campos.codigo, null, campos.idVacancyPandape);
     const beneficios = await this.validaBeneficios(dto.beneficios ?? []);
 
     // OS DOIS LADOS DA VAGA, pela régua do domínio. Quem não tem papel de A&S não abre vaga, nem em
@@ -4631,17 +4633,41 @@ export class VagasService {
    *
    * Lê só os códigos iguais ao digitado, não a tabela inteira: é a informação mínima que a régua
    * precisa, e mantém a checagem barata mesmo com a base importada dentro.
+   *
+   * ┌─ O CÓDIGO NÃO É A CHAVE DA VAGA-PANDAPÉ, O `id_vacancy_pandape` É (correção do diretor, 06/10) ┐
+   * │ `vagas.codigo` recebe o `reference` do Pandapé, que é atributo de ORIGEM e repetível: medido, │
+   * │ 7 references espalhados por 42 vagas distintas, cada uma com `id_vacancy_pandape` próprio. A   │
+   * │ decisão (a régua pura `codigoColideComVagaManual`) é: a colisão só existe entre duas vagas     │
+   * │ MANUAIS (ambas sem `id_vacancy_pandape`); duas vagas-Pandapé distintas, ou manual contra       │
+   * │ Pandapé, não colidem, porque a identidade da vaga-Pandapé é o id, não o reference.             │
+   * │                                                                                                │
+   * │ A IDENTIDADE DA PRÓPRIA VAGA vem da LINHA GRAVADA quando há `ignorarVagaId` (edição/liberação  │
+   * │ PRESERVAM o `id_vacancy_pandape`, não o reescrevem), e do CORPO no create, que insere o campo. │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   private async travaDuplicidadeDeCodigo(
     codigo: string | null,
     ignorarVagaId: string | null,
+    idVacancyPandapeDoCorpo: string | null = null,
   ): Promise<void> {
     // SEM CÓDIGO NÃO HÁ DUPLICIDADE. O rascunho pode ainda não ter número, e cobrar unicidade de uma
     // ausência barraria todos os rascunhos sem código a partir do segundo.
     if (!codigo) return;
 
+    // A IDENTIDADE DA VAGA SENDO GRAVADA. Na edição e na liberação o `id_vacancy_pandape` é lido da
+    // linha travada (as duas rotas omitem o carimbo no UPDATE, então o valor gravado é o que já está
+    // lá); no create, é o que o corpo insere. Sem este dado a régua não sabe se a vaga é manual.
+    let idVacancyPandapeAtual = idVacancyPandapeDoCorpo;
+    if (ignorarVagaId) {
+      const propria = await this.db
+        .select({ idVacancyPandape: vagas.idVacancyPandape })
+        .from(vagas)
+        .where(eq(vagas.id, ignorarVagaId));
+      idVacancyPandapeAtual = propria[0]?.idVacancyPandape ?? null;
+    }
+
     const existentes = await this.db
-      .select({ codigo: vagas.codigo })
+      .select({ codigo: vagas.codigo, idVacancyPandape: vagas.idVacancyPandape })
       .from(vagas)
       .where(
         // A PRÓPRIA VAGA FICA DE FORA quando o rascunho é salvo de novo: sem isto, o segundo
@@ -4652,9 +4678,10 @@ export class VagasService {
       );
 
     if (
-      !codigoJaUsado(
+      !codigoColideComVagaManual(
         codigo,
-        existentes.map((e) => e.codigo ?? ""),
+        existentes.map((e) => ({ codigo: e.codigo ?? "", idVacancyPandape: e.idVacancyPandape })),
+        idVacancyPandapeAtual,
       )
     ) {
       return;
