@@ -20625,3 +20625,48 @@ nao casar com o vinculo do cliente, e o sistema deixa errar de proposito, como e
 codigo bloqueia esse teste; e acao do diretor.
 
 *(Encerramento da sessao do GI, 06/10/2026, a pedido do diretor para reduzir sessoes ativas.)*
+
+---
+
+## 06/10/2026: ESTADO FINAL DA SESSAO PORTAL (fechamento), e a publicacao coordenada c28d8e0
+
+**Sessao Portal encerrada pelo diretor. Registro do estado para a proxima sessao retomar.**
+
+### O que esta PUBLICADO em producao (commitado + no ar)
+- **Publicacao `c28d8e0`** (HEAD do release `ea-release-portal`, servido pelos serviços systemd de
+  producao): data de nascimento obrigatoria no "+ Nova Admissao" (`c505a0b`), Central de Vagas (CRUD +
+  so liberadas, `226327c`/`f623485`), o conserto do `portal-leitor` (tipos de autenticidade, `c28d8e0`),
+  e tudo o mais commitado ate ali. Build feito de worktree LIMPO (nao do tree sujo), swap de artefato,
+  guard do GI conferido no dist (`enviarComGuardas`=0 na minha publicacao), health 200. Depois o G.I
+  publicou o gatilho do GI em ato isolado (`985d893`, 7 .js no dist + flag armada).
+- **Bug V12** (documento validado virava entregue) e **autenticidade da IA**: COMMITADOS e PUBLICADOS
+  via `ed10e72` (ancestral de `c28d8e0`). **Migration 0142 APLICADA em producao** (coluna
+  `documentos_admissao.conferir_autenticidade` e enum `categoria_regra_auditoria` presentes).
+- **Endereco do link do Portal**: `clientesportalsoulan.com.br` (no `.env` de PROD do `ea-release-portal`;
+  o `.env` do dev `ea-automatic` nao afeta prod). Link gerado no Gerenciador ja nasce com esse endereco.
+- **Go-live**: FEITO. O tunel `ea-portal-tunnel` aponta para **3021 (PRODUCAO)** (`-R :3121:127.0.0.1:3021`).
+  Fase 1 (app proprio) e Fase 2 (dominio publico, HTTPS, fail-closed, porta 22 fechada) no ar.
+- Producao saudavel no fechamento: backend 3011 = 200, Caddy 3010 = 200, app local 3021 = 200, dominio
+  publico clientesportalsoulan.com.br = 200, tunel ativo. Banco intocado pela publicacao (zero migracao nova).
+
+### O que esta SOLTO (nao commitado) no working tree de dev `ea-automatic`, PONTO DE RETOMADA
+- **A frente de ACESSO POR E-MAIL do candidato** (entrada sem CPF), INTENCIONALMENTE nao publicada,
+  **bloqueada no SendGrid (com o Fernando)**. Arquivos soltos (vulneravel por ser uncommitted; nao se
+  perde ao fechar a sessao, mas um `git reset --hard`/`checkout` de qualquer sessao apagaria):
+  `portal-acesso-email.{controller,dto,service}.ts` + specs, `domain/portal-acesso-email.ts`,
+  `drizzle/0134_portal_acesso_email.sql` (migration NAO aplicada em prod, correto), `portal-correio.service.ts`,
+  `domain/portal-envio.ts`, `domain/portal-evento.ts`, `portal-painel.*`, `admin/portal-links/page.tsx`,
+  e docs (`CONTRATO-PORTAL-ACESSO-EMAIL.md`, `MAPA-*`, `PEDIDO-FERNANDO-PORTAL-PUBLICO.md`).
+  Retoma quando o SendGrid destravar no Fernando.
+
+### PENDENTES registrados para a proxima sessao
+- **SendGrid** (no Fernando): entrada por e-mail do candidato sem CPF. Bloqueia a frente acima.
+- **Frente "sessao guardada vence o token novo"**: o candidato ve "link invalido" sem motivo quando a
+  sessao salva precede o token novo. Mapeada, a fazer.
+
+### Licao do dia (diagnostico, tres vezes no mesmo dia)
+Commit pela metade: o `ed10e72` subiu o USO dos campos de autenticidade sem a DECLARACAO dos tipos
+(`portal-leitor.service.ts`), entao o `main` so compilava com o working tree sujo. O mesmo modo de
+falha pegou o sync do GI e o `tables.ts`/`enums.ts`, sempre descoberto por quem foi buildar depois.
+**Criterio de PUBLICACAO nao e criterio de COMMIT: todo commit tem de deixar o `main` compilando
+sozinho.** (Proposta de virar regra permanente §A.48, aguardando confirmacao do diretor.)
