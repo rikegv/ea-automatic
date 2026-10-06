@@ -20861,3 +20861,48 @@ ponto de correcao: o build estava no ref `eab7456`, 2 commits atras de `origin/m
 Candidatos empurrou enquanto se buildava. Destravado conforme a condicao que o proprio `seguranca`
 deu: rebuild do ref correto (`032a49a` = origin/main), e as checagens A.6 re-conferidas no artefato
 novo. Boa pegada: evitou publicar sob premissa falsa ("release src defasado e bomba").
+
+---
+
+## 2026-10-06, sessão Portal/Acesso por E-mail: PUBLICADO E INERTE, só o SendGrid pendente
+
+Ordem do diretor: publicar o que está pronto (acesso por e-mail do candidato + correio adaptado
+para SendGrid, commit 1436e19, verde), aplicar a 0134, salvar, deixar SÓ o SendGrid pendente (o
+Fernando volta amanhã para ligar o "Mail Send" na chave). Não construir nada novo.
+
+**Medição que mudou o plano (§A.40, poupou rebuild de backend e do frontend admin).** A publicação
+§A.49 do origin/main inteiro (18:20, sessão de Candidatos) JÁ levou o backend desta frente ao dist de
+produção. Medido no dist SERVIDO em ea-release-portal: portal-acesso-email.service.js (18:20), correio
+SendGrid, portal.module registra o acesso-email, rotas "travas" presentes; ea-backend reiniciou 18:25.
+A página admin portal-links também já estava no .next de 3020. Então NÃO republiquei backend nem 3020.
+
+**O que esta sessão fez de fato:**
+1. **0134 aplicada.** Backup antes: ~/backups/ea-prod/ea_automatic_antes_0134_20261006-201600.sql.gz.
+   Rodada do worktree pristino ea-build (origin/main, 0134 já elevada acima da marca). Provado: as
+   tabelas portal_acesso_codigos e portal_acesso_travas nasceram (só hashes e carimbos, sem PII), e a
+   marca d'água subiu de 1790646009719 para 1790646010719. Só a 0134 subiu.
+2. **ea-portal-app (porta do candidato, 3021) rebuildado do main limpo e swapado.** O .next-prod servia
+   Oct 1 (anterior à frente). Build de worktree pristino (deps idênticas, source origin/main), backup
+   do antigo (.next-prod.bak-antes-acesso-email-20261006-202348), swap, restart 20:24:25. O script §A.49
+   não cobre o portal-app porque ele roda do checkout DEV, por isso o passo foi manual.
+
+**Prova (§A.13, medida no domínio público real).** O candidato em clientesportalsoulan.com.br/portal vê
+a porta "Entrar Com Meu E-mail"; ao enviar, o backend inerte responde 503 "Portal indisponível" (limpo,
+não 500 cru) e a tela mostra o aviso calmo "Esta Opção Está Em Manutenção / Fale com o RH que está
+acompanhando a sua admissão para receber o seu link." (Title Case §A.24, bege, não vermelho). Caminho do
+LINK intacto (/portal/identificar responde 400 à validação, rota viva). Nota medida: o 503 só acontece
+com o Origin do domínio na allowlist; Origin localhost dá 403 (OriginGuard), por isso a prova é pelo
+domínio público, não pelo 127.0.0.1.
+
+**Fábrica (§A.38/§A.39).** seguranca APROVADO (inerte-seguro: 503 antes de qualquer leitura ou escrita;
+sem vazamento de CPF, e-mail, código, URL ou chave em log; código guardado como HMAC e não volta em
+resposta; RBAC da fila de travas via MenuGuard, só SUPER_ADMIN; 0134 sem PII). Três observações de DoS
+não bloqueantes registradas, fora do §A.6. Restart coordenado com as 3 sessões peer: o ea-portal-app é
+serviço isolado do ea-backend e do ea-frontend da sessão de Candidatos, sem colisão.
+
+**ÚNICO PONTO DE RETOMADA: SendGrid.** O correio nasce inerte (configurado()=false) porque
+PORTAL_CORREIO_SENDGRID_API_KEY e PORTAL_CORREIO_REMETENTE não estão no .env de produção. O Rike liga o
+"Mail Send" na chave do SendGrid quando o Fernando voltar (amanhã). Depois disso a fábrica faz os 3
+passos finais sozinha: instalar a chave no .env (chmod 600) mais PORTAL_CORREIO_REMETENTE
+(portal@soulanrh.com.br), confirmar o remetente verificado no SendGrid, e provar um código chegando num
+e-mail. Aí a porta sai de manutenção e passa a funcionar.
