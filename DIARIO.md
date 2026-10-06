@@ -19978,3 +19978,599 @@ variável do `.env`, nada mais. A partir daí todo link gerado no Gerenciador ap
 que abre de fora. Provado: link de teste gerado começa com `clientesportalsoulan.com.br`.
 
 **Commit (hashes):** ver `git log` desta data.
+
+## 05/10/2026: GI, FECHAR A PONTE. O gatilho que NAO e o que se pensava, a fresta fechada e o furo novo
+
+OST do diretor: etapas 1 a 4 e **nao armar**. Operada distribuida (§A.39), com a sessao do CRUD da
+vaga publicando em paralelo. **A flag `GI_DISPARO_ARMADO` continua AUSENTE: nada foi enviado.**
+
+### ETAPA 1A, o GATILHO: a premissa do diretor esta PARCIALMENTE certa, e a diferenca decide tudo
+
+Ele cravou: "o envio dispara quando auditoria e exame fecham, no inicio do Cadastro; logo o Allan e a
+Sonia nao sairiam agora, e o veto cai". Medido no codigo e **no artefato servido**:
+
+| gatilho | onde | envia? |
+|---|---|---|
+| automatico | `auditoria.service.ts:688`, dentro de `if (progresso.completa)` | **NUNCA**. Stub |
+| manual | `enviar-para-gi.controller.ts:33`, rota MASTER/SUPER_ADMIN | SIM, atras da flag |
+
+**DUAS DIVERGENCIAS.** (1) O ponto ligado e o fechamento da **AUDITORIA**, nao o gate "auditoria E
+exame" do Cadastro: nao ha leitura nenhuma da frente de EXAME ali. (2) **Armar NAO liga fluxo
+nenhum**: `EnviarParaGiService.enviar` passa `enviarAoGi: async () => ({})` e `executarGatilhoGi`
+retorna nao-enviado nos dois ramos. Depois de armar, **nada vai para a folha sem um clique humano**.
+
+**O VETO NAO CAI INTEIRO: ELE TROCA DE FORMA E FICA MENOR.** Cai a parte do disparo em massa. **Fica
+a parte do clique**: com a flag armada, um MASTER que clicar no Allan hoje manda a pessoa para a folha
+com RG, CTPS e PIS **nulos**. O gatilho ser depois da auditoria protege de automatismo, nao de clique.
+
+### ETAPA 1B, a REGUA POR CLIENTE: CONFIRMADO, e o codigo ja respeita
+
+O gatilho automatico vive dentro de `if (progresso.completa)`, e `progresso` resolve por
+**(cliente + cargo)**: cliente que nao exige CTPS fecha sem CTPS e e alcancado do mesmo jeito. E
+**nenhuma guarda cobra documento**: as recusas sao sobre empresa/filial, salario e cliente. Medido
+contra o contrato publico, nao deduzido: `TB_FuncionarioSelecaoAPI` tem **415 campos, `required` = 0**
+e **363 aceitam `null`**; dos **26** campos de documento, nenhum e obrigatorio.
+
+### ETAPA 2, A FRESTA FECHADA: os testes NAO estavam escondidos
+
+`POST FuncionarioSelecao/GetAllJson` com corpo vazio devolveu HTTP 200 e `[]`, **igual ao GetAll**.
+Logo os registros 24..31 **sairam mesmo** da tabela de pre-admissao, e nao estao escondidos por filtro.
+
+**E NAO FOI O EA**, provado estruturalmente: o cliente do GI faz POST para **tres** rotas
+(`Conexao/VerificaConexao`, `Login/Login`, `FuncionarioSelecao/Add`); nao existe DELETE nem Update em
+`gi/*.ts`; nenhum scheduler toca o GI; a grade e GET-only. O **expurgo** apaga linha da NOSSA
+`admissao_dados_gi`, nunca algo do fornecedor.
+
+**SAIR DA PRE-ADMISSAO NAO DEPENDE DE APROVACAO**, e sao dois fatos: (a) o EA nao manda `apiSinc`,
+`apiSincAdmissaoDigital`, `statusPreCadastro`, `flagSelecao` nem `inclusaoOK` (nenhum aparece no
+montador; o GI nasce com `statusPreCadastro: 2`, que e o **default dele** no contrato); (b) na rodada
+4, **2 registros as 13:38 e 0 as 13:48**, sem ninguem aprovar. O "eu nao aprovei" do diretor esta
+certo e e compativel: **nunca houve aprovacao no caminho.**
+
+**A alavanca para SEGURAR o registro, e ela esta NAO MEDIDA:** o contrato tem
+`apiSincAdmissaoDigital` (`true` sincroniza com Admissao Digital, `false` com o GI), **default
+`false`**, e nos nao mandamos nenhum dos dois. Medir o efeito exigiria um envio novo, que esta
+proibido nesta OST.
+
+**A GRADE: VETO, sete condicoes, medicao, reendurecimento.** O `seguranca` vetou o recorte (nao a
+autorizacao) e achou o furo central: `_autorizar` recebia `params` e **nunca o `corpo_consulta`**, que
+`ler()` mandava direto para a rede, e em `GetAllJson` o filtro viaja **no corpo**. As sete condicoes
+foram implementadas, a medicao rodou com corpo vazio, e a grade foi **reendurecida no mesmo turno**:
+autoteste verde antes (51/30) e depois (52/29), porta provada fechada por **tres** caminhos sem tocar
+a rede. O **validador de corpo FICOU**. O `seguranca` **APROVOU** no reveredito, com dois reparos no
+script de medicao (print de corpo cru e conjunto de CPF ampliado sem registro), os dois aplicados.
+
+### ETAPA 3, A BOMBA DO RELEASE: consertada, e era maior do que se descrevia
+
+O `src` do GI no release era de 02/10 **13:45** (pre-separacao) e o `dist` servido de **17:47** (com a
+separacao). Sincronizei por **copia nominal, sem build e sem restart**: `src/gi/*` (resolvedor,
+leitor, fixtures, specs), `src/domain/portal-dados-gi.ts`, os 2 specs do dominio e o `.env.example`.
+Backup em `~/ea-rollback-gi-src-20261005`. Carimbos do `dist` conferidos **antes e depois**: intocados.
+
+**E a bomba nao era "reverte em silencio", era PIOR: o release NAO COMPILAVA.** O typecheck acusou
+`tables.ts(40,3): Module './enums' has no exported member 'categoriaRegraAuditoriaEnum'`, de outra
+frente: a publicacao das 15:31 levou o `tables.ts` da main e deixou o `enums.ts` de 29/09. Avisei a
+sessao dona, ela consertou a metade dela, e **o release inteiro passou a typechecar: 0 erros**,
+conferido por mim em execucao propria.
+
+### ETAPA 4, O DE/PARA EM PRODUCAO: instalado e PROVADO NO ARTEFATO
+
+`GI_DEPARA_MUNICIPIOS_IBGE` com **5571** municipios (3 ancoras conferidas, todos os valores com codigo
+IBGE de 7 digitos), e `GI_DEPARA_CIDADES` posta como `{}` **vazia de proposito** (decisao do diretor de
+02/10: o espaco de codigo da residencia e inobservavel). Backup do `.env` antes; **46 para 48 chaves,
+nenhuma perdida**, permissao 600 mantida.
+
+Provado alimentando o **dist servido** com o valor REAL do `.env` de producao:
+`codigoMunicipioIbge(CAMPINAS/SP) = 3509502`, `(SANTOS/SP) = 3548500`, e
+`codigoCidade(SANTOS/SP) = null`. Zero warn de parse no boot, health 200.
+
+### O FURO NOVO, e e o achado mais grave do dia: A IDEMPOTENCIA NAO SOBREVIVE AO EXPURGO
+
+`gi_enviado_em` mora em `admissao_dados_gi` (`tables.ts:2160`); `expurgarDadosGi`
+(`expurgo.service.ts:84-97`) **apaga a linha INTEIRA** em 30 dias **sem isentar carimbo**; `jaEnviado`
+(`gi-leitor.service.ts:243-250`) le **justo aquela coluna**. Encadeado: envia, carimba, 30 dias
+depois a linha vai embora, `jaEnviado` volta a `false`, e **o segundo clique cria uma SEGUNDA
+pre-admissao na folha do fornecedor**. Familia da §A.33: nada falha.
+
+**E a medicao da etapa 2 PIOROU esse furo.** Com `GetAllJson` devolvendo `[]`, `Get?Id=` inerte (204
+para tudo, inclusive para registro que existe) e `Funcionario/Get` em **403**, **nao existe nenhuma
+forma de perguntar ao GI "eu ja mandei esta pessoa?"**. O carimbo deixa de ser uma barreira e passa a
+ser **a unica que existe**, e ela tem um relogio de 30 dias ligado.
+
+### A EXPOSICAO REAL DO ARMAMENTO, pela funcao de verdade
+
+Rodei `montarContratacaoGi` + `recusaDaContratacaoGi` do **dist servido** sobre as linhas reais do
+banco e os **127 pares** do `.env`. Sem recriar regua (§A.19).
+
+| desfecho se alguem clicasse HOJE | vivas |
+|---|---|
+| `GI_SALARIO_SEM_UNIDADE` | 51 |
+| `GI_SEM_EMPRESA_FILIAL` | 10 |
+| **PASSARIA** | **3** |
+
+As **tres** tem `admissao_dados_gi` = **0 linhas**: sairiam com **todos** os campos de documento
+nulos. Pessoas reais, origem PANDAPE. **E o numero se move enquanto se mede:** era **1** em 02/10 e e
+**3** agora; **19 admissoes criadas hoje, 3 na ultima hora**, e as vivas foram de **61 para 64 durante
+a sessao**. O webhook do Pandape esta alimentando de verdade.
+
+### Agentes e vereditos (§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o MAPA **antes** da construcao, o gatilho, a grade, o de/para e o armamento | **1 VETADO** (recorte da grade), 2 APROVADOS COM CORRECAO, 2 APROVADOS. No reveredito: grade **APROVADA** |
+| `tester` | 2 invariantes escritos do REQUISITO, em paralelo a investigacao | **20 testes novos**, 282 verdes no GI, **7 de 7 mutacoes mordendo** |
+| coordenador | alcance, as 4 etapas, a medicao da exposicao, consolidacao conferindo | 282 testes, typecheck 0 na main e **0 no release** |
+
+### O QUE OS AGENTES ACHARAM QUE EU TINHA PERDIDO
+
+- **`seguranca`:** o furo da idempotencia; o `corpo_consulta` fora da barreira; que a producao ja tem
+  **6** variaveis `GI_` e **127 pares**, entao `configurado()` e **true** e **nao ha dois freios, ha
+  UM**; e que `aplicarPosVeredito` tem **oito** chamadores, dois automaticos (timer de 10 min e o
+  runner `rearquiva-drive`, com usuario `sistema@ea.local` papel SUPER_ADMIN).
+- **`tester`:** que o meu desenho de prova do invariante 2 era **falso positivo** (a flag desarmada
+  retorna no passo 5, antes das guardas do passo 6, entao `GI_MONTADO_NAO_DISPARADO` sairia igual com
+  uma guarda de documento existindo); e a **sexta** recusa, `GI_CLIENTE_NAO_RESOLVIDO`, que faltava na
+  minha lista.
+
+### DUAS CORRECOES CONTRA MIM, e ficam registradas
+
+1. **Eu errei o numero da cadencia.** "Corrigi" o `seguranca` de 10 para 5 min, e **ele estava certo**:
+   sao DUAS constantes com o mesmo nome, a cadencia do `setInterval` em
+   `reconciliacao-drive-scheduler.service.ts:35` (**10 min**) e o **piso** entre varreduras em
+   `reconciliacao-drive.service.ts:44` (5 min). Conferi uma constante num arquivo e a atribui a outro,
+   que e o mesmo vicio de grepar o fonte em vez do artefato. A formulacao certa: **timer de 10 min,
+   mais disparo sob demanda pela tela, com piso de 5 min**.
+2. **Uma inferencia do `tester` colide com a minha medicao, e aqui a medicao ganha.** Ele concluiu que
+   a classe do Allan e da Sonia "nasce sem cliente e e recusada por `GI_CLIENTE_NAO_RESOLVIDO`".
+   Medido no banco: das **64** vivas, **ZERO** estao sem `cod_cliente`, e as tres que passam tem
+   cliente (57266, 55790, 66). O **codigo** dele existe e morde, e isso vale; a **inferencia** sobre
+   quem ele alcanca hoje nao se sustenta.
+
+### O que NAO foi feito, de proposito
+
+**A flag nao foi armada.** Nenhum envio. O furo da idempotencia **nao** foi consertado (fora do escopo
+desta OST, §A.14/§A.31: proposta, nao construcao). A regua de documento **nao** foi criada.
+
+## 05/10/2026, noite: O `apiSincAdmissaoDigital` MEDIDO. E o campo que impede a admissao de sumir
+
+Autorizado pelo diretor: um envio sintetico novo para medir se o campo **segura o registro na
+pre-admissao** o tempo suficiente para ele conferir. Ele foi categorico: **"a admissao encaminhada nao
+pode sumir"**.
+
+### O desenho do experimento, e por que ele tem DOIS bracos
+
+Um envio so nao responde, porque "sumiu" e "nao sumiu" precisam de **controle**. Entao dois cadastros
+sinteticos, identicos em tudo, **diferindo apenas no campo medido**, disparados na mesma janela:
+
+| braco | nome sintetico | CPF sintetico | `apiSincAdmissaoDigital` | registro no GI |
+|---|---|---|---|---|
+| A, controle | `SIMULADO APISINC FALSO` | `33333333333` | **false** (o default do fornecedor) | **30** |
+| B, hipotese | `SIMULADO APISINC VERDADEIRO` | `44444444444` | **true** | **31** |
+
+**Padrao (iv) de 02/10, aprovado pelo `seguranca`:** processo descartavel + banco descartavel
+(`ea_gi_sintetico_0510`), **sem subir o AppModule**, logo zero `onModuleInit`, zero worker BullMQ,
+nenhum Redis alcancavel e nenhuma credencial de Pandape, Clicksign, Google ou correio no ambiente.
+`GI_DEPARA_CIDADES` **ausente da allowlist** (condicao C-B), e `GI_DISPARO_ARMADO` armada **so dentro
+daquele processo**, nunca no `.env` de producao.
+
+**Ensaio desarmado primeiro** (`--dry`), com pre-voo de asercoes duras: nascimento Campinas/SP
+resolveu `3509502`, residencia Santos/SP resolveu `null`, par 2/4 conhecido, nao-enviado, e **as seis
+guardas do passo 6 PASSARAM**. So depois o disparo, um por braco, sem laco.
+
+**O unico desvio do caminho do produto, declarado:** o campo e posto no payload **depois** do
+montador, porque o montador do EA nao o emite. E a variavel do experimento. Leitura da pessoa, leitura
+da contratacao, montagem, guardas e o POST sao o codigo de producao.
+
+### O RESULTADO
+
+| leitura | registro 30 (`false`) | registro 31 (`true`) |
+|---|---|---|
+| **20:30**, no minuto do envio | presente, `statusPreCadastro=2` | presente, `statusPreCadastro=2` |
+| **20:42**, 11 minutos depois | **SUMIU** | **AINDA PRESENTE** |
+| **20:57**, 26 minutos depois | ausente | **AINDA PRESENTE** |
+
+**Tres leituras, nao duas: a retencao e duravel e nao foi sorte.** O controle sumiu dentro da janela
+medida na rodada 4 (menos de 10 min) e nao voltou; a hipotese sobreviveu a mais de duas vezes aquela
+janela.
+
+**`apiSincAdmissaoDigital = true` SEGURA o registro na pre-admissao.** O `false`, que e o default do
+fornecedor e o que o EA manda hoje (por omissao), e o que faz a admissao sumir em menos de 10 minutos.
+
+**O mecanismo bate com o contrato, palavra por palavra:** a `description` do campo diz *"true -
+Sincroniza com Admissao Digital, false - Sincroniza com GI"*. Com `false`, **o sincronizador do
+proprio GI** consome a pre-admissao e ela sai da fila. Com `true`, ela fica esperando o consumidor da
+**Admissao Digital**, que e outro produto do fornecedor, **que nao usamos**. Logo ela **nao e
+consumida** e permanece visivel.
+
+**E isso fecha, de uma vez, a duvida de 02 a 05/10 sobre os registros 24..31 que "sumiram".** Ninguem
+apagou e nao foi o EA: o campo saia por omissao com o default `false`, e o proprio GI consumia. A
+medicao de hoje reproduziu o desaparecimento **sob controle** e o **impediu** no outro braco.
+
+### A CONSEQUENCIA OPERACIONAL, e ela e o reverso da moeda
+
+Se o EA passar a mandar `true` **sempre**, a admissao **nunca** e consumida pelo GI: ela fica parada
+na pre-admissao **para sempre**, esperando um produto que nao usamos. **Isso nao e o que se quer para
+o fluxo real**, e o diretor precisa decidir entre tres caminhos:
+
+1. **`true` so no periodo de validacao**, enquanto ele confere cada envio, e depois voltar a `false`.
+   Simples e reversivel, e nao exige codigo novo se a escolha virar uma variavel de ambiente.
+2. **`true` sempre**, e alguem no GI promove a pre-admissao a mao. Troca sumico automatico por
+   trabalho manual.
+3. **`false` sempre** (o default de hoje) e a conferencia feita **dentro da janela** de menos de 10
+   minutos, pela leitura GET-only, no mesmo ciclo do envio.
+
+**O que a fabrica NAO fez:** nao acrescentou o campo ao montador do EA. Ele continua **nao sendo
+emitido**, e o fornecedor continua aplicando o default `false`. Acrescentar e frente propria, depende
+da escolha acima, e nao estava no escopo desta OST (§A.14/§A.31: proponho, nao construo).
+
+### Desmontagem
+
+Banco `ea_gi_sintetico_0510` dropado ao fim. Os dois registros sinteticos ficam no GI para o diretor
+conferir: **`SIMULADO APISINC VERDADEIRO`, CPF `44444444444`, registro 31**, visivel na pre-admissao
+(`FuncionarioSelecao`). O 30 ja foi consumido, e a ausencia dele e a outra metade da prova. Os dois
+sao sinteticos e declarados; ele apaga pela tela do GI.
+
+## 05/10/2026, noite: O GATILHO DA AUDITORIA PASSA A ENVIAR. Dois furos simetricos e a flag armada
+
+Decisao do diretor: **o caminho principal do envio ao GI e AUTOMATICO, no fechamento da auditoria**,
+no momento da entrega do candidato. O clique manual fica como alternativa. Ele tambem encerrou dois
+pontos da auditoria anterior e mandou armar a flag.
+
+### As duas decisoes encerradas pelo diretor. Nao reabrir.
+
+1. **IDEMPOTENCIA: a trava e do GI, por CPF, dentro da folha.** A fabrica so nao a enxerga porque le
+   a fachada (a pre-admissao) e nao o quintal (a folha, que da **403**). Mesmo que `gi_enviado_em`
+   suma com o expurgo em 30 dias, o GI recusa o CPF duplicado. **Expurgo intocado**, idempotencia nova
+   nao construida. (Era a condicao 4 do `seguranca`.)
+2. **ENVIAR MAGRO NAO E PROBLEMA.** Documento obrigatorio: a **auditoria nao libera** sem ele.
+   Nao obrigatorio para aquele cliente: sai sem e esta certo. E o RG agora e auditado no **Portal do
+   Candidato**. A regua documental por cliente ja resolve, e **nenhuma regua nova foi criada**. (Era a
+   condicao 7.)
+
+### O ERRO DO MEU DESENHO, achado pela auditoria ANTES de uma linha ser escrita
+
+Eu desenhei o gatilho como **transicao** (o evento "a regua fechou NESTA chamada") em vez de
+**estado**, porque `aplicarPosVeredito` tem **oito** chamadores e dois sao automaticos em lote (um
+timer de 10 min com disparo sob demanda e piso de 5 min, e o runner `db/rearquiva-drive.ts`, que laca
+sobre **2558** admissoes). Estava certo no conceito e **errado em duas coisas**, as duas medidas:
+
+**FURO 1, SOBRE-DISPARO.** Eu escrevi que "o runner sobre admissao ja completa nao dispara nada,
+porque nao houve transicao". **Falso.** Confundi *regua ja completa* com *frente ja concluida*.
+Existem admissoes com a **regua COMPLETA** e a frente AUDITORIA **`concluida = false`**: nelas e o
+proprio job em lote que **produz** a transicao, e aí envia. Pela regua real: **1 DECLINOU + 1
+RESCISAO**, as duas dentro das candidatas do runner, **zero vivas**. Dois passos que ja existem
+(declarar a unidade do salario no Gerenciador, que `admissoes.service.ts:3634` permite de proposito
+**inclusive para declinada**, e rodar o runner) mandariam **um declinado para a folha de um
+terceiro**, em silencio. Familia da §A.33.
+
+**FURO 2, SUB-DISPARO.** O **aceite da Esteira** (regra 8 do §A.3, `esteira.service.ts:1173-1179`)
+permite **concluir a Auditoria com obrigatorio pendente**. A frente vai a `concluida = true` com a
+regua **incompleta**; quando os documentos chegam depois, o pos-veredito encontra a frente ja
+concluida, **nao ha transicao, e a pessoa NUNCA e enviada automaticamente**. Pela regua real: **6
+admissoes VIVAS e nao pausadas** nessa condicao (705 na base, mas 671 concluidas e 28 declinios).
+**E decisao do diretor**, nao achado de seguranca: a direcao da falha e fail-closed, sem PII exposta e
+sem efeito irreversivel. Duas saidas: aceitar que o aceite desliga o automatico (e a pessoa sai pelo
+**botao manual**), ou mudar o gate para a transicao da **REGUA**, o que exige **coluna nova**.
+
+### O QUE FOI CONSTRUIDO, e as tres travas
+
+1. **A conclusao da auditoria virou UPDATE CONDICIONAL** (`auditoria.service.ts:1144`):
+   `.where(and(eq(id, auditoria.id), eq(concluida, false)))`, **dentro da transacao**. O sinal de
+   transicao e a **contagem de linhas afetadas**, nao leitura-antes: `afetadas === 0` (perdeu a
+   corrida) sai sem inserir evento e sem fazer nascer o Cadastro, porque aquilo e da passagem
+   vencedora; `transicionou = afetadas === 1`. **Contagem desconhecida da `transicionou = false`**,
+   porque mandar gente para a folha por suposicao e o dano irreversivel. O driver da casa e
+   `postgres-js`, que devolve a contagem em `count` e nao em `rowCount`, e o helper le os dois.
+   *Por que atomico e nao ler-antes:* a leitura acontecia **fora** da transacao, sem `FOR UPDATE`, e o
+   unique `(admissao_id, tipo)` nao protege a coluna. E a **transicao repetida e real**: medidas **11**
+   frentes com dois eventos `AUDITORIA -> ANALISE_OK` sem reversao, de 3 minutos a 27 dias de
+   intervalo, pelo caminho `recuarAuditoria`.
+2. **O envio so dispara para admissao OPERAVEL**, e a regua nao foi inventada: `admissaoOperavel`
+   (`domain/admissao.ts:103`), que e `ehFarolVivo(farol) && !pausadaEm`, e cujo cabecalho diz ser "a
+   regua unica dos automaticos". **Nenhuma lista literal de farol nasceu em `gi/`**: ficam de fora por
+   construcao DECLINOU, RESCISAO, ADMISSAO_CONCLUIDA, AGUARDANDO_LIBERACAO e LIBERACAO_RECUSADA.
+   Distincao que importa: a **auditoria** continua rodando em admissao pausada (decisao do diretor,
+   a pausa e sobre o cliente), e e o **envio** que para.
+3. **UMA PORTA SO.** `enviarComGuardas` e privado e e o **unico** ponto do sistema que alcanca
+   `criarFuncionarioSelecao` (`enviar-para-gi.service.ts:327`); `enviar` (automatico) e `enviarManual`
+   delegam os dois. O automatico passa pela cadeia inteira: `jaEnviado`, as **seis** recusas e a flag.
+   Novo desfecho `GI_ADMISSAO_NAO_OPERAVEL`; o `GI_AUTOMATICO_INERTE` saiu, porque descrevia um no-op
+   que o diretor revogou.
+4. **Falha de envio nao derruba a auditoria:** bloco em `try/catch`, ERRO no log sem PII, e o
+   pos-veredito segue devolvendo progresso e sinalizador.
+
+### Agentes e vereditos (§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o MAPA e o DESENHO **antes** do codigo, depois o codigo e o armamento | **VETOU 3 de 4** na 1a rodada; **APROVOU o armamento** na final, com 7 condicoes de execucao |
+| `tester` | 5 invariantes do requisito em paralelo a construcao, depois o ciclo recuo/refechamento e a mutacao | escreveu testes que **falhavam de proposito** antes do codigo existir |
+| `backend` | as 3 travas, com a correcao do `admissaoOperavel` que eu mandei no meio | typecheck 0, e declarou os 3 arquivos fora da lista que teve de tocar |
+| coordenador | alcance, o desenho (e os 2 furos dele), a medicao da exposicao, o `apiSinc`, consolidacao conferindo | medi 3052 admissoes pela funcao real |
+
+### O que os agentes acharam que eu tinha perdido
+
+- **`seguranca`:** que o runner em lote PRODUZ a transicao em admissao com regua completa e frente
+  nao concluida (o furo 1, com o declinado e o rescindido nomeados); que a deteccao tinha de ser
+  atomica e nao ler-antes; e que o **botao manual nao tem a guarda de farol** que o automatico ganhou,
+  entao um MASTER ainda pode mandar um declinado a mao (ato humano deliberado, nao vetado, mas o
+  diretor precisa saber).
+- **`tester`:** o furo 2 inteiro (o aceite da Esteira desliga o automatico para sempre), que nem eu
+  nem o `seguranca` viramos; e que o meu desenho de prova de um invariante era **falso positivo**.
+
+### Duas correcoes contra mim, e uma contra o `seguranca`
+
+1. **Eu errei a cadencia** do reconciliador (duas constantes homonimas: timer de **10 min** no
+   scheduler, **piso** de 5 min no servico). O `seguranca` me corrigiu e estava certo.
+2. **Eu rodei a suite inteira enquanto o `tester` mutava** codigo de producao, que e exatamente o modo
+   de falha que a §A.40 regra 4 e a memoria da fabrica mandam evitar. **Abortei antes de contaminar** e
+   a suite completa rodou **uma vez**, no fim.
+3. **O `seguranca` grepou o `.env` ERRADO** e concluiu que "nao existe nenhuma chave `GI_` em
+   producao", logo que armar seria inerte. O `.env` do **repositorio** tem zero; o que **producao le**
+   (`WorkingDirectory` = `ea-release-portal/apps/backend`) tem **8**. `configurado()` e **true**, e
+   armar tem **efeito imediato**. E o mesmo vicio de provar no fonte em vez do artefato, agora no
+   arquivo de configuracao.
+
+### O ACHADO DO `tester` NA RODADA 2: a protecao do "um envio so" repousa sobre UMA trava
+
+No ciclo **fecha / recua / fecha de novo**, quem morde **nao e o gate de transicao**: e o `jaEnviado`.
+Provado, nao deduzido. O recuo poe `concluida` de volta em `false`, entao no refechamento o UPDATE
+condicional afeta 1 linha, `transicionou` e `true` e **o gatilho dispara de novo**. O POST fica em 1
+**porque o carimbo existe**, e por nenhum outro motivo.
+
+**E o carimbo pode nao existir na hora do refechamento.** O `expurgar_em` e de **30 dias** e o relogio
+comeca quando a **linha nasce** (confirmacao do candidato no Portal), nao no envio. Os intervalos
+medidos entre as duas idas a `ANALISE_OK` chegam a **27 dias**. Com o carimbo ausente, o `tester`
+mediu **2 POSTs**: a mesma pessoa mandada duas vezes.
+
+**Isso cai dentro da decisao do diretor, nao fora dela:** a trava anti-duplicata e **do GI, por CPF**,
+e e ela que recusa o segundo. Fica travado como **canario** em
+`gi-ciclo-recuo-refechamento.tester.spec.ts`, assertando o comportamento ATUAL: no dia em que alguem
+somar uma segunda trava do nosso lado, o teste falha e aponta para a decisao.
+
+### O VEREDITO FINAL DO ARMAMENTO, e ele vem em DOIS ATOS
+
+**APROVADO**, e o `seguranca` separou em dois porque e a unica ordem em que todo estado intermediario
+e fail-closed. O motivo e um fato que ele mediu no artefato e que eu confirmei:
+
+**O `dist` SERVIDO E DE 02/10 E NAO TEM NENHUMA DAS CORRECOES DE HOJE.** Medido:
+`dist/auditoria/auditoria.service.js` de **02/10 17:58**, `dist/gi/enviar-para-gi.service.js` de
+**02/10 13:55**; **zero** ocorrencias de `GI_ADMISSAO_NAO_OPERAVEL`, `enviarComGuardas` e
+`transicionou`; `GI_AUTOMATICO_INERTE` **presente**; e o gatilho de la e
+`async enviar(_admissaoId)`, com o **underscore** que prova que o id e ignorado.
+
+| ato | o que e | risco |
+|---|---|---|
+| **1. ARMAR a flag** contra o artefato atual | o automatico servido e **no-op estrutural**: ignora o id, manda `pessoa: {}` e devolve sempre `GI_AUTOMATICO_INERTE`. **So o BOTAO MANUAL acende**, um envio por clique humano, atras do `jaEnviado` e das seis guardas | baixo, e e exatamente o primeiro envio sintetico |
+| **2. PUBLICAR o codigo novo** | liga o automatico. Medido: **1.392** admissoes com a regua obrigatoria completa, **1.074** delas candidatas do runner | e aqui que o gate do UPDATE condicional e a guarda de farol passam a ser o que separa **um** envio de **mil** |
+
+**VETADO publicar e armar no MESMO restart:** sao duas variaveis, e nenhum dos dois atos ficaria
+isolado para medir.
+
+**A CONDICAO MAIS PERIGOSA, e ela nasce do estado meio-publicado:** a publicacao e por **copia de
+arquivo**. Se a copia levar `gi/enviar-para-gi.service.js` **novo** sem
+`auditoria/auditoria.service.js` **novo**, a auditoria antiga chama `enviar(admissaoId)` com **um**
+argumento, o `enviar` novo le `contexto.farolGlobal` sobre `undefined`, e esse acesso esta **antes**
+do `try`: `TypeError` propagando para um call site **sem `try/catch`**, derrubando o pos-veredito das
+1.392 **depois de gravar**. Nao vaza nada para o fornecedor, mas e a familia da §A.33. Logo a copia e
+**atomica no conjunto** (`auditoria/auditoria.service.js` + `gi/*.js` + `domain/portal-dados-gi.js` +
+`domain/admissao.js` + `gi/gi-leitor.service.js`), **tudo antes de um unico restart**.
+
+**Antes do restart da publicacao, conferir no `dist` (nao no fonte):** presenca de
+`GI_ADMISSAO_NAO_OPERAVEL`, `enviarComGuardas` e `transicionou`, e **ausencia** de
+`GI_AUTOMATICO_INERTE`. Qualquer um na posicao errada, **nao reinicia**.
+
+**O canario do sub-disparo**, para rodar na janela: `AUDITORIA concluida = true` + regua obrigatoria
+completa + farol vivo + `gi_enviado_em` nulo. Hoje da **0**. Qualquer numero acima de zero no fim da
+janela e sub-disparo **a reportar**, nao a consertar na hora.
+
+## 06/10/2026: A TRAVA DE ORIGEM, o furo que EU abri ao armar, e o apiSinc com o fundamento do diretor
+
+OST do diretor: a trava de origem (nao duplicar com o webhook), fechar o furo do botao manual, o
+`apiSinc` permanente, e preparar o terreno do teste dele. **Nada publicado, nada commitado.**
+
+### O FURO QUE EU ABRI, e ele vem primeiro porque era VIVO EM PRODUCAO
+
+Eu armei a `GI_DISPARO_ARMADO` ontem, a pedido do diretor. Hoje ele decidiu que **declinado e
+rescindido nao saem por caminho nenhum, nem por SUPER_ADMIN**. As duas coisas **nao param de pe
+juntas**, e o `seguranca` achou no artefato:
+
+- o `enviarManual` **publicado** (dist de 02/10) **nao tem guarda de farol nenhuma**, conferido no
+  binario, nao no fonte;
+- o automatico publicado e o stub inerte, entao a flag acendia **so o botao manual**;
+- com a flag armada, um MASTER chamando a rota mandava um declinado para a folha de verdade:
+  **958 alcancaveis** (903 declinios + 55 rescisoes).
+
+**DESARMEI**, comentando a linha para o rastro ficar, com backup antes, restart, health 200. Medido:
+**zero envios na historia**, entao o furo nunca foi usado. Rearmar e uma linha, depois de publicar a
+correcao. **Mitigacao que existia e nao justifica deixar aberto:** nenhuma tela do frontend chama a
+rota (medido, zero chamadores), entao era necessario um POST deliberado com token de MASTER.
+
+### A TRAVA DE ORIGEM: medida, e saiu ALLOWLIST
+
+| medicao | resultado |
+|---|---|
+| coluna | `admissoes.origem`, enum **NOT NULL**, **default `MANUAL`** |
+| valores que o enum admite | **exatamente dois: `MANUAL` e `PANDAPE`** (medido no banco) |
+| escritores | **TRES**, todos em `admissoes.service.ts`: `:658`, `:854` e `:948` |
+| `MANUAL` com linha em `integracao_pandape` | **0** (o `seguranca` mediu: ninguem muda de origem depois) |
+
+**A premissa do diretor se sustenta**, e a prova boa e medida: o webhook do **G.Infor** esta
+cadastrado **no mesmo painel do Pandape** em que esta o "Ea Automatic" (`DIARIO.md:17465`). Dois
+assinantes no mesmo painel e prova de que o Pandape alimenta a folha por fora do EA.
+
+**Implementada como ALLOWLIST, nao denylist**, e isso contraria a LETRA do pedido de proposito. O
+diretor escreveu "se e PANDAPE nao envia", que ao pe da letra e denylist, e **denylist autoriza por
+omissao todo valor futuro**. O Digai e uma segunda ATS com ingestao ja construida: se um dia nascer
+`origem = "DIGAI"`, a denylist **autoriza o envio sozinha**. Entao:
+`ORIGENS_AUTORIZADAS_A_ENVIAR_AO_GI = ["MANUAL"]` + `origemAutorizadaParaGi()`, e **origem nova nasce
+BLOQUEADA**. Desfecho proprio e fechado, **`GI_ORIGEM_NAO_AUTORIZADA`**, exigido pelo `seguranca` para
+o bloqueio ser **contavel** e nao se confundir com declinio.
+
+**A CONSEQUENCIA QUE O NUMERO REVELA:** **70 das 71 admissoes vivas sao `PANDAPE`**, e as **tres** que
+passam as guardas (Allan, Sonia, Stefany) sao **todas PANDAPE**. Logo o automatico, com a trava,
+**envia ZERO hoje**, e so passa a valer quando o fluxo novo carregar volume. **A admissao de teste do
+diretor sera `MANUAL`, entao ela envia**, que e o que o teste precisa.
+
+### O FURO DO BOTAO MANUAL: a minha instrucao estava ERRADA e eu a abortei no meio
+
+Eu mandei o `backend` usar `admissaoOperavel`. O `seguranca` mostrou, com numero, que isso bloquearia
+tambem **`ADMISSAO_CONCLUIDA`: 1550 `MANUAL` + 452 `PANDAPE` = 2002, TODAS nunca enviadas ao GI**, que
+sao precisamente quem **tem** de estar na folha. O farol e flag **manual e pegajosa**: marcado antes do
+envio, nenhum gatilho enviaria mais, **para sempre**. Teria deixado de ser trava e virado **defeito**.
+
+Despachei a correcao no meio da construcao: predicado proprio **`admissaoEncerrada`**, derivado de
+**`FAROIS_ENCERRADOS = ["DECLINOU","RESCISAO"]`**, aplicado em `enviarComGuardas`, que e o ponto por
+onde os **dois** gatilhos passam. O automatico **segue** com `admissaoOperavel` e fica mais restrito,
+de proposito.
+
+**E a FONTE DO DADO, que o meu briefing nao especificou e o `seguranca` apontou como o buraco:**
+`enviarComGuardas` nao tinha farol nem pausa no escopo, e o leitor **nao lia nenhum dos dois** nem a
+`origem`. Nasceu `lerEstado`, por colunas nomeadas, **a leitura autoritativa**, com **linha ausente =
+RECUSA**.
+
+### O `apiSinc`: VETO LEVANTADO pelo fundamento operacional do diretor
+
+O `seguranca` havia vetado `true` permanente. O fundamento novo: com `false`, auditoria que fecha
+**fora do horario** faz o registro sumir antes de alguem ver, e o time **perde a admissao**. Ele
+**levantou o veto** e **retirou um argumento proprio**, reconhecendo que a retencao era comparacao que
+ele nao havia feito (com `false` o registro nao e apagado, e **promovido** para a folha, onde fica
+permanente e legitimamente).
+
+**As duas ressalvas que sobraram, e as duas sao concretas:**
+1. **`true` nao e "segurar", e ROTEAR.** A `description` do fornecedor diz "Sincroniza com Admissao
+   Digital", que e **outro produto dele**, com `statusGIAdmDigital` e `idAdmDigital` proprios. O risco:
+   a pessoa estaciona num subsistema que ninguem opera, o EA carimba `gi_enviado_em`, devolve
+   `GI_JA_ENVIADO` para sempre, e **ela nunca entra na folha**. Familia §A.33. **Probabilidade
+   desconhecida, e e esse o ponto: ninguem olhou um registro `true` 24h depois.** Mitigacao que nao
+   perde admissao nenhuma: mandar **UM** com `true` e olhar em 24h e 72h.
+2. **Risco NOSSO, e e bug hoje:** o `expurgarDadosGi` apaga a linha **inteira** de `admissao_dados_gi`
+   no TTL de 30 dias, e e nela que vive `gi_enviado_em`, a marca de idempotencia. Com `false` a ordem
+   nunca importou (o registro do fornecedor sumia em 10 min). Com **`true` permanente, o registro do
+   fornecedor passa a viver MAIS que a nossa marca, por desenho**: 30 dias depois, qualquer
+   re-disparo cria uma **SEGUNDA** pre-admissao viva do mesmo CPF. Conserto: tirar os dois carimbos
+   (que sao **PII-free**, o proprio schema declara) da linha expurgavel, ou o expurgo anular as
+   colunas de PII preservando-os. **Uma migracao.**
+
+**Entregue o MECANISMO, nao o valor:** `GI_API_SINC_ADMISSAO_DIGITAL`, default **`false` explicito**
+(a chave sai sempre, nunca omitida, porque default do outro lado e contrato que muda sem aviso), lida
+no servico e aplicada **pelo montador**, dentro da allowlist fechada. **Nao escrevi a variavel em
+`.env` nenhum.**
+
+### Agentes e vereditos (§A.38)
+
+| agente | veredito |
+|---|---|
+| `seguranca` | **APROVOU** o desenho da trava, **VETOU o texto do meu mapa** (2 afirmacoes falsas), **VETOU** o item do manual como eu o especifiquei, **LEVANTOU** o veto do `apiSinc` com 2 condicoes, e achou o **furo vivo em producao** |
+| `tester` | 64 testes novos em 3 arquivos; confirmou que a trava saiu **allowlist de verdade** (7 casos de origem desconhecida, todos zero envio); deixou 3 vermelhos de proposito, que sao a decisao do diretor |
+| `backend` | os 3 itens, com a correcao do predicado aplicada no meio; declarou os 3 arquivos fora da lista que teve de tocar |
+| coordenador | alcance, o mapa, o desarmamento, a reconciliacao de 29 falhas de gate, e 2 consertos de produto |
+
+### TRES CORRECOES CONTRA MIM, e ficam registradas
+
+1. **"UM escritor so" estava errado: sao TRES.** Eu apontei `pandape-sync.service.ts:571`, que e um
+   **chamador**, nao o escritor. O mapa e de onde o `backend` constroi, e "um escritor so" e a frase
+   que faz alguem concluir que o lado da leitura esta coberto.
+2. **A minha segunda prova da premissa era FRACA e o `seguranca` a rejeitou com razao:** eu citei a
+   constituicao, que **descreve o desenho e nao mede nada**. A prova boa e o painel do Pandape.
+3. **Eu mandei construir a regua errada no botao manual** (`admissaoOperavel`), e teria barrado 2002
+   admissoes que precisam estar na folha.
+
+### DOIS CONSERTOS DE PRODUTO QUE EU FIZ, os dois apontados por teste
+
+1. **`configurado()` passou a ser a PRIMEIRA guarda do `enviar()`**, antes de qualquer leitura. Antes a
+   leitura do estado vinha primeiro, dentro do `try`, entao qualquer falha nela caia no `catch` e
+   devolvia **`GI_FALHA_ENVIO`** sobre um GI que **nunca foi configurado**. O desfecho e o unico sinal
+   que sobra (o log nao leva PII), entao impreciso ali e **log que mente**.
+2. **A assimetria de fail-closed**, que o `tester` achou: `admissaoEncerrada(undefined)` e `false`,
+   logo um `select` que esquecesse `farol_global` **enviaria**, enquanto a trava de origem, no **mesmo
+   arquivo**, falha **fechada** no mesmo caso. Duas travas de estado no mesmo caminho com fail-closed
+   **oposto** e como a proxima refatoracao abre furo sem ninguem perceber. Agora farol ausente recusa.
+
+### O FIO SOLTO que ninguem mediu, e ele e barato de fechar
+
+**Em qual EVENTO o webhook do G.Infor esta inscrito.** Se nao for o mesmo do nosso, existe um
+subconjunto dos 664 `PANDAPE` que o G.Infor **nunca recebeu**, e a trava passa a bloquea-lo **para
+sempre, em silencio**. E a distincao da §A.47 (etapa nao e acao) virada contra a trava. **Custo: uma
+pergunta ao Andre ou um print do painel.** O sinal que avisaria, enquanto isso: nos primeiros
+bloqueios, ler de volta no GI pelo CPF (GET e permitido) e confirmar que a pessoa **ja esta la**.
+
+### O terreno do teste do diretor, e a dependencia que o trava
+
+Ele faz o teste, **sem roteiro**, com **CPF e documentos reais**. O terreno esta em
+`docs/TERRENO-TESTE-DO-DIRETOR-GI.md`, com o que foi medido:
+
+- **cliente e cargo sao OBRIGATORIOS** no DTO: deixar vazio **bloqueia na criacao**
+  (`create-admissao.dto.ts:262-268`, "Selecione um cargo valido.");
+- **o par empresa/filial nao e o risco:** **250 dos 251** vinculos ativos tem par conhecido;
+- **o risco e o TIPO DE CONTRATO:** **todos os 251 clientes tem exatamente UM tipo de vinculo**, e
+  **188 sao TEMPORARIO**. Escolhendo um cliente ao acaso e marcando Terceirizado, a chance de errar e
+  de **tres em quatro**, e o sistema **deixa errar em silencio**: cria, audita, fecha, e **so no fim**
+  recusa com `GI_SEM_EMPRESA_FILIAL`. **Nao travei o caminho**, porque ele pediu para ver onde o
+  sistema deixa errar;
+- **a recusa mais provavel de todas e `GI_SALARIO_SEM_UNIDADE`**: 51 de 64 vivas param nela;
+- **o teste NAO PODE RODAR AINDA:** o artefato servido e o stub de 02/10, entao nada nasceria no GI, e
+  o `apiSinc` nao seria emitido, entao o registro sumiria em 10 min. **Depende da publicacao**, que
+  depende do `main` voltar a compilar.
+
+**E um risco do teste que nao e de privacidade, e sim da FOLHA DELE:** ele e funcionario do grupo,
+entao o CPF dele quase certamente **ja existe no G.I com vinculo**. Com o `apiSinc` no default, o GI
+**promove sozinho em menos de 10 minutos**, e **ninguem aqui consegue provar** o que o fornecedor faz
+ao promover um CPF que ja tem vinculo. Antes de comecar: ou o `apiSinc=true` publicado, ou um CPF que
+nao seja o dele, ou uma pergunta ao GI.
+
+## 06/10/2026: O apiSinc = FALSE E O MODELO. O "sumico" era o caminho CERTO, e o true e que desviava
+
+O diretor validou NA TELA, e isso fecha a duvida que arrastava desde 02/10. A fabrica reportava que
+lia o registro no GI (pela API) e o diretor nao o achava (na tela). Os dois estavam certos: eram
+lugares diferentes.
+
+### O QUE FOI PROVADO AO VIVO (06/10, 11:32)
+
+Dois registros sinteticos gemeos, identicos em tudo menos o `apiSincAdmissaoDigital`, enviados com 3
+segundos de diferenca, cliente 51525, empresa/filial 2/4:
+
+| registro | nome | CPF | apiSinc | enviado | desfecho |
+|---|---|---|---|---|---|
+| 32 | AO VIVO SINC FALSO 1129 | 55555555555 | **false** | 11:32:18 | **consumido em 3 min** (saiu do GetAll as 11:35:34) |
+| 33 | AO VIVO SINC VERDADEIRO 1129 | 66666666666 | **true** | 11:32:21 | **ficou** na fila (como o 31) |
+
+**O diretor VIU o 32 (false) na tela de Cadastro de Funcionarios, onde ele trabalha.** O 33 e o 31
+(true) nao apareciam ali porque foram roteados para a **Admissao Digital**, um modulo que o time nao
+acessa.
+
+### O MODELO, para nao reabrir
+
+1. **A admissao vai ao GI com `apiSincAdmissaoDigital = FALSE`.** E o default do fornecedor e o default
+   do codigo (`enviar-para-gi.service.ts:238`, so `"true"` explicito liga; ausente = false). **Producao
+   usa false**, medido: a env `GI_API_SINC_ADMISSAO_DIGITAL` esta **ausente** do `.env`, e ausente e
+   false. O `true` so existiu DENTRO dos processos descartaveis de medicao, nunca no `.env`.
+
+2. **`false` "Sincroniza com GI"** (palavra do contrato, `docs/GI-CATALOGOS-DA-DESCRIPTION.md:1200`):
+   roteia para o fluxo normal do GI, a tela de **Cadastro de Funcionarios** onde o time cadastra na
+   folha. **`true` "Sincroniza com Admissao Digital"**, um modulo SEPARADO que o time nao usa.
+
+3. **O "sumico" NUNCA foi perda.** Sumir do nosso `GetAll` com `false` = **foi promovido para a tela de
+   cadastro**, o lugar certo. Os que a fabrica forcou para `true` (24 a 31, 33) e que se perdiam da
+   vista, porque iam para a Admissao Digital. A leitura antiga confundiu "saiu da fila" com
+   "perdeu-se", e inverteu o valor seguro.
+
+4. **A medicao da API nunca poderia ter decidido isto sozinha**, e isso fica registrado como limite: a
+   folha do fornecedor responde **403** a nossa credencial, entao, depois que o registro sai do
+   `GetAll`, a API nao distingue "promovido" de "descartado". So a **tela do diretor** arbitra. Foi o
+   olho dele que fechou, nao a API.
+
+5. **BONUS (apontado pelo `seguranca`): `false` tambem fecha o risco de retencao de PII.** O `true`
+   deixava nome, CPF, RG, PIS, nome da mae, endereco e salario **parados no fornecedor sem prazo e sem
+   DELETE ao nosso alcance** (limbo da Admissao Digital). `false` entrega ao fluxo que consome, e nao
+   cria essa retencao. O veto anterior do `seguranca` ao `true` permanente fica **resolvido pelo
+   proprio valor escolhido**, nao por mitigacao.
+
+### Agentes (§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou a hipotese do roteamento contra o contrato do fornecedor | **APROVOU** a hipotese; **VETOU** o fundamento "true = seguro"; desenhou o experimento e o controle de empresa/filial |
+| coordenador | reenvio ao vivo dos dois gemeos, acompanhamento do consumo, consolidacao | o diretor validou na tela |
+
+*(Decisao do diretor, 06/10/2026, apos validar na tela que o 32 (false) aparece onde ele cadastra.)*

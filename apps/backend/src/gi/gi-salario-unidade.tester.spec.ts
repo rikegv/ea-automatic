@@ -111,6 +111,9 @@ function envio(contratacao: ContratacaoGi) {
   } as unknown as GiApiService;
   const leitor = {
     jaEnviado: async () => false,
+    // Porta nova da cadeia (06/10/2026): `lerEstado` e a leitura AUTORITATIVA de farol, pausa e
+    // origem. Dublê vivo e nao encerrado, para este arquivo continuar medindo o que ele mede.
+    lerEstado: async () => ({ farolGlobal: "EM_ADMISSAO", pausadaEm: null, origem: "MANUAL" }),
     lerPessoa: async () => PESSOA,
     lerContratacao: async () => contratacao,
     marcarEnviado,

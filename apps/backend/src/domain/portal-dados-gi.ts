@@ -100,6 +100,40 @@ export function dadoGiExpirado(expurgarEm: Date | null, agora: Date): boolean {
   return expurgarEm != null && expurgarEm.getTime() <= agora.getTime();
 }
 
+// ── A TRAVA DE ORIGEM do gatilho AUTOMÁTICO: ALLOWLIST, nunca denylist ─────────────────────────
+
+/**
+ * AS ORIGENS DE ADMISSÃO AUTORIZADAS A SEREM ENVIADAS AO G.I PELO GATILHO AUTOMÁTICO.
+ *
+ * Hoje é uma só, `MANUAL`, que é o fluxo NOVO (cadastro manual, wizard, atração e seleção, cargas): a
+ * admissão que nasceu do webhook do Pandapé (`admissoes.origem = "PANDAPE"`, escrita por um ponto só,
+ * `pandape/pandape-sync.service.ts`) **já é enviada ao G.I por fora do EA**, e mandá-la de novo
+ * duplicaria a pessoa na folha do fornecedor. A §A.5 descreve esse envio como único e irreversível, que
+ * é a própria razão do alerta de dupla correção.
+ *
+ * ⚠️ É **ALLOWLIST, e isso é a fechadura, não estilo.** Escrita como denylist (`origem !== "PANDAPE"`) a
+ * trava AUTORIZA POR OMISSÃO todo valor futuro do enum: o Digai é uma segunda ATS, com ingestão já
+ * construída, e no dia em que nascer uma `origem` nova ela sairia enviando sozinha, sem ninguém decidir,
+ * e a pessoa poderia ir duas vezes para a folha. Com a allowlist, **origem nova nasce BLOQUEADA** e
+ * entrar na lista é um ato deliberado, decidido pelo diretor. Mesma lição do `FAROIS_VIVOS` e do
+ * `Record` fechado: fail-closed por construção, não por lembrança.
+ *
+ * ⚠️ A TRAVA É DO GATILHO AUTOMÁTICO, NÃO DO BOTÃO MANUAL. Enviar um Pandapé a mão pode ser legítimo e
+ * é decisão do diretor, que ele não tomou: por isso esta régua não é consultada em `enviarManual`.
+ */
+export const ORIGENS_AUTORIZADAS_A_ENVIAR_AO_GI = ["MANUAL"] as const;
+
+/**
+ * A origem da admissão está autorizada a enviar ao G.I pelo gatilho automático?
+ *
+ * FAIL-CLOSED: origem ausente, nula, vazia ou desconhecida devolve `false`. A coluna é `NOT NULL` com
+ * default `MANUAL`, então ausência aqui significa "não li a admissão", e nesse caso não se envia.
+ */
+export function origemAutorizadaParaGi(origem?: string | null): boolean {
+  if (typeof origem !== "string") return false;
+  return (ORIGENS_AUTORIZADAS_A_ENVIAR_AO_GI as readonly string[]).includes(origem.trim());
+}
+
 // ── Peça 3 (INERTE): as DUAS allowlists FECHADAS e o gatilho fail-closed ────────────────────────
 
 /**
@@ -1146,7 +1180,49 @@ export interface FuncionarioSelecao {
    * referência a cliente inexistente, a mesma família do registro órfão já medido em empresa/filial.
    */
   codigoCliente: number | null;
+
+  // ══ A OPÇÃO DE SINCRONISMO (allowlist 3, de UM campo só) ════════════════════════════════════════
+
+  /**
+   * `apiSincAdmissaoDigital`: para QUAL lado o G.I sincroniza a pré-admissão que acabou de receber.
+   * `boolean` **não-anulável**, `default false` no contrato do fornecedor
+   * (`true - Sincroniza com Admissao Digital, false - Sincroniza com GI`).
+   *
+   * MEDIDO NA PRODUÇÃO DO FORNECEDOR em 05/10/2026, e é a medição que explica por que o campo existe
+   * aqui: com `false` (o default dele) a pré-admissão é **consumida e SOME em menos de 10 minutos**; com
+   * `true` ela **PERMANECE** (confirmado em três leituras, aos 11 e aos 26 minutos). Com `false`, a
+   * auditoria que fecha fora do horário de trabalho faz o time **perder a admissão**: o registro
+   * desaparece antes de alguém ver.
+   *
+   * ⚠️ O EA ENTREGA O MECANISMO, NÃO O VALOR. O valor vem de variável de ambiente
+   * (`GI_API_SINC_ADMISSAO_DIGITAL`, lida pelo `EnviarParaGiService`) e o **default aqui é `false`**, que
+   * é o default do fornecedor: sem ninguém decidir, o comportamento não muda. Assim a decisão é
+   * reversível numa linha de `.env`, e não num commit.
+   *
+   * ⚠️ ELE ENTRA PELO MONTADOR, DENTRO DA ALLOWLIST FECHADA, nunca injetado depois dela: campo enfiado
+   * no payload por fora não passa pelas redes de runtime desta fronteira e não aparece nas varreduras
+   * que provam o recorte.
+   */
+  apiSincAdmissaoDigital: boolean;
 }
+
+/**
+ * AS OPÇÕES DE ENVIO, um parâmetro nomeado PRÓPRIO do montador (depois de pessoa e contratação). Não é
+ * dado de pessoa nem de folha: é **como o fornecedor trata o registro** depois de recebê-lo.
+ *
+ * Mora num objeto próprio, e não solto na `ContratacaoGi`, porque a `ContratacaoGi` é a allowlist dos
+ * campos de CONTRATAÇÃO autorizados pelo diretor, e misturar opção de integração ali afrouxaria aquela
+ * contagem fechada.
+ */
+export interface OpcoesDeEnvioGi {
+  /** Ver `FuncionarioSelecao.apiSincAdmissaoDigital`. Default `false`, o default do fornecedor. */
+  apiSincAdmissaoDigital: boolean;
+}
+
+/** O padrão: o default DO FORNECEDOR. Sem decisão explícita, o EA não muda o comportamento do G.I. */
+export const OPCOES_DE_ENVIO_GI_PADRAO: OpcoesDeEnvioGi = {
+  apiSincAdmissaoDigital: false,
+};
 
 /**
  * O DE/PARA de código do GI, INJETADO. Traduz o que o EA guarda como TEXTO (nome da cidade) no CÓDIGO
@@ -1342,9 +1418,11 @@ export function montarFuncionarioSelecao(
   pessoa: PessoaParaGi,
   depara: DeParaGi = DE_PARA_GI_VAZIO,
   contratacao: ContratacaoGi = CONTRATACAO_GI_VAZIA,
+  opcoes: OpcoesDeEnvioGi = OPCOES_DE_ENVIO_GI_PADRAO,
 ): FuncionarioSelecao {
   const p = pessoa ?? {};
   const c = contratacao ?? CONTRATACAO_GI_VAZIA;
+  const o = opcoes ?? OPCOES_DE_ENVIO_GI_PADRAO;
   const { ddd, numero } = separarTelefone(p.telefone);
   return {
     nome: cortarTexto(limpo(p.nome), 60),
@@ -1432,6 +1510,11 @@ export function montarFuncionarioSelecao(
     // fronteira do payload, e `0`/string/decimal vindos de uma `ContratacaoGi` montada por fora viram
     // NULO aqui, para a guarda do `POST` recusar em vez de o fornecedor gravar cliente inexistente.
     codigoCliente: codigoClienteGiValido(c.codigoCliente),
+    // A OPÇÃO DE SINCRONISMO, pelo parâmetro nomeado `opcoes`. REDE DE RUNTIME como as demais desta
+    // fronteira: só `true` vira `true`, e qualquer outra coisa (string, nulo, ausente) cai no `false`,
+    // que é o default do fornecedor. O campo é `boolean` NÃO-anulável no contrato, então a chave existe
+    // sempre e nunca sai `null`: chave que aparece e desaparece faz o GI receber formatos diferentes.
+    apiSincAdmissaoDigital: o.apiSincAdmissaoDigital === true,
   };
 }
 

@@ -1408,3 +1408,34 @@ dois lados é frente própria, a decidir pelo diretor.
 
 *(Decisão do diretor, 02/10/2026, após a varredura duplicar 259 pré-admissões em produção. O
 coordenador mediu, o diretor deu a regra.)*
+
+## A.48: A ADMISSÃO VAI AO GI COM apiSinc = FALSE, e o true DESVIA (regra permanente)
+
+**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = FALSE`.** É o default do fornecedor e
+o default do código, e produção **não** sobrepõe: a env `GI_API_SINC_ADMISSAO_DIGITAL` fica **ausente**
+(ausente = false). Ninguém liga o `true`, nem "só para o registro não sumir".
+
+**O FUNDAMENTO, validado pelo diretor NA TELA do GI (06/10/2026):**
+- **`false` "Sincroniza com GI"**: roteia para o fluxo normal, a tela de **Cadastro de Funcionários**
+  onde o time cadastra na folha. É onde o diretor PRECISA ver o registro.
+- **`true` "Sincroniza com Admissão Digital"**: desvia para um **módulo separado que o time não
+  acessa**. O registro não some, mas fica num limbo invisível para quem cadastra.
+
+**O "SUMIÇO" NUNCA FOI PERDA, e é o que fechou a dúvida que arrastou de 02 a 06/10.** O registro com
+`false` sai da fila de pré-admissão da API porque **foi PROMOVIDO para a tela de cadastro**, o lugar
+certo. Os que a fábrica forçou para `true` é que se perdiam da vista. A leitura antiga confundiu "saiu
+da fila" com "perdeu-se" e inverteu o valor seguro, chegando a registrar `true` como o correto. **Não
+é.**
+
+**LIMITE QUE A REGRA CARREGA: a API não arbitra isto.** A folha do fornecedor responde **403** à nossa
+credencial, então, depois que o registro sai do `GetAll`, a leitura GET não distingue "promovido" de
+"descartado". Quem arbitra o destino é a **tela do GI**, não a nossa medição. Foi medição de tela, do
+diretor, que decidiu.
+
+**BÔNUS DE LGPD (§A.6): `false` também fecha a retenção.** O `true` deixava nome, CPF, RG, PIS, nome da
+mãe, endereço e salário parados no fornecedor **sem prazo e sem DELETE ao nosso alcance**. `false`
+entrega ao fluxo que consome e não cria esse limbo. O veto do `seguranca` ao `true` permanente fica
+resolvido pelo próprio valor escolhido.
+
+*(Decisão do diretor, 06/10/2026, após validar na tela que o registro com `false` aparece onde ele
+cadastra. Registro detalhado no DIARIO.)*

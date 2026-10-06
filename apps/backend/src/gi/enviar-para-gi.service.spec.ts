@@ -7,6 +7,7 @@ import type { GiDeParaService } from "./gi-depara.service";
 import {
   DE_PARA_GI_VAZIO,
   type ContratacaoGi,
+  type FuncionarioSelecao,
   type PessoaParaGi,
 } from "../domain/portal-dados-gi";
 
@@ -66,6 +67,14 @@ function fakes(over: {
   pessoa?: PessoaParaGi | null;
   contratacao?: ContratacaoGi | null;
   criar?: GiCriacaoResultado;
+  /** `admissoes.farol_global` lido pela cadeia unica. Padrao: admissao VIVA. */
+  farolGlobal?: string | null;
+  /** `admissoes.pausada_em` lido pela cadeia unica. Padrao: nao pausada. */
+  pausadaEm?: Date | null;
+  /** `admissoes.origem` lida pela trava do automatico. Padrao: `MANUAL`, o fluxo NOVO. */
+  origem?: unknown;
+  /** A LINHA da admissao nao existe: a cadeia unica recusa (fail-closed). */
+  semEstado?: boolean;
 } = {}) {
   const criar = vi.fn(
     async (): Promise<GiCriacaoResultado> =>
@@ -81,6 +90,20 @@ function fakes(over: {
     lerPessoa: vi.fn(async () => (over.pessoa === undefined ? PESSOA : over.pessoa)),
     lerContratacao: vi.fn(async () =>
       over.contratacao === undefined ? CONTRATACAO_OK : over.contratacao,
+    ),
+    // O ESTADO (farol, pausa, origem) que as duas travas de estado leem. O padrao e admissao VIVA do
+    // fluxo NOVO, que e o mundo em que o envio DEVE acontecer: assim as recusas deste arquivo seguem
+    // vindo da guarda que cada cenario mede, e nao da trava de encerramento nem da de origem.
+    lerEstado: vi.fn(async () =>
+      over.semEstado
+        ? null
+        : {
+            farolGlobal: over.farolGlobal ?? "EM_ADMISSAO",
+            pausadaEm: over.pausadaEm ?? null,
+            // `in` e nao `?? "MANUAL"`: o cenario precisa poder dizer `origem: undefined` de proposito,
+            // que e um dos casos de origem desconhecida, e o `??` o transformaria em MANUAL.
+            origem: "origem" in over ? over.origem : "MANUAL",
+          },
     ),
     marcarEnviado,
   } as unknown as GiLeitorService;
@@ -102,21 +125,86 @@ function build(env: Record<string, string>, f: ReturnType<typeof fakes>): Enviar
   return new EnviarParaGiService(config, f.giApi, f.leitor, f.depara);
 }
 
-describe("EnviarParaGiService: gatilho AUTOMATICO (auditoria) NUNCA envia", () => {
+/**
+ * ⚠️ ESTE BLOCO MUDOU DE REQUISITO em 05/10/2026, por decisão do diretor: o gatilho AUTOMÁTICO passou
+ * a ser o caminho PRINCIPAL e ENVIA de verdade, pela mesma cadeia de guardas do manual. Antes ele era
+ * um no-op estrutural, e era isso que se media aqui.
+ *
+ * O que sobrou para medir, e é o que importa daqui para frente: a OPERABILIDADE da admissão
+ * (`admissaoOperavel`) é condição de entrada do automático, e ela é fail-closed.
+ */
+const CONTEXTO_VIVO = { farolGlobal: "EM_ADMISSAO", pausadaEm: null, autorId: "autor-1" };
+
+describe("EnviarParaGiService: gatilho AUTOMATICO (auditoria) e a operabilidade", () => {
   it("sem GI configurado: GI_NAO_CONFIGURADO", async () => {
     const f = fakes({ configurado: false });
     const svc = build({}, f);
-    const r = await svc.enviar("00000000-0000-0000-0000-000000000000");
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", CONTEXTO_VIVO);
     expect(r).toEqual({ enviado: false, motivo: "GI_NAO_CONFIGURADO" });
     expect(f.criar).not.toHaveBeenCalled();
   });
 
-  it("mesmo GI configurado E disparo armado, o automatico e inerte e NUNCA cria", async () => {
+  it("admissao DECLINADA: GI_ADMISSAO_NAO_OPERAVEL, nem com o disparo armado", async () => {
     const f = fakes({ configurado: true });
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
-    const r = await svc.enviar("00000000-0000-0000-0000-000000000000");
-    expect(r).toEqual({ enviado: false, motivo: "GI_AUTOMATICO_INERTE" });
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", {
+      ...CONTEXTO_VIVO,
+      farolGlobal: "DECLINOU",
+    });
+    expect(r).toEqual({ enviado: false, motivo: "GI_ADMISSAO_NAO_OPERAVEL" });
+    expect(f.criar, "um declinado foi mandado para a folha do fornecedor").not.toHaveBeenCalled();
+    expect(f.leitor.lerPessoa, "leu PII de quem nao vai ser enviado").not.toHaveBeenCalled();
+  });
+
+  it("admissao PAUSADA (farol vivo): GI_ADMISSAO_NAO_OPERAVEL", async () => {
+    const f = fakes({ configurado: true });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", {
+      ...CONTEXTO_VIVO,
+      pausadaEm: new Date("2026-10-01T12:00:00Z"),
+    });
+    expect(r).toEqual({ enviado: false, motivo: "GI_ADMISSAO_NAO_OPERAVEL" });
     expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("contexto SEM farol: fail-closed, nao envia", async () => {
+    // Chamador que esquecer de preencher o contexto não vira envio por omissão: a régua de
+    // operabilidade recusa `undefined`.
+    const f = fakes({ configurado: true });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", { autorId: "autor-1" });
+    expect(r).toEqual({ enviado: false, motivo: "GI_ADMISSAO_NAO_OPERAVEL" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("admissao VIVA e disparo ARMADO: ENVIA e carimba, pela mesma cadeia do manual", async () => {
+    const f = fakes({ configurado: true });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", CONTEXTO_VIVO);
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+    expect(f.marcarEnviado).toHaveBeenCalledTimes(1);
+  });
+
+  it("admissao VIVA e disparo DESARMADO: monta e PARA, como o manual", async () => {
+    const f = fakes({ configurado: true });
+    const svc = build({}, f);
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", CONTEXTO_VIVO);
+    expect(r).toEqual({ enviado: false, motivo: "GI_MONTADO_NAO_DISPARADO" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("o cliente do GI LANCANDO nao propaga: desfecho GI_FALHA_ENVIO", async () => {
+    // O automático é chamado de dentro do pós-veredito da auditoria: lançar ali derrubaria a
+    // auditoria do candidato por causa do fornecedor.
+    const f = fakes({ configurado: true });
+    f.criar.mockImplementation(async () => {
+      throw new Error("GI fora do ar (sintetico)");
+    });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", CONTEXTO_VIVO);
+    expect(r).toEqual({ enviado: false, motivo: "GI_FALHA_ENVIO" });
+    expect(f.marcarEnviado).not.toHaveBeenCalled();
   });
 });
 
@@ -409,5 +497,169 @@ describe("EnviarParaGiService: a guarda da contratacao NAO desarma a trava do di
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
     expect(r.motivo).toBe("GI_MONTADO_NAO_DISPARADO");
     expect(f.criar).not.toHaveBeenCalled();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// A TRAVA DE ORIGEM (item 1): ALLOWLIST, e SÓ no gatilho automático
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("EnviarParaGiService: a TRAVA DE ORIGEM do gatilho automatico", () => {
+  const ARMADO = { GI_DISPARO_ARMADO: "true" };
+  const VIVO = { farolGlobal: "EM_ADMISSAO", pausadaEm: null, autorId: "autor-1" };
+
+  it("origem MANUAL (fluxo novo) ENVIA: o canario, sem ele os zeros abaixo nao provam nada", async () => {
+    const f = fakes({ configurado: true, origem: "MANUAL" });
+    const r = await build(ARMADO, f).enviar(ADMISSAO, VIVO);
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+  });
+
+  it("origem PANDAPE NAO envia: o Pandape ja manda ao G.I por fora, a pessoa duplicaria na folha", async () => {
+    const f = fakes({ configurado: true, origem: "PANDAPE" });
+    const r = await build(ARMADO, f).enviar(ADMISSAO, VIVO);
+    expect(r).toEqual({ enviado: false, motivo: "GI_ORIGEM_NAO_AUTORIZADA" });
+    expect(f.criar).not.toHaveBeenCalled();
+    expect(f.marcarEnviado).not.toHaveBeenCalled();
+  });
+
+  /**
+   * O TESTE QUE DISTINGUE ALLOWLIST DE DENYLIST, e e o unico que distingue: hoje o enum tem dois
+   * valores, entao `=== "MANUAL"` e `!== "PANDAPE"` dao o MESMO resultado nos dois casos acima. Numa
+   * denylist a origem DESCONHECIDA envia (autorizada por omissao); na allowlist, nao envia.
+   */
+  it.each([["DIGAI"], ["IFRACTAL"], ["manual"], [""], [null], [undefined]])(
+    "origem desconhecida (%s) NAO envia: fail-closed, origem futura nasce BLOQUEADA",
+    async (origem) => {
+      const f = fakes({ configurado: true, origem });
+      const r = await build(ARMADO, f).enviar(ADMISSAO, VIVO);
+      expect(r).toEqual({ enviado: false, motivo: "GI_ORIGEM_NAO_AUTORIZADA" });
+      expect(f.criar).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a linha da admissao ausente NAO envia pelo automatico (fail-closed)", async () => {
+    const f = fakes({ configurado: true, semEstado: true });
+    const r = await build(ARMADO, f).enviar(ADMISSAO, VIVO);
+    expect(r.enviado).toBe(false);
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("a trava de origem NAO vale no botao MANUAL: PANDAPE a mao ENVIA", async () => {
+    // Decisao do diretor que ele NAO tomou: enviar um Pandape a mao pode ser legitimo, entao o manual
+    // nao consulta a allowlist. Este teste e a trava da DECISAO, nao do gosto de quem implementou.
+    const f = fakes({ configurado: true, origem: "PANDAPE" });
+    const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// O ENCERRAMENTO (item 2): declinado e rescindido nao saem por caminho NENHUM
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("EnviarParaGiService: admissao ENCERRADA nao sai por caminho nenhum", () => {
+  const ARMADO = { GI_DISPARO_ARMADO: "true" };
+  const VIVO = { farolGlobal: "EM_ADMISSAO", pausadaEm: null, autorId: "autor-1" };
+
+  it.each([["DECLINOU"], ["RESCISAO"]])(
+    "farol %s: o botao MANUAL recusa, e a saida operacional e mudar o farol antes",
+    async (farolGlobal) => {
+      const f = fakes({ configurado: true, farolGlobal });
+      const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
+      expect(r).toEqual({ enviado: false, motivo: "GI_ADMISSAO_NAO_OPERAVEL" });
+      expect(f.criar).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["DECLINOU"], ["RESCISAO"]])(
+    "farol %s: o gatilho AUTOMATICO tambem recusa",
+    async (farolGlobal) => {
+      const f = fakes({ configurado: true, farolGlobal });
+      const r = await build(ARMADO, f).enviar(ADMISSAO, { ...VIVO, farolGlobal });
+      expect(r.enviado).toBe(false);
+      expect(f.criar).not.toHaveBeenCalled();
+    },
+  );
+
+  /**
+   * ⚠️ O TESTE QUE IMPEDE A VOLTA DO DEFEITO: a guarda da cadeia unica NAO e `admissaoOperavel`.
+   * `ADMISSAO_CONCLUIDA` nao e farol VIVO, e sao 1.550 `MANUAL` + 452 `PANDAPE` na base (06/10/2026).
+   * E quem TEM de estar na folha; o farol e flag manual e pegajosa, entao marca-la antes do envio
+   * barraria a admissao para sempre. Quem trocar o predicado por `admissaoOperavel` quebra aqui.
+   */
+  it("farol ADMISSAO_CONCLUIDA ENVIA pelo botao manual: concluida e quem mais precisa ir a folha", async () => {
+    const f = fakes({ configurado: true, farolGlobal: "ADMISSAO_CONCLUIDA" });
+    const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+  });
+
+  it("admissao PAUSADA ENVIA pelo botao manual (regua literal do diretor, pendente de decisao)", async () => {
+    const f = fakes({ configurado: true, pausadaEm: new Date("2026-10-01T12:00:00Z") });
+    const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
+    expect(r.enviado).toBe(true);
+  });
+
+  it("a linha da admissao ausente recusa o botao MANUAL (fail-closed)", async () => {
+    const f = fakes({ configurado: true, semEstado: true });
+    const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
+    expect(r).toEqual({ enviado: false, motivo: "GI_ADMISSAO_NAO_OPERAVEL" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("a IDEMPOTENCIA responde ANTES do encerramento: ja enviada segue GI_JA_ENVIADO", async () => {
+    // A ordem e deliberada: "ja foi" e informacao mais util que "esta declinada", e e o que o time
+    // precisa ler quando clica de novo.
+    const f = fakes({ configurado: true, jaEnviado: true, farolGlobal: "DECLINOU" });
+    const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_JA_ENVIADO");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// O `apiSincAdmissaoDigital` (item 3): MECANISMO de ambiente, com default `false`
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("EnviarParaGiService: apiSincAdmissaoDigital vem do ambiente, com default false", () => {
+  const ARMADO = { GI_DISPARO_ARMADO: "true" };
+
+  async function payloadCom(env: Record<string, string>) {
+    const f = fakes({ configurado: true });
+    await build({ ...ARMADO, ...env }, f).enviarManual(ADMISSAO, "autor-1");
+    expect(f.criar).toHaveBeenCalledTimes(1);
+    return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
+  }
+
+  it("sem a variavel: o campo SAI e vale false, o default do FORNECEDOR", async () => {
+    const payload = await payloadCom({});
+    expect(payload.apiSincAdmissaoDigital).toBe(false);
+  });
+
+  it("GI_API_SINC_ADMISSAO_DIGITAL=true: o campo vale true e a pre-admissao PERMANECE no G.I", async () => {
+    const payload = await payloadCom({ GI_API_SINC_ADMISSAO_DIGITAL: "true" });
+    expect(payload.apiSincAdmissaoDigital).toBe(true);
+  });
+
+  it.each([["false"], ["1"], ["sim"], ["on"], [""]])(
+    "valor %s NAO liga: uma forma so de ligar, para nao existir meio-ligado",
+    async (valor) => {
+      const payload = await payloadCom({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
+      expect(payload.apiSincAdmissaoDigital).toBe(false);
+    },
+  );
+
+  it("espaco e caixa NAO atrapalham: ` TRUE ` liga, como no GI_DISPARO_ARMADO", async () => {
+    // Mesma leitura do `GI_DISPARO_ARMADO` de proposito: quem edita o `.env` nao deve perder a
+    // decisao por um espaco, e duas reguas de leitura diferentes para duas flags vizinhas e pior.
+    const payload = await payloadCom({ GI_API_SINC_ADMISSAO_DIGITAL: " TRUE " });
+    expect(payload.apiSincAdmissaoDigital).toBe(true);
+  });
+
+  it("a CHAVE existe sempre: campo booleano nao-anulavel no contrato do G.I", async () => {
+    const payload = await payloadCom({});
+    expect(Object.keys(payload)).toContain("apiSincAdmissaoDigital");
+    expect(payload.apiSincAdmissaoDigital).not.toBeNull();
   });
 });

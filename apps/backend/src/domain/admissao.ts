@@ -104,6 +104,47 @@ export function admissaoOperavel(farol?: string | null, pausadaEm?: Date | strin
   return ehFarolVivo(farol) && !pausadaEm;
 }
 
+/**
+ * OS FARÓIS DE ENCERRAMENTO, em UM lugar só: a admissão acabou e não vira nada.
+ *
+ * ⚠️ NÃO É O COMPLEMENTO DE `FAROIS_VIVOS`, e confundir as duas coisas foi o erro que esta constante
+ * existe para impedir. Entre "vivo" e "encerrado" há o resto: `ADMISSAO_CONCLUIDA`,
+ * `AGUARDANDO_LIBERACAO` e `LIBERACAO_RECUSADA` não são vivos E não são encerrados. São DUAS perguntas
+ * diferentes, e a resposta certa depende de qual se está fazendo.
+ *
+ * Mesma dupla da `FAROL_COM_IDENTIDADE_PROVISORIA` (`domain/identidade-provisoria`), e pelo mesmo
+ * fundamento: são os dois terminais de encerramento (§A.16, declínio não deixa nada ativo).
+ *
+ * ACRESCENTAR UM FAROL AQUI É UMA LINHA, de propósito: a lista é o único ponto de decisão, e quem a
+ * consome deriva (nunca copia o literal).
+ */
+export const FAROIS_ENCERRADOS = ["DECLINOU", "RESCISAO"] as const;
+
+/**
+ * A admissão está ENCERRADA? (declinada ou rescindida)
+ *
+ * ⚠️ ESTA NÃO É `admissaoOperavel`, E A DIFERENÇA É DE 2.002 ADMISSÕES NA BASE. `admissaoOperavel` é
+ * `ehFarolVivo && !pausada`, e `ehFarolVivo` admite SÓ `EM_ADMISSAO` e `BANCO_AGUARDAR`: usá-la como
+ * "pode trabalhar esta admissão?" barraria também `ADMISSAO_CONCLUIDA`, que são 1.550 `MANUAL` + 452
+ * `PANDAPE` medidas em 06/10/2026. E admissão CONCLUÍDA é precisamente quem TEM de estar na folha, com
+ * o agravante de o farol ser flag MANUAL e PEGAJOSA (§A.3): bastaria o consultor marcá-la antes de o
+ * envio sair para a admissão ficar barrada para sempre, por nenhum dos dois gatilhos. Deixaria de ser
+ * trava e viraria defeito.
+ *
+ * Por isso o nome diz ENCERRADA e não "operável": a pergunta aqui é só "acabou?", e a resposta não diz
+ * nada sobre pausa nem sobre processo automático. Quem precisa daquela outra régua chama
+ * `admissaoOperavel` e continua mais restrito, de propósito.
+ *
+ * FAIL-OPEN POR DESENHO, e aqui ele é o certo: farol ausente ou desconhecido devolve `false` (não
+ * encerrada), porque a coluna é `NOT NULL` e a régua do diretor nomeia DUAS palavras, declinado e
+ * rescindido. Quem precisa recusar por ausência de dado recusa pela AUSÊNCIA DA LINHA, que é outra
+ * pergunta e tem de ser feita antes desta.
+ */
+export function admissaoEncerrada(farol?: string | null): boolean {
+  if (typeof farol !== "string") return false;
+  return (FAROIS_ENCERRADOS as readonly string[]).includes(farol.trim());
+}
+
 /** A admissão está pausada? Regra única de leitura da flag (null = não pausada). */
 export function ehPausada(pausadaEm?: Date | string | null): boolean {
   return Boolean(pausadaEm);

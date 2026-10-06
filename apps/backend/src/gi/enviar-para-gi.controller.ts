@@ -22,10 +22,17 @@ export class EnviarParaGiController {
   constructor(private readonly enviarService: EnviarParaGiService) {}
 
   /**
-   * Dispara o envio manual da admissão ao GI. É o ÚNICO caminho que chega perto do envio real (o
-   * automático da auditoria é estruturalmente no-op), e ainda assim trava por `GI_DISPARO_ARMADO`,
-   * DESLIGADA nesta entrega: hoje monta o payload e devolve `GI_MONTADO_NAO_DISPARADO` sem criar nada
-   * no GI. O `@CurrentUser()` é o autor do disparo, para a trilha do GI da peça 3.
+   * Dispara o envio manual da admissão ao GI. É a porta ALTERNATIVA, não a principal: desde 05/10/2026
+   * o caminho principal é o AUTOMÁTICO, no fechamento da auditoria (decisão do diretor). As duas
+   * passam pela MESMA cadeia de guardas (`enviarComGuardas`) e pela MESMA flag `GI_DISPARO_ARMADO`.
+   *
+   * ⚠️ A DIFERENÇA QUE IMPORTA, levantada pelo `seguranca`: o automático exige admissão OPERÁVEL
+   * (`admissaoOperavel`, farol vivo e não pausada) e o MANUAL NÃO. Um MASTER pode, deliberadamente,
+   * mandar à folha uma admissão declinada, rescindida ou pausada. É ato humano de MASTER/SUPER_ADMIN,
+   * no padrão "responsabilização, não verificação técnica" do §A.5, e está registrado de propósito.
+   *
+   * O `@CurrentUser()` é o autor do disparo (não persistido do nosso lado: decisão do diretor em
+   * `docs/GI-VETO-DISPARO-ARMADO-RESOLVIDO.md`).
    */
   @Post("admissao/:admissaoId/enviar")
   @Roles("MASTER", "SUPER_ADMIN")

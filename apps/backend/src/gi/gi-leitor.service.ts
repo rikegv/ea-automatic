@@ -39,6 +39,22 @@ import {
  * §A.6: nada é logado aqui, em nenhuma das duas portas. O serviço não tem logger de propósito, então o
  * salário não tem por onde entrar num log nem numa mensagem de erro.
  */
+/**
+ * O estado da admissão que decide SE ela pode ser enviada ao G.I (nunca O QUE se envia). São as três
+ * colunas de `admissoes` que as travas de envio leem, e só elas.
+ */
+export interface EstadoDaAdmissaoParaEnvioGi {
+  /**
+   * `admissoes.farol_global`. Entra em `admissaoEncerrada` (`DECLINOU`/`RESCISAO`), a guarda da cadeia
+   * única. ⚠️ NÃO em `admissaoOperavel`, que exigiria farol VIVO e barraria `ADMISSAO_CONCLUIDA`.
+   */
+  farolGlobal: string | null;
+  /** `admissoes.pausada_em`. Preenchido = pausada = não envia. */
+  pausadaEm: Date | null;
+  /** `admissoes.origem` (`MANUAL` / `PANDAPE`). Entra em `origemAutorizadaParaGi`. */
+  origem: string | null;
+}
+
 @Injectable()
 export class GiLeitorService {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
@@ -234,6 +250,41 @@ export class GiLeitorService {
       // Os irmãos da base, para o montador decidir se pode tirar o sufixo. Vazio no caminho de sempre.
       vinculosDeOutrosClientesDaMesmaBase,
     });
+  }
+
+  /**
+   * O ESTADO DA ADMISSÃO que as DUAS travas de envio consomem, e **nada além disso**: o farol, a pausa
+   * e a ORIGEM. Três colunas de `admissoes`, nomeadas uma a uma. `null` quando a admissão não existe.
+   *
+   * POR QUE ELA EXISTE, e por que é uma porta separada das outras duas: o gatilho AUTOMÁTICO recebia
+   * farol e pausa do CHAMADOR (quem fechou a auditoria tem a admissão carregada), e o botão MANUAL não
+   * recebia nada, nem ninguém lia a `origem` em lugar algum do caminho do GI. Com a guarda de
+   * ENCERRAMENTO dentro de `enviarComGuardas` (o ponto por onde os dois gatilhos passam, decisão do
+   * diretor: declinado e rescindido não saem por caminho nenhum, nem por SUPER_ADMIN) e com a trava de
+   * ORIGEM no automático, o serviço passou a precisar ler o estado por conta própria, para nenhum
+   * caminho futuro contornar as guardas por simplesmente não passar contexto.
+   *
+   * ESTA LEITURA É A AUTORITATIVA das duas travas de estado. O que o `enviar()` recebe pelo contexto é
+   * curto-circuito barato (recusa sem tocar o banco), não a palavra final.
+   *
+   * ⚠️ NÃO É UMA CONSULTA A MAIS NA LEITURA DE CONTRATAÇÃO, de propósito. `lerContratacao` devolve
+   * `ContratacaoGi`, que é a allowlist FECHADA dos campos de contratação que atravessam para o
+   * fornecedor; farol, pausa e origem são estado INTERNO do EA e não têm campo do outro lado. Enfiá-los
+   * ali afrouxaria aquela contagem fechada e misturaria "o que se envia" com "se se envia".
+   *
+   * §A.6: NENHUMA coluna de pessoa é selecionada aqui. Nada é logado.
+   */
+  async lerEstado(admissaoId: string): Promise<EstadoDaAdmissaoParaEnvioGi | null> {
+    const [linha] = await this.db
+      .select({
+        farolGlobal: admissoes.farolGlobal,
+        pausadaEm: admissoes.pausadaEm,
+        origem: admissoes.origem,
+      })
+      .from(admissoes)
+      .where(eq(admissoes.id, admissaoId))
+      .limit(1);
+    return linha ?? null;
   }
 
   /**

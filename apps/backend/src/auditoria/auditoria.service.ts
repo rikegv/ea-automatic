@@ -75,6 +75,23 @@ export function precisaArquivarDrive(url: string | null): boolean {
 }
 
 /**
+ * QUANTAS LINHAS O `UPDATE` AFETOU, ou `null` quando o driver não informou.
+ *
+ * O driver desta casa é o `postgres-js` (ver `db/client.ts`), e nele um `UPDATE` sem `returning`
+ * resolve na `RowList` do `postgres`, que carrega a contagem em **`count`**. O `rowCount` do `pg` é
+ * lido também, de graça, porque é o nome do outro driver do ecossistema e um dia alguém troca.
+ *
+ * `null` É "NÃO SEI", E QUEM PERGUNTA DECIDE O QUE FAZER COM ISSO. Aqui não se chuta 1: a contagem é
+ * o sinal da TRANSIÇÃO, e transição suposta é envio ao fornecedor por suposição.
+ */
+function linhasAfetadas(resultado: unknown): number | null {
+  const r = resultado as { count?: unknown; rowCount?: unknown } | null | undefined;
+  if (typeof r?.count === "number") return r.count;
+  if (typeof r?.rowCount === "number") return r.rowCount;
+  return null;
+}
+
+/**
  * Resultado do PÓS-VEREDITO (ver `aplicarPosVeredito`): tudo o que acontece DEPOIS de um documento
  * mudar de estado, independente de quem mudou (IA ou pessoa).
  */
@@ -662,7 +679,10 @@ export class AuditoriaService {
       recuo = await this.recuarAuditoria(admissaoId, user);
     }
     if (progresso.completa) {
-      auditoriaAuto = await this.autoConcluirAuditoria(admissaoId, user);
+      // `transicionou` NÃO sobe para o `PosVeredito`: é sinal INTERNO do gatilho, não resposta de
+      // tela. O que a tela consome (`status`, `gateAberto`) segue exatamente igual.
+      const auto = await this.autoConcluirAuditoria(admissaoId, user);
+      auditoriaAuto = { status: auto.status, gateAberto: auto.gateAberto };
       // Fechou a régua e ainda não arquivou? → arquiva no Drive e expurga a staging.
       if (precisaArquivarDrive(adm.drivePastaUrl)) {
         // FALHA DE ARQUIVAMENTO NÃO PODE SER SILENCIOSA NEM DESTRUTIVA (OST produção, Bloco 1).
@@ -683,12 +703,39 @@ export class AuditoriaService {
         }
       }
 
-      // ── GATILHO da peça 3 (Portal→GI), PONTO (a): a régua obrigatória fechou, a admissão está
-      // completa do lado da auditoria. É aqui que o EA "manda a pessoa para a folha". HOJE É INERTE:
-      // `EnviarParaGiService.enviar` é no-op sem GI configurado (fail-closed). Não lança e não
-      // altera o pós-veredito: a auditoria não pode quebrar por causa de um envio que ainda não
-      // existe. O cliente do GI é a peça 3. O ponto (b) é o botão manual do time.
-      await this.enviarParaGi.enviar(admissaoId);
+      // ── GATILHO da peça 3 (Portal→GI), PONTO (a): a auditoria FECHOU AGORA, e é aqui que o EA
+      // "manda a pessoa para a folha". É o caminho PRINCIPAL por decisão do diretor (05/10/2026); o
+      // ponto (b), o botão manual do time, fica como alternativa.
+      //
+      // SÓ NA TRANSIÇÃO, e esta é a condição que impede um envio em massa. `progresso.completa` é um
+      // ESTADO: uma vez completa, verdadeira para sempre. Este método tem OITO chamadores, entre eles
+      // o timer de reconciliação do Drive (10 min) e o runner `db/rearquiva-drive.ts`, que laça TODA
+      // admissão com `drive_pasta_url` nulo. Disparar no estado faria cada passagem reenviar todo
+      // mundo que já está completo. `transicionou` vem do `rowCount` do UPDATE condicional da frente,
+      // que é a única resposta atômica para "fechou NESTA chamada".
+      //
+      // O FAROL E A PAUSA SÃO MEDIDOS DENTRO DO SERVIÇO DO GI (`admissaoOperavel`), e o dado vem
+      // daqui porque é aqui que a admissão está carregada. A leitura é DEPOIS do `recomputeFarolGlobal`
+      // da conclusão, de propósito: o que autoriza o envio é o farol CORRENTE, não o de antes.
+      if (auto.transicionou) {
+        try {
+          const alvo = await this.db.query.admissoes.findFirst({
+            where: eq(admissoes.id, admissaoId),
+          });
+          await this.enviarParaGi.enviar(admissaoId, {
+            farolGlobal: alvo?.farolGlobal,
+            pausadaEm: alvo?.pausadaEm,
+            autorId: user.id,
+          });
+        } catch {
+          // O ENVIO NUNCA DERRUBA A AUDITORIA. O serviço do GI já não lança, então este `catch` cobre
+          // o resto do bloco (a leitura da admissão) e qualquer regressão futura lá dentro: o
+          // pós-veredito segue devolvendo progresso, sinalizador e arquivamento. §A.6: sem PII.
+          this.logger.error(
+            "Gatilho do GI falhou no fechamento da auditoria: a auditoria segue concluída.",
+          );
+        }
+      }
     }
 
     return {
@@ -1038,7 +1085,7 @@ export class AuditoriaService {
   private async autoConcluirAuditoria(
     admissaoId: string,
     user: AuthUser,
-  ): Promise<{ status: string; gateAberto: boolean }> {
+  ): Promise<{ status: string; gateAberto: boolean; transicionou: boolean }> {
     const frentes = await this.db
       .select({
         id: frentesAdmissao.id,
@@ -1060,9 +1107,10 @@ export class AuditoriaService {
     );
     const gateAberto = podeAbrirCadastro(estadoDepois);
 
-    // Já concluída → nada a fazer (idempotente).
+    // Já concluída → nada a fazer (idempotente). É uma PRÉ-CHECAGEM barata, não a autoridade: quem
+    // decide a transição é o UPDATE condicional lá embaixo (ver o comentário dele).
     if (!auditoria || auditoria.concluida) {
-      return { status: auditoria?.status ?? "ANALISE_OK", gateAberto };
+      return { status: auditoria?.status ?? "ANALISE_OK", gateAberto, transicionou: false };
     }
 
     // Item 1: nascendo o Cadastro, nasce a Integração junto (só para cliente que exige). Leitura
@@ -1076,12 +1124,32 @@ export class AuditoriaService {
       ? await clienteExigeIntegracao(this.db, alvo?.codCliente)
       : false;
 
+    // A TRANSIÇÃO É O `rowCount` DE UM UPDATE CONDICIONAL, e isso é o conserto de um ler-antes/
+    // escrever-depois sem lock. Antes, a leitura das frentes acontecia FORA da transação e o
+    // `concluida` era testado ali; duas passagens simultâneas do pós-veredito (e ele tem OITO
+    // chamadores, incluindo um timer e um runner em lote) liam as duas `concluida = false` e as duas
+    // escreviam. Agora o `WHERE ... AND concluida = false` deixa o banco decidir: exatamente UMA
+    // afeta uma linha, e é essa que "concluiu agora".
+    //
+    // POR QUE ISSO IMPORTA ALÉM DA CORRIDA: régua completa é um ESTADO (uma vez completa, verdadeira
+    // para sempre), e o envio ao GI tem de disparar no EVENTO. Sem este sinal, o ramo idempotente e o
+    // ramo que grava devolviam a MESMA forma, e nenhum chamador tinha como distinguir "fechou agora"
+    // de "já estava fechada".
+    let transicionou = false;
     await this.db.transaction(async (tx) => {
       const agora = new Date();
-      await tx
+      const escrita = await tx
         .update(frentesAdmissao)
         .set({ status: "ANALISE_OK", concluida: true, dataConclusao: agora, atualizadoEm: agora })
-        .where(eq(frentesAdmissao.id, auditoria.id));
+        .where(and(eq(frentesAdmissao.id, auditoria.id), eq(frentesAdmissao.concluida, false)));
+      const afetadas = linhasAfetadas(escrita);
+      // ZERO AFETADAS = outra passagem fechou a frente entre a leitura e aqui. Nada a escrever e nada
+      // a enviar: o evento e o nascimento do Cadastro são DAQUELA passagem, não desta.
+      if (afetadas === 0) return;
+      // `null` é "o driver não informou a contagem", e nesse caso o lado que CEDE é o do ENVIO: os
+      // efeitos internos seguem (preservam o comportamento de sempre), e o gatilho do GI NÃO dispara,
+      // porque mandar gente para a folha do fornecedor sem certeza da transição é o dano irreversível.
+      transicionou = afetadas === 1;
       await tx.insert(frenteStatusEventos).values({
         admissaoId,
         frenteId: auditoria.id,
@@ -1100,7 +1168,7 @@ export class AuditoriaService {
     });
 
     await recomputeFarolGlobal(this.db, admissaoId);
-    return { status: "ANALISE_OK", gateAberto };
+    return { status: "ANALISE_OK", gateAberto, transicionou };
   }
 
   /** GET progresso — barra "X de Y" da régua obrigatória. */

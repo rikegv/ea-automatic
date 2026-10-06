@@ -121,6 +121,18 @@ interface PropriedadeDoSchema {
  * contrato sem edição (inclusive as `description` foram descartadas por volume, não por conteúdo).
  */
 const SCHEMA: Record<string, PropriedadeDoSchema> = {
+    // ACRESCENTADO em 06/10/2026, colado do contrato real do fornecedor
+    // (https://apigeral.gi.app.br/openapi/v1.json, relido nesta data). Decide se a pre-admissao fica
+    // ESPERANDO no GI ou e consumida por ele em menos de 10 minutos: medido em producao, com `false`
+    // o registro some, com `true` permanece. A chave sai SEMPRE, nunca omitida.
+    // A `description` do contrato real, que o tipo `PropriedadeDoSchema` nao modela, e:
+    // "true - Sincroniza com Admissao Digital, false - Sincroniza com GI".
+    "apiSincAdmissaoDigital": {
+      "default": false,
+      "type": [
+        "boolean"
+      ]
+    },
     "agencia": {
       "default": "",
       "maxLength": 10,
@@ -1477,8 +1489,14 @@ describe("ponto 9: tipoContrato (D/I) e o PRAZO, acoplado ao vinculo, e nao o no
     // contagem ser fechada: quatro de PESSOA (`cidadeNascimento`, `cidadeRG`, `cidadeExpedicao` e
     // `codMunicipioNascto`, 40 ⇒ 44) e UM de CONTRATAÇÃO (`codigoCliente`, 9 ⇒ 10). Campo que entre sem
     // passar por esta linha cresce calado, e foi para isso que o número existe.
-    expect(Object.keys(montarCheio())).toHaveLength(54);
-    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(54);
+    //
+    // DE 54 PARA 55 em 06/10/2026, e o 55o é nomeável: `apiSincAdmissaoDigital`, que decide se a
+    // pré-admissão fica ESPERANDO no fornecedor ou é consumida por ele em menos de 10 minutos (medido
+    // em produção do GI: com `false` o registro some, com `true` permanece). A chave sai SEMPRE, nunca
+    // omitida, porque default do outro lado é contrato que muda sem aviso. O valor vem da env
+    // `GI_API_SINC_ADMISSAO_DIGITAL`, com default `false`, que é o comportamento de hoje.
+    expect(Object.keys(montarCheio())).toHaveLength(55);
+    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(55);
   });
 
   it("nenhum campo de SITUACAO trabalhista ou DESCONTO e emitido", () => {

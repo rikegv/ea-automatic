@@ -192,8 +192,11 @@ export class GiApiService {
   /**
    * POST FuncionarioSelecao/Add com o payload SÓ-de-pessoa, autenticado pelo token2.
    *
-   * ⚠️ NÃO É CHAMADO NESTA ENTREGA. O `EnviarParaGiService` só o invoca com a flag `GI_DISPARO_ARMADO`
-   * ligada, que nasce e permanece DESLIGADA. Existe pronto para o disparo manual futuro.
+   * ⚠️ É CHAMADO, e por UM PONTO SÓ: `EnviarParaGiService.enviarComGuardas`, que é privado e serve os
+   * DOIS gatilhos (o automático do fechamento da auditoria e o botão manual). Atrás da flag
+   * `GI_DISPARO_ARMADO`: com ela desligada, a cadeia monta o payload e para antes daqui.
+   * (Até 05/10/2026 este método não era chamado por caminho nenhum, e o automático era um no-op
+   * estrutural. O diretor decidiu o contrário, e o automático passou a ser o caminho principal.)
    *
    * O DESFECHO SE LÊ NO CORPO, não só no status (contrato `MsgReturn`, medido contra a produção em
    * 01/10/2026): 2xx com `sucess: false` é RECUSADO, e o id do registro vem em `idRetorno`.

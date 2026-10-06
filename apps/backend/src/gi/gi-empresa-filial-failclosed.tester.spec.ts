@@ -250,9 +250,23 @@ describe("fail-closed: NENHUM payload enviado ao GI leva empresa 0 nem chave aus
 });
 
 describe("fail-closed: a guarda nova NAO desarma as travas que ja existiam", () => {
-  it("o gatilho AUTOMATICO continua sendo incapaz de criar", async () => {
+  it("o gatilho AUTOMATICO passa pelas MESMAS guardas: par desconhecido NAO cria", async () => {
+    /**
+     * ⚠️ ESTE TESTE MUDOU DE RAZAO, nao de assercao (05/10/2026). Ele nasceu afirmando que o gatilho
+     * automatico era "incapaz de criar", porque era um no-op estrutural. O diretor decidiu que o
+     * automatico passa a ser o caminho PRINCIPAL e envia de verdade, entao o que ele mede agora e o
+     * que importa daqui para frente: o automatico NAO e uma porta mais frouxa que a manual, e a
+     * guarda do par empresa/filial morde nele exatamente como morde no clique do time.
+     *
+     * O contexto e de admissao OPERAVEL (farol vivo, nao pausada) de proposito: assim a recusa que
+     * sobra e a do PAR, que e a guarda deste arquivo, e nao a da operabilidade.
+     */
     const m = construir({ empresa: 1, filial: 7 }, { ...CONTRATACAO_SEM_CLIENTE, codigoEmpresa: 1, codigoFilial: 7 });
-    const r = await m.servico.enviar(ADMISSAO);
+    const r = await m.servico.enviar(ADMISSAO, {
+      farolGlobal: "EM_ADMISSAO",
+      pausadaEm: null,
+      autorId: "autor-sintetico",
+    });
     expect(r.enviado).toBe(false);
     expect(m.criar).not.toHaveBeenCalled();
   });

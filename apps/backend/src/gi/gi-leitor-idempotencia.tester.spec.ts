@@ -77,6 +77,18 @@ function bancoFalso(linhaInicial?: Partial<LinhaGi>) {
       const l = tabela.get(ADM);
       return l ? [{ enviadoEm: l.giEnviadoEm }] : [];
     }
+    // ATUALIZADO EM 06/10/2026, pela MESMA razao das duas vezes anteriores: `lerEstado` entrou na
+    // cadeia como a leitura AUTORITATIVA de farol, pausa e origem, e sem resposta para ela o envio
+    // passa a ser recusado (fail-closed, linha ausente recusa) ANTES de chegar ao ponto que esta
+    // regua mede, que e a marca de idempotencia.
+    //
+    // ⚠️ NENHUMA ASSERCAO FOI AFROUXADA. O dublê responde o que o banco real responderia para a
+    // admissao COMPLETA e VIVA deste cenario: farol vivo, nao pausada, e origem `MANUAL`, que e o
+    // default NOT NULL da coluna. As reguas de farol e de origem tem arquivos proprios
+    // (`gi-declinado-nao-sai-nem-pelo-manual` e `gi-trava-de-origem`), e la a exigencia e a oposta.
+    if (chaves.includes("farolGlobal")) {
+      return [{ farolGlobal: "EM_ADMISSAO", pausadaEm: null, origem: "MANUAL" }];
+    }
     if (chaves.includes("cand")) {
       // A pessoa mínima que faz o envio seguir (nome + CPF). O resto do payload não importa aqui.
       return [{ cand: { nome: "Fulano De Tal", cpf: CPF_SINTETICO }, dados: {} }];
