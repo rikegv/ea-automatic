@@ -59,9 +59,11 @@ export const STATUS_DE_PLANILHA_QUE_SAEM: readonly StatusDePlanilhaCanonico[] = 
 /**
  * OS STATUS DE VAGA VIVA NA PLANILHA, em lista FECHADA e EXPORTADA.
  *
- * ELA NÃO É MAIS a régua de visibilidade (quem decide isso é `STATUS_DE_PLANILHA_QUE_SAEM`, pela
- * Opção A). Permanece porque `agregarStatusDaPlanilha` a usa para escolher o token que REPRESENTA
- * uma vaga com várias linhas na planilha, e essa agregação não foi alterada nesta frente.
+ * ELA NÃO É a régua de visibilidade (quem decide isso é `STATUS_DE_PLANILHA_QUE_SAEM`, pela Opção A).
+ * O uso dela é UM só, e vivo: `agregarStatusDaPlanilha` pergunta a ela quais linhas são de vaga VIVA,
+ * e é a presença de uma linha viva que faz o código misto ser reportado como ABERTO/ENTREGUE em vez de
+ * FECHADO. Constante exportada sem chamador vira armadilha de autocompletar, que foi exatamente o
+ * destino da antiga `vagaDaPlanilhaEntra`, removida em 07/10/2026 por carregar a régua REVOGADA.
  */
 export const STATUS_DE_PLANILHA_QUE_ENTRAM: readonly StatusDePlanilhaCanonico[] = [
   "ABERTO",
@@ -108,38 +110,41 @@ export function vagaDaPlanilhaSai(status: unknown): boolean {
 }
 
 /**
- * A VAGA TEM STATUS DE VAGA VIVA NA PLANILHA? NÃO É MAIS A RÉGUA DE VISIBILIDADE.
- *
- * Mantida porque ela expressa "o status é ABERTO/ENTREGUE", pergunta que continua útil e que é a
- * base da escolha do token em `agregarStatusDaPlanilha`. Quem decide se a vaga aparece é
- * `vagaDaPlanilhaSai`: um "não entra" aqui NÃO significa mais "não aparece".
- */
-export function vagaDaPlanilhaEntra(status: unknown): boolean {
-  const canonico = normalizarStatusDaPlanilha(status);
-  return canonico !== null && STATUS_DE_PLANILHA_QUE_ENTRAM.includes(canonico);
-}
-
-/**
- * O STATUS DE UMA VAGA A PARTIR DE VÁRIAS LINHAS DA PLANILHA, fail-closed no conflito.
+ * O STATUS DE UMA VAGA A PARTIR DE VÁRIAS LINHAS DA PLANILHA: A ABERTA GANHA DA FECHADA.
  *
  * A planilha tem uma linha por CANDIDATO, então a mesma vaga aparece em muitas linhas, e o "Status" é
  * um atributo da VAGA repetido em cada uma. O normal é todas concordarem; quando NÃO concordam, a
- * régua é fail-closed na AGREGAÇÃO: qualquer linha fora de ABERTO/ENTREGUE domina o token reportado
- * (prefere CANCELADO a FECHADO a OUTRO). Só quando TODAS as linhas conhecidas são de vaga viva o
- * token é ENTREGUE se houver, senão ABERTO. `null` quando nenhuma linha tem status legível.
+ * régua é: HAVENDO QUALQUER LINHA DE VAGA VIVA (`STATUS_DE_PLANILHA_QUE_ENTRAM`), ela domina, e o
+ * token é ABERTO se houver linha aberta, senão ENTREGUE. Só quando NENHUMA linha é de vaga viva o
+ * encerramento decide (prefere CANCELADO a FECHADO, e OUTRO é a vala do resto). `null` quando
+ * nenhuma linha tem status legível.
  *
- * ESTA FUNÇÃO NÃO FOI ALTERADA PELA OPÇÃO A, de propósito: ela escolhe o TOKEN, não a visibilidade.
- * Quem decide se a vaga aparece é `vagaDaPlanilhaSai` sobre o token escolhido aqui, então um conflito
- * que agrega em OUTRO deixa a vaga VISÍVEL, e só o que agrega em FECHADO/CANCELADO a tira de vista. O
- * comportamento da agregação no conflito é decisão pendente do diretor, e fica como está.
+ * ┌─ O FUNDAMENTO DO DIRETOR (decisão de 07/10/2026): CÓDIGO MISTO É CÓDIGO REUSADO ─────────────┐
+ * │ A operação REAPROVEITAVA código de vaga, o mesmo código em vagas diferentes. Isso está errado e │
+ * │ é o passado, mas significa que código com linha `Aberta` E linha `Fechada` é código reusado,    │
+ * │ onde UMA vaga fechou e OUTRA está aberta. Havendo linha aberta, há vaga aberta para trabalhar,  │
+ * │ então ela TEM de aparecer. Os próximos códigos vêm certos (um código por vaga), logo esta régua │
+ * │ é REMENDO para o passado, não regra nova de modelagem.                                          │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A REGRA ANTERIOR ERA A INVERSA e fazia vaga aberta SUMIR: era fail-closed no conflito (qualquer
+ * linha fora de ABERTO/ENTREGUE dominava), então o código misto era gravado FECHADO e a vaga saía da
+ * fila por `vagaDaPlanilhaSai`. Medido contra a planilha de produção, a troca faz 36 códigos mudarem
+ * de token e 30 passarem a APARECER, sem nenhum deixar de aparecer.
+ *
+ * A PREFERÊNCIA ABERTO > ENTREGUE é deliberada: havendo posição aberta, ABERTO descreve melhor a
+ * vaga. Os dois aparecem na Opção A, então o que muda é só o rótulo gravado, nunca a visibilidade.
+ *
+ * ESTA FUNÇÃO ESCOLHE O TOKEN, NÃO A VISIBILIDADE. Quem decide se a vaga aparece segue sendo
+ * `vagaDaPlanilhaSai` sobre o token escolhido aqui.
  */
 export function agregarStatusDaPlanilha(brutos: readonly unknown[]): StatusDePlanilhaCanonico | null {
   const canonicos = brutos
     .map(normalizarStatusDaPlanilha)
     .filter((s): s is StatusDePlanilhaCanonico => s !== null);
   if (canonicos.length === 0) return null;
-  const todosEntram = canonicos.every((s) => STATUS_DE_PLANILHA_QUE_ENTRAM.includes(s));
-  if (todosEntram) return canonicos.includes("ENTREGUE") ? "ENTREGUE" : "ABERTO";
+  const entrantes = canonicos.filter((s) => STATUS_DE_PLANILHA_QUE_ENTRAM.includes(s));
+  if (entrantes.length > 0) return entrantes.includes("ABERTO") ? "ABERTO" : "ENTREGUE";
   if (canonicos.includes("CANCELADO")) return "CANCELADO";
   if (canonicos.includes("FECHADO")) return "FECHADO";
   return "OUTRO";

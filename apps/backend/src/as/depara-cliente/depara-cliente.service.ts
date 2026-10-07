@@ -274,10 +274,18 @@ export class DeParaClienteService {
      * ─ O STATUS DA VAGA, AGREGADO POR CÓDIGO (F2, 06/10/2026) ──────────────────────────────────
      *
      * A planilha tem uma linha por CANDIDATO, então o "Status" da vaga se repete nas várias linhas
-     * dela. `agregarStatusDaPlanilha` reduz cada código a um token canônico FECHADO, fail-closed no
-     * conflito (se qualquer linha não entra, a vaga não entra). A chave é NORMALIZADA pela mesma
-     * `normalizarCodigoDeVaga` do mapa, para casar com `codigo_externo`. §A.6: status é ciclo de
-     * vida, não dado pessoal; o token canônico é o que a régua usa, nunca o texto cru.
+     * dela. `agregarStatusDaPlanilha` reduz cada código a um token canônico de vocabulário fechado.
+     *
+     * NO CONFLITO, A ABERTA GANHA DA FECHADA (decisão do diretor, 07/10/2026): basta UMA linha
+     * ABERTO/ENTREGUE para o código ser ABERTO (ou ENTREGUE, quando não há ABERTO). *(Este bloco
+     * dizia o inverso, "fail-closed no conflito: se qualquer linha não entra, a vaga não entra", que
+     * era a régua anterior e fazia vaga aberta SUMIR.)* O fundamento é que a operação reaproveitava
+     * código de vaga no passado, então código misto é código reusado: uma vaga fechou e outra está
+     * aberta, e havendo linha aberta há trabalho a fazer.
+     *
+     * A chave é NORMALIZADA pela mesma `normalizarCodigoDeVaga` do mapa, para casar com
+     * `codigo_externo`. §A.6: status é ciclo de vida, não dado pessoal; o token canônico é o que a
+     * régua usa, nunca o texto cru.
      */
     const brutosPorCodigo = new Map<string, unknown[]>();
     for (const l of lida.linhas) {

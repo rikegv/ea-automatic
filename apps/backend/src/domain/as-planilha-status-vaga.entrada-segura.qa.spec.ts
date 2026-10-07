@@ -13,6 +13,10 @@ import {
  * ENTREGUE entram", agora é "a vaga aparece por padrão, e só FECHADO ou CANCELADO a exclui". O
  * fundamento é não perder vaga real de vista enquanto o time não lançou o código na planilha.
  *
+ * O requisito da AGREGAÇÃO mudou em 07/10/2026 pelo mesmo fundamento: a operação reaproveitava código
+ * de vaga, então código com linha aberta e linha fechada é código reusado, com uma vaga fechada e
+ * outra ABERTA. Havendo linha aberta, há trabalho, e a vaga tem de aparecer.
+ *
  * A régua é compartilhada entre o gate de ESCRITA (F2) e o filtro de LEITURA (F3), então acertá-la
  * aqui vale para os dois.
  *
@@ -64,26 +68,44 @@ describe("QA F2 (domínio): quem a planilha EXCLUI", () => {
 });
 
 describe("QA F2 (domínio): agregação de linhas da planilha (uma vaga, N candidatos)", () => {
-  it("todas as linhas de vaga viva: token ENTREGUE quando houver, senão ABERTO, e a vaga aparece", () => {
+  it("todas as linhas de vaga viva: ABERTO quando houver linha aberta, senão ENTREGUE", () => {
     expect(agregarStatusDaPlanilha(["Aberto", "aberto", "ABERTA"])).toBe("ABERTO");
-    expect(agregarStatusDaPlanilha(["Aberto", "Entregue"])).toBe("ENTREGUE");
+    expect(agregarStatusDaPlanilha(["Aberto", "Entregue"])).toBe("ABERTO");
+    expect(agregarStatusDaPlanilha(["Entregue", "entregue"])).toBe("ENTREGUE");
     expect(vagaDaPlanilhaSai(agregarStatusDaPlanilha(["Aberto", "Entregue"]))).toBe(false);
   });
 
-  it("QUALQUER linha fora de ABERTO/ENTREGUE domina o token (prefere CANCELADO a FECHADO a OUTRO)", () => {
-    expect(agregarStatusDaPlanilha(["Aberto", "Fechado"])).toBe("FECHADO");
-    expect(agregarStatusDaPlanilha(["Aberto", "Cancelada"])).toBe("CANCELADO");
-    expect(agregarStatusDaPlanilha(["Aberto", "Fechado", "Cancelada"])).toBe("CANCELADO");
-    expect(agregarStatusDaPlanilha(["Entregue", "pausada"])).toBe("OUTRO");
+  it("QUALQUER linha de vaga VIVA domina o token: código misto é código REUSADO, e tem vaga aberta", () => {
+    expect(agregarStatusDaPlanilha(["Aberto", "Fechado"])).toBe("ABERTO");
+    expect(agregarStatusDaPlanilha(["Aberto", "Cancelada"])).toBe("ABERTO");
+    expect(agregarStatusDaPlanilha(["Aberto", "Fechado", "Cancelada"])).toBe("ABERTO");
+    expect(agregarStatusDaPlanilha(["Entregue", "Fechado"])).toBe("ENTREGUE");
+    expect(agregarStatusDaPlanilha(["Entregue", "pausada"])).toBe("ENTREGUE");
   });
 
-  it("pela Opção A, só o conflito que agrega em FECHADO/CANCELADO exclui a vaga", () => {
-    for (const conj of [["Aberto", "Fechado"], ["Aberto", "Cancelada"]]) {
+  it("SEM linha viva, o encerramento decide, e CANCELADO vem antes de FECHADO", () => {
+    expect(agregarStatusDaPlanilha(["Fechado"])).toBe("FECHADO");
+    expect(agregarStatusDaPlanilha(["Cancelada"])).toBe("CANCELADO");
+    expect(agregarStatusDaPlanilha(["Fechado", "Cancelada"])).toBe("CANCELADO");
+    expect(agregarStatusDaPlanilha(["pausada"])).toBe("OUTRO");
+    expect(agregarStatusDaPlanilha(["pausada", "Fechado"])).toBe("FECHADO");
+  });
+
+  it("REQUISITO DO DIRETOR: havendo linha ABERTA, a vaga NÃO pode sair da fila", () => {
+    for (const conj of [
+      ["Aberto", "Fechado"],
+      ["Aberto", "Cancelada"],
+      ["Aberto", "Fechado", "Cancelada"],
+      ["Entregue", "Fechado"],
+    ]) {
+      const token = agregarStatusDaPlanilha(conj);
+      expect(vagaDaPlanilhaSai(token), `${JSON.stringify(conj)} NÃO deveria sair`).toBe(false);
+    }
+    // O encerramento sem nenhuma linha viva continua excluindo: a régua não foi afrouxada.
+    for (const conj of [["Fechado"], ["Cancelada"], ["Fechado", "Cancelada"], ["pausada", "Fechado"]]) {
       const token = agregarStatusDaPlanilha(conj);
       expect(vagaDaPlanilhaSai(token), `${JSON.stringify(conj)} deveria sair`).toBe(true);
     }
-    // Conflito que agrega em OUTRO continua VISÍVEL: ninguém afirmou encerramento.
-    expect(vagaDaPlanilhaSai(agregarStatusDaPlanilha(["Entregue", "pausada"]))).toBe(false);
   });
 
   it("nenhuma linha legível: devolve null (ausência), que não exclui a vaga", () => {
