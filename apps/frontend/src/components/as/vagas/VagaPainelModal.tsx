@@ -1316,6 +1316,26 @@ function LadoTrilha({
 }
 
 /**
+ * ─ O RENDER EM JANELA DA TABELA (mesma filosofia da carga incremental da Central de Candidatos) ──
+ *
+ * O backend já devolve rápido só as candidaturas DESTA vaga (`GET /as/candidatos/vaga/:id` filtra por
+ * `vaga_id`), e a lista inteira fica em memória, barata de buscar, filtrar e ordenar. O que TRAVAVA o
+ * navegador era DESENHAR tudo de uma vez: uma vaga real chega a 2.505 candidaturas, e milhares de
+ * `<tr>` no mesmo frame congelam a aba.
+ *
+ * A SAÍDA É A MESMA DA CENTRAL DE CANDIDATOS, adaptada: a lista NÃO é refeita, só o DESENHO é fatiado.
+ * A tabela mostra as primeiras `JANELA_INICIAL` linhas na hora e revela o resto em SEGUNDO PLANO, em
+ * blocos de `JANELA_PASSO`, por uma CADEIA de setTimeout (nunca setInterval), que pausa quando a aba
+ * perde o foco e retoma quando volta. Um indicador diz quanto já foi desenhado enquanto não terminou.
+ *
+ * O QUE A JANELA NUNCA ALCANÇA: a seleção, o "selecionar todos", as contagens e a ordenação operam
+ * sobre `ord.itens` INTEIRO. Só a lista de `<tr>` é cortada. Ver `idsVisiveis` logo abaixo.
+ */
+const JANELA_INICIAL = 80;
+const JANELA_PASSO = 200;
+const JANELA_INTERVALO_MS = 150;
+
+/**
  * A TABELA DE CANDIDATURAS, uma só, usada pelas DUAS abas com listas diferentes.
  *
  * DUAS TABELAS SERIAM DUAS MANUTENÇÕES: a aba de alocados mostra exatamente as mesmas colunas, com
@@ -1409,6 +1429,96 @@ function TabelaCandidaturas({
     { chave: "movimentou", tipo: "data", valor: (c) => c.atualizadoEm },
   ];
   const ord = useOrdenacao(colunas, itens);
+
+  /*
+   * ─ A JANELA DE RENDER, E POR QUE O GATILHO É A ASSINATURA, E NÃO A REFERÊNCIA DE `ord.itens` ───
+   *
+   * `ord.itens` nasce novo a cada render (o `useOrdenacao` recalcula), e `itens` chega novo a cada
+   * render do pai (o `visiveis` do pai é recalculado toda vez, inclusive ao MARCAR uma linha). Usar
+   * qualquer uma das duas referências como gatilho resetaria a janela a cada clique de seleção.
+   *
+   * O gatilho honesto é o CONTEÚDO: a lista de ids na ordem desenhada. Ela NÃO muda ao selecionar
+   * (seleção vive no pai, fora de `itens`), e muda exatamente quando deve: recorte, troca de aba e
+   * reordenação. É barata perto de desenhar as linhas.
+   */
+  const total = ord.itens.length;
+  const assinatura = ord.itens.map((c) => c.id).join("|");
+  const [janela, setJanela] = useState(JANELA_INICIAL);
+  const [assinaturaAnterior, setAssinaturaAnterior] = useState(assinatura);
+  /*
+   * RESET NA PRÓPRIA RENDERIZAÇÃO (padrão oficial do React para "derivar de uma mudança de prop"):
+   * ao mudar o conjunto desenhado, a janela volta às primeiras `JANELA_INICIAL` ANTES de o `<tbody>`
+   * tentar desenhar as milhares de linhas do conjunto NOVO com o tamanho antigo. Sem isto, uma
+   * digitação na busca pintaria o conjunto inteiro por um frame, que é justamente o congelamento que
+   * a janela existe para evitar.
+   */
+  if (assinatura !== assinaturaAnterior) {
+    setAssinaturaAnterior(assinatura);
+    setJanela(JANELA_INICIAL);
+  }
+  /*
+   * A REVELAÇÃO EM SEGUNDO PLANO, com o MESMO freio da Central de Candidatos: cadeia de setTimeout
+   * (nunca setInterval), pausa em `blur`/aba oculta e retomada em `focus`/aba visível. Keyed na
+   * assinatura: trocou o conjunto, a cadeia antiga é cancelada no cleanup e uma nova começa do 80.
+   */
+  useEffect(() => {
+    if (total <= JANELA_INICIAL) return;
+    let cancelado = false;
+    let desfocado = false;
+    let esperandoFoco = false;
+    let revelado = JANELA_INICIAL;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pausado = () =>
+      desfocado || (typeof document !== "undefined" && document.visibilityState === "hidden");
+
+    const agendar = () => {
+      if (cancelado) return;
+      if (pausado()) {
+        esperandoFoco = true;
+        return;
+      }
+      timer = setTimeout(rodar, JANELA_INTERVALO_MS);
+    };
+
+    const rodar = () => {
+      if (cancelado) return;
+      if (pausado()) {
+        esperandoFoco = true;
+        return;
+      }
+      revelado = Math.min(revelado + JANELA_PASSO, total);
+      setJanela(revelado);
+      if (revelado < total) agendar();
+    };
+
+    const aoFocar = () => {
+      desfocado = false;
+      if (esperandoFoco) {
+        esperandoFoco = false;
+        agendar();
+      }
+    };
+    const aoDesfocar = () => {
+      desfocado = true;
+    };
+    const aoVisibilidade = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") aoFocar();
+    };
+
+    window.addEventListener("focus", aoFocar);
+    window.addEventListener("blur", aoDesfocar);
+    document.addEventListener("visibilitychange", aoVisibilidade);
+    agendar();
+
+    return () => {
+      cancelado = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", aoFocar);
+      window.removeEventListener("blur", aoDesfocar);
+      document.removeEventListener("visibilitychange", aoVisibilidade);
+    };
+  }, [assinatura, total]);
 
   if (itens.length === 0) {
     return (
@@ -1526,7 +1636,9 @@ function TabelaCandidaturas({
             </tr>
           </thead>
           <tbody>
-            {ord.itens.map((c) => (
+            {/* SÓ O DESENHO É FATIADO. `idsVisiveis`, o "selecionar todos" e as contagens acima
+                continuam sobre `ord.itens` INTEIRO; aqui a janela corta apenas as linhas pintadas. */}
+            {ord.itens.slice(0, janela).map((c) => (
               <tr
                 key={c.id}
                 className={selecionados.includes(c.id) ? "bg-[var(--surface)]" : undefined}
@@ -1672,6 +1784,19 @@ function TabelaCandidaturas({
           </tbody>
         </table>
       </div>
+      {/* ─ O INDICADOR DO RENDER EM JANELA ──────────────────────────────────────────────────────
+          Fica FORA do contêiner que rola na horizontal (§A.20): não disputa largura com nenhuma
+          coluna nem introduz rolagem. Só aparece enquanto ainda falta linha a desenhar; some sozinho
+          ao terminar. Texto de apoio, escrita normal (§A.24); vírgula no lugar do travessão (§A.11).
+          A palavra "desenhadas" (e não "mostrando") separa este estado do "Mostrando X de Y" do
+          recorte, que é outra pergunta e vive na barra acima. */}
+      {janela < total && (
+        <p className="mt-3 text-[12.5px] text-dim" aria-live="polite">
+          Carregando o restante da lista,{" "}
+          <span className="font-semibold text-text">{Math.min(janela, total)}</span> de {total}{" "}
+          candidaturas já desenhadas.
+        </p>
+      )}
     </>
   );
 }

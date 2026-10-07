@@ -282,7 +282,76 @@ describe("a correção do Master: POST com os DOIS campos", () => {
   });
 });
 
-describe("as seis portas, vistas juntas", () => {
+describe("a recusa e a devolução: POST de corpo VAZIO, sem motivo", () => {
+  /**
+   * A RECUSA NÃO MANDA CORPO, e a ausência é o contrato: a decisão do diretor é recusa SEM motivo,
+   * então não há dado a enviar. Quem recusou e quando é o servidor quem carimba. Um corpo aqui seria
+   * a tela inventando um campo que o backend não pediu.
+   */
+  it("recusar manda POST em `/as/vagas/{id}/recusar-liberacao`, sem corpo, com o token", async () => {
+    await porta.recusarLiberacao("vaga-5", "tk");
+
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    const { caminho, opcoes } = chamada();
+    expect(caminho).toBe("/as/vagas/vaga-5/recusar-liberacao");
+    expect(opcoes.method).toBe("POST");
+    expect(opcoes.body).toBeUndefined();
+    expect(opcoes.token).toBe("tk");
+  });
+
+  /**
+   * DEVOLVER É A ROTA INVERSA, e tem de ser OUTRA rota: apontasse para `recusar-liberacao`, o botão
+   * que promete trazer a vaga de volta a recusaria de novo, e nada ficaria vermelho (as duas devolvem
+   * `Promise<void>`).
+   */
+  it("devolver manda POST em `/as/vagas/{id}/devolver-revisao`, sem corpo", async () => {
+    await porta.devolverARevisao("vaga-5", "tk");
+
+    const { caminho, opcoes } = chamada();
+    expect(caminho).toBe("/as/vagas/vaga-5/devolver-revisao");
+    expect(caminho).not.toContain("recusar-liberacao");
+    expect(opcoes.method).toBe("POST");
+    expect(opcoes.body).toBeUndefined();
+  });
+
+  it("o id vai no CAMINHO nas duas, e a recusa do servidor PROPAGA", async () => {
+    await porta.recusarLiberacao("vaga-42", null);
+    expect(chamada(0).caminho).toContain("vaga-42");
+
+    const recusa = new Error("409");
+    apiFetch.mockRejectedValue(recusa);
+    await expect(porta.devolverARevisao("vaga-42", "tk")).rejects.toBe(recusa);
+  });
+
+  /**
+   * AS RECUSADAS SÃO LEITURA PRÓPRIA (a recusa é PERSISTENTE), e a rota é irmã da fila e das
+   * liberadas: aponta sem método e sem corpo, como toda leitura do módulo.
+   */
+  it("as recusadas chamam `/as/vagas/recusadas`, sem corpo", async () => {
+    apiFetch.mockResolvedValue([{ id: "v1", recusadaEm: "2026-10-06T12:00:00Z", recusadaPorNome: "Ana" }]);
+    const lista = await porta.carregarRecusadas("tk");
+
+    const { caminho, opcoes } = chamada();
+    expect(caminho).toBe("/as/vagas/recusadas");
+    expect(opcoes.method).toBeUndefined();
+    expect(opcoes.body).toBeUndefined();
+    expect(opcoes.token).toBe("tk");
+    expect(lista).toEqual([{ id: "v1", recusadaEm: "2026-10-06T12:00:00Z", recusadaPorNome: "Ana" }]);
+  });
+
+  /**
+   * OS CARIMBOS PODEM VIR NULOS, e a porta os repassa como estão: a tela é quem mostra "não
+   * informado" (§A.11). Afirmar aqui PRENDE o tipo que o backend devolve, para a aba não assumir que
+   * `recusadaPorNome`/`recusadaEm` são sempre preenchidos.
+   */
+  it("as recusadas repassam `recusadaEm`/`recusadaPorNome` nulos sem tratar", async () => {
+    apiFetch.mockResolvedValue([{ id: "v2", recusadaEm: null, recusadaPorNome: null }]);
+    const lista = await porta.carregarRecusadas("tk");
+    expect(lista).toEqual([{ id: "v2", recusadaEm: null, recusadaPorNome: null }]);
+  });
+});
+
+describe("as nove portas, vistas juntas", () => {
   /**
    * TODAS PENDURADAS NO MESMO PREFIXO. Uma rota que escapa do `/as/vagas` é rota de outra frente, e
    * o erro de copiar e colar caminho entre módulos irmãos é exatamente assim que ele se parece.
@@ -290,15 +359,18 @@ describe("as seis portas, vistas juntas", () => {
   it("nenhuma porta sai do prefixo `/as/vagas`", async () => {
     await porta.carregarFilaDeRevisao(null);
     await porta.carregarLiberadasDaRevisao(null);
+    await porta.carregarRecusadas(null);
     apiFetch.mockResolvedValue({ count: 0 });
     await porta.contarPendentesDeRevisao(null);
     apiFetch.mockResolvedValue(undefined);
     await porta.liberarVagaPendenteRevisao("v", { codCliente: "c" }, null);
     await porta.salvarVagaEmRevisao("v", { codCliente: "c" }, null);
     await porta.corrigirLiberacaoDeRevisao("v", { codCliente: "c", devolverParaFila: false }, null);
+    await porta.recusarLiberacao("v", null);
+    await porta.devolverARevisao("v", null);
 
-    expect(apiFetch).toHaveBeenCalledTimes(6);
-    for (let i = 0; i < 6; i++) expect(chamada(i).caminho, chamada(i).caminho).toMatch(/^\/as\/vagas\//);
+    expect(apiFetch).toHaveBeenCalledTimes(9);
+    for (let i = 0; i < 9; i++) expect(chamada(i).caminho, chamada(i).caminho).toMatch(/^\/as\/vagas\//);
   });
 
   /**
@@ -313,9 +385,12 @@ describe("as seis portas, vistas juntas", () => {
       .sort()).toEqual([
       "carregarFilaDeRevisao",
       "carregarLiberadasDaRevisao",
+      "carregarRecusadas",
       "contarPendentesDeRevisao",
       "corrigirLiberacaoDeRevisao",
+      "devolverARevisao",
       "liberarVagaPendenteRevisao",
+      "recusarLiberacao",
       "reguaDeLiberacao",
       "salvarVagaEmRevisao",
     ]);

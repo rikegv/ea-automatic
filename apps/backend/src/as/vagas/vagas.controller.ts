@@ -109,6 +109,18 @@ export class VagasController {
   }
 
   /**
+   * A ABA RECUSADAS (F4): as vagas que o consultor recusou, com quem recusou e quando.
+   *
+   * CAMINHO LITERAL ANTES DO `@Get(":id")`, como `pendentes-revisao`: o Nest casa na ORDEM de
+   * declaração. SEM `@Roles`, por paridade com `pendentes-revisao` e `liberar-revisao` (decisão do
+   * diretor): a trava é o menu `as-vagas`, que reivindica a controller inteira.
+   */
+  @Get("recusadas")
+  recusadas() {
+    return this.vagas.recusadas();
+  }
+
+  /**
    * OS CONSULTORES QUE PODEM RECEBER UMA VAGA: o catálogo do seletor da transferência (item 5).
    *
    * CAMINHO FIXO ANTES DO `@Get(":id")`, e não é detalhe: o Nest casa na ORDEM de declaração, e a
@@ -365,6 +377,29 @@ export class VagasController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.vagas.corrigirLiberacaoDaRevisao(id, dto, user);
+  }
+
+  /**
+   * ─ RECUSAR A LIBERAÇÃO E DEVOLVER PARA A FILA (F4), espelhando a recusa da Admissão ────────────
+   *
+   * ┌─ SEM `@Roles`, POR DECISÃO DO DIRETOR, EM PARIDADE COM `liberar-revisao` ──────────────────┐
+   * │ Recusar e devolver são fluxo operacional de QUALQUER consultor, como liberar. A trava é o   │
+   * │ menu `as-vagas`, que reivindica a controller inteira (`VagasController.*`, `domain/menus`):  │
+   * │ estes métodos novos herdam a reivindicação curinga e já nascem cobertos. Um `@Roles` aqui    │
+   * │ seria porta trancada para quem tem o menu, o defeito que a casa já pagou.                     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * CORPO VAZIO: a autoria vem da SESSÃO (`@CurrentUser`), nunca do corpo, porque é trilha. POST, no
+   * molde do `liberar-revisao`: registra um movimento da vaga, com trilha em `vaga_recusa_eventos`.
+   */
+  @Post(":id/recusar-liberacao")
+  recusarLiberacao(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.vagas.recusarLiberacao(id, user);
+  }
+
+  @Post(":id/devolver-revisao")
+  devolverRevisao(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.vagas.devolverRevisao(id, user);
   }
 
   /**

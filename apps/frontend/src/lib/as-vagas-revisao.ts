@@ -34,6 +34,23 @@ import { apiFetch } from "@/lib/api";
  */
 export type VagaEmRevisao = VagaListItem;
 
+/**
+ * ─ A VAGA RECUSADA: A MESMA VAGA DA FILA, MAIS QUEM E QUANDO ────────────────────────────────────
+ *
+ * A RECUSA É PERSISTENTE (decisão do diretor): a vaga sai da fila de pendentes e fica aqui, na aba
+ * Recusadas, até alguém DEVOLVÊ-LA para a revisão. QUALQUER consultor recusa e devolve, SEM motivo.
+ *
+ * `recusadaEm` e `recusadaPorNome` vêm NO MESMO item que a lista devolve, e por isso são parte da
+ * linha: não há segunda leitura para descobrir quem recusou. A linha segue sendo o `VagaListItem`
+ * da Central de Vagas (o mesmo contrato da fila), só acrescido dos dois carimbos da recusa.
+ */
+export type VagaRecusada = VagaEmRevisao & {
+  /** Quando a vaga foi recusada (ISO). Pode vir `null`; a tela mostra "não informado" (§A.11). */
+  recusadaEm: string | null;
+  /** Quem recusou, pelo nome. Pode vir `null`; a tela mostra "não informado" (§A.11). */
+  recusadaPorNome: string | null;
+};
+
 /** O que a tela precisa saber para desenhar o botão de liberar: se pode, e por que não. */
 export interface ReguaDeLiberacao {
   pode: boolean;
@@ -81,6 +98,16 @@ export function carregarFilaDeRevisao(token?: string | null): Promise<VagaEmRevi
  */
 export function carregarLiberadasDaRevisao(token?: string | null): Promise<VagaEmRevisao[]> {
   return apiFetch<VagaEmRevisao[]>("/as/vagas/pendentes-revisao/liberadas", { token });
+}
+
+/**
+ * AS VAGAS RECUSADAS, que saíram da fila de pendentes por decisão explícita de um consultor. Como a
+ * recusa é PERSISTENTE, elas precisam de leitura própria: ficam fora da fila de pendentes (o backend
+ * já as remove de lá) e só voltam quando alguém as devolve. Cada item traz `recusadaEm` e
+ * `recusadaPorNome`, para a aba mostrar quem recusou e quando sem uma segunda leitura.
+ */
+export function carregarRecusadas(token?: string | null): Promise<VagaRecusada[]> {
+  return apiFetch<VagaRecusada[]>("/as/vagas/recusadas", { token });
 }
 
 /** Quantas esperam revisão. Molde do contador da Liberação Admissional. */
@@ -176,6 +203,35 @@ export function corrigirLiberacaoDeRevisao(
   return apiFetch<void>(`/as/vagas/${id}/corrigir-revisao`, {
     method: "POST",
     body: { ...correcao },
+    token,
+  });
+}
+
+/**
+ * ─ RECUSAR A LIBERAÇÃO: a vaga SAI da fila de pendentes e vai para a aba Recusadas ──────────────
+ *
+ * QUALQUER consultor recusa, SEM motivo (decisão do diretor). A recusa é PERSISTENTE: a vaga não
+ * reaparece nos pendentes por conta própria, só quando alguém a devolve. O corpo é VAZIO porque não
+ * há motivo a mandar; quem recusou e quando é o servidor quem carimba, e volta na leitura das
+ * recusadas. Como as demais portas, a recusa do servidor PROPAGA (não vira sucesso silencioso).
+ */
+export function recusarLiberacao(id: string, token?: string | null): Promise<void> {
+  return apiFetch<void>(`/as/vagas/${id}/recusar-liberacao`, {
+    method: "POST",
+    token,
+  });
+}
+
+/**
+ * ─ DEVOLVER PARA REVISÃO: a vaga recusada VOLTA para a fila de pendentes ────────────────────────
+ *
+ * O gesto inverso da recusa, igualmente sem motivo e disponível a qualquer consultor. Corpo vazio
+ * pelo mesmo motivo: o que muda é o estado da vaga, resolvido pelo catálogo no servidor, não um dado
+ * que a tela informa.
+ */
+export function devolverARevisao(id: string, token?: string | null): Promise<void> {
+  return apiFetch<void>(`/as/vagas/${id}/devolver-revisao`, {
+    method: "POST",
     token,
   });
 }

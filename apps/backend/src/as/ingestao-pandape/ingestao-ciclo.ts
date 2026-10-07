@@ -194,7 +194,31 @@ export async function descobrirVagasAtivas(
     const vaga = projetarVaga(crua);
     if (vaga === null) continue;
     resumo.vagasVarridas += 1;
+    /*
+     * ─ O `ativos.push` VEM ANTES DO GATE, E É A TRAVA DO `seguranca` (§A.6) ──────────────────────
+     *
+     * `ativos` é o conjunto ATS-ativo COMPLETO, e é ele que alimenta `encerrarAusentes`. Ele NÃO
+     * pode ser encolhido pelo filtro de planilha: encerrar deriva de AUSÊNCIA REAL no ATS, nunca de
+     * "não está na planilha". Se a planilha encolhesse `ativos`, toda vaga ATS-ativa fora da
+     * planilha seria ENCERRADA, acendendo o relógio de expurgo de dezenas de milhares de
+     * candidaturas por base ilícita. Por isso o push acontece SEMPRE, e o gate vem depois dele.
+     */
     ativos.push(vaga.idVacancy);
+    /*
+     * ─ O GATE DE ENTRADA PELA PLANILHA (F2): SÓ A ESCRITA É GATEADA ──────────────────────────────
+     *
+     * Ausente o filtro (planilha não configurada), nada é gateado e a vaga entra como hoje. Presente,
+     * a vaga só é espelhada/criada (e tem as páginas varridas, porque só as espelhadas são
+     * enfileiradas) quando a planilha a traz como ABERTO ou ENTREGUE. Fora da planilha, ou FECHADO/
+     * CANCELADO: a vaga NÃO é espelhada, mas JÁ está em `ativos`, então não é encerrada por engano.
+     */
+    if (deps.filtroDaPlanilha) {
+      const entra = await deps.filtroDaPlanilha.vagaEntra(vaga.idVacancy, vaga.reference);
+      if (!entra) {
+        resumo.vagasForaDaPlanilha = (resumo.vagasForaDaPlanilha ?? 0) + 1;
+        continue;
+      }
+    }
     try {
       const vagaId = await espelharVaga(deps, resumo, vaga);
       espelhadas.push({ idVacancy: vaga.idVacancy, vagaId });

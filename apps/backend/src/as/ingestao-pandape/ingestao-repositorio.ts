@@ -10,12 +10,16 @@ import {
   type CampoDeDivergenciaDaCandidatura,
   type DivergenciaARegistrar,
 } from "../../domain/as-precedencia-ingestao";
+import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
+import { vagaDaPlanilhaEntra } from "../../domain/as-planilha-status-vaga";
+import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import type {
   Escrita,
   PortaBanco,
   PortaCicloDeVidaDaVaga,
+  PortaFiltroDaPlanilhaDaVaga,
   ResultadoDaEscrita,
 } from "./ingestao-portas";
 
@@ -43,7 +47,9 @@ import type {
  * §A.6: nenhum método daqui loga qualquer coisa. Quem loga é o ciclo, e só contagem.
  */
 @Injectable()
-export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
+export class IngestaoRepositorio
+  implements PortaBanco, PortaCicloDeVidaDaVaga, PortaFiltroDaPlanilhaDaVaga
+{
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly vagaStatus: VagaStatusService,
@@ -175,6 +181,65 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
        where id_vacancy_pandape = ${String(idVacancy)} limit 1
     `)) as unknown as { ultimo_insert_date: string | null }[];
     return linhas[0]?.ultimo_insert_date ?? null;
+  }
+
+  /**
+   * ─ O GATE DE ENTRADA PELA PLANILHA (F2): A VAGA ENTRA? ─────────────────────────────────────────
+   *
+   * Lê o ESPELHO `as_depara_cliente_vaga.status_planilha` (frescor ~1h, materializado pelo
+   * scheduler), nunca o Drive ao vivo. As duas chaves da planilha são as MESMAS do de/para de
+   * cliente: o `idVacancy` primeiro, a `reference` como segunda busca, pela mesma régua medida
+   * (`resolverClienteDaVaga`). A régua do status é `vagaDaPlanilhaEntra`, COMPARTILHADA com a fila de
+   * revisão (F3): só ABERTO/ENTREGUE entram.
+   *
+   * ┌─ `ativo` NÃO ENTRA NA CONSULTA, E A OMISSÃO É DELIBERADA ────────────────────────────────────┐
+   * │ `ativo = false` é o gesto "pare de confiar nesta TRADUÇÃO DE CLIENTE" (ambiguidade, ou o      │
+   * │ desligar do diretor), não "esta vaga fechou". O status da vaga é ortogonal ao client-trust,   │
+   * │ então o gate lê o status independentemente do `ativo`: uma vaga aberta com cliente ambíguo    │
+   * │ entra na ingestão (o cliente se resolve na liberação), em vez de sumir por um motivo que não é │
+   * │ o dela.                                                                                        │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * AUSENTE DA PLANILHA = NÃO ENTRA: sem linha no espelho para nenhuma das chaves, devolve falso. A
+   * precedência `idVacancy > reference` espelha a do cliente: a chave FORTE decide quando existe.
+   * §A.6: devolve só booleano; nenhum valor da planilha sai daqui.
+   *
+   * ┌─ O ESPELHO AINDA NÃO ATIVO = FAIL-OPEN, IDÊNTICO AO LADO DA LEITURA (F3) ─────────────────────┐
+   * │ ANTES do lookup por chave, pergunta a MESMA coisa que a fila de revisão                        │
+   * │ (`statusDaPlanilhaDasVagas`): `exists(status_planilha is not null)`. Se NENHUM status foi       │
+   * │ populado (coluna recém-criada toda nula logo após a 0144, ou falha do scheduler que grava os    │
+   * │ tokens), o filtro da planilha ainda não está ativo: devolve TRUE (deixa entrar), em vez de      │
+   * │ barrar TODA vaga e PARAR a ingestão em silêncio. Os dois lados perguntam o mesmo `exists` com a │
+   * │ mesma `FONTE_DO_DEPARA_DE_CLIENTE`, então ligam/desligam JUNTOS. §A.6: só booleano.             │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  async vagaEntra(idVacancy: number, reference: string | null): Promise<boolean> {
+    const ativaLinhas = (await this.db.execute(sql`
+      select exists(
+        select 1 from as_depara_cliente_vaga
+         where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE} and status_planilha is not null
+      ) as ativa
+    `)) as unknown as { ativa: boolean }[];
+    if (ativaLinhas[0]?.ativa !== true) return true;
+    const chaveId = normalizarCodigoDeVaga(idVacancy);
+    const chaveRef = normalizarCodigoDeVaga(reference);
+    const chaves = [...new Set([chaveId, chaveRef].filter((c): c is string => c !== null))];
+    if (chaves.length === 0) return false;
+    const lista = sql.join(
+      chaves.map((c) => sql`${c}`),
+      sql`, `,
+    );
+    const linhas = (await this.db.execute(sql`
+      select codigo_externo, status_planilha
+        from as_depara_cliente_vaga
+       where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE}
+         and codigo_externo in (${lista})
+    `)) as unknown as { codigo_externo: string; status_planilha: string | null }[];
+    if (linhas.length === 0) return false;
+    // A CHAVE FORTE (idVacancy) DECIDE QUANDO EXISTE; a reference só responde quando o id não casou.
+    const porId = chaveId === null ? undefined : linhas.find((l) => l.codigo_externo === chaveId);
+    const escolhida = porId ?? linhas.find((l) => l.codigo_externo === chaveRef) ?? linhas[0];
+    return vagaDaPlanilhaEntra(escolhida.status_planilha);
   }
 
   // ── ESCRITA ──────────────────────────────────────────────────────────────────────────────────
@@ -702,6 +767,8 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
              -- o cliente. Aquela vaga voltava PUBLICADA, com o vínculo que ele pôs em dúvida.
              m.status_antes_do_encerramento as status_antes,
              (m.vaga_id is not null) as da_varredura,
+             -- F4: a MARCA de recusa de liberacao. Vaga recusada e intocavel pela varredura (ver abaixo).
+             v.recusada_em as recusada_em,
              (m.encerrada_pela_varredura_em is not null
               and v.encerrada_em is not distinct from m.encerrada_pela_varredura_em) as encerrou
         from vagas v
@@ -718,6 +785,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       posicoes_oficiais: number | null;
       status_antes: string | null;
       da_varredura: boolean;
+      recusada_em: Date | string | null;
       encerrou: boolean;
     }[];
     const existente = existentes[0];
@@ -778,6 +846,23 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       throw new Error(
         `A vaga ${idVacancy} já existe no EA sem ser da varredura: conflito para revisão humana.`,
       );
+    }
+
+    /*
+     * ─ F4: A VAGA RECUSADA É INTOCÁVEL PELA VARREDURA (decisão 6 do diretor, §A.38) ──────────────
+     *
+     * Com `recusada_em` carimbado, a varredura NÃO reabre, NÃO muda o status e NÃO tira a vaga da
+     * recusa, MESMO que a planilha a traga como ABERTA (o gate de entrada a deixou passar até aqui).
+     * Só o botão "devolver" (humano, `vagas.service`) limpa a marca. A vaga é devolvida intocada: a
+     * marca sobrevive, o status não muda, e nenhum campo do ATS é reescrito. O id volta para que as
+     * candidaturas sigam sendo varridas (isso é governado pelo gate da planilha, não pela recusa).
+     *
+     * ANTES do cálculo da reabertura de propósito: a reabertura (vaga que a varredura fechou e que
+     * voltou às ativas) é exatamente o caminho que republicaria a vaga recusada. Barrá-la aqui é o
+     * ponto único em que a §A.38/decisão 6 vive, e há teste provando que a recusa não é desfeita.
+     */
+    if (existente.recusada_em !== null && existente.recusada_em !== undefined) {
+      return { linhasAfetadas: 0, id: existente.id, divergencias: 0 };
     }
 
     const reabrir = existente.encerrou && regua.ehDoPapel(existente.status, "FECHAMENTO");

@@ -13,7 +13,7 @@ import { Combobox } from "@/components/ui/Combobox";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
-import { dataBr } from "@/lib/as-candidatos";
+import { dataBr, dataHoraBr, mensagemDoErro } from "@/lib/as-candidatos";
 import { TrilhaDaVaga, type Opcoes } from "@/components/as/vagas/TrilhaDaVaga";
 import { useLinhasServico } from "@/lib/as-linhas-servico";
 import { useSegmentos } from "@/lib/as-segmentos";
@@ -22,9 +22,13 @@ import { marcaDaPropostaNaFila } from "@/lib/as-proposta-cliente";
 import {
   carregarFilaDeRevisao,
   carregarLiberadasDaRevisao,
+  carregarRecusadas,
   corrigirLiberacaoDeRevisao,
+  devolverARevisao,
+  recusarLiberacao,
   reguaDeLiberacao,
   type VagaEmRevisao,
+  type VagaRecusada,
 } from "@/lib/as-vagas-revisao";
 
 /**
@@ -73,7 +77,7 @@ import {
 /** O cliente como o `/as/vagas/opcoes` serve. É o MESMO catálogo que a Central de Vagas consome. */
 type OpcaoCliente = Opcoes["clientes"][number];
 
-type Aba = "pendentes" | "liberadas";
+type Aba = "pendentes" | "recusadas" | "liberadas";
 
 /** O catálogo vazio, enquanto a leitura não volta. Mesma forma da Central de Vagas. */
 const OPCOES_VAZIAS: Opcoes = {
@@ -91,7 +95,10 @@ export default function VagasPendentesDeRevisaoPage() {
 
   const [aba, setAba] = useState<Aba>("pendentes");
   const [pendentes, setPendentes] = useState<VagaEmRevisao[]>([]);
+  const [recusadas, setRecusadas] = useState<VagaRecusada[]>([]);
   const [liberadas, setLiberadas] = useState<VagaEmRevisao[]>([]);
+  /** A vaga que está recebendo recusa ou devolução AGORA, para travar só o botão dela. */
+  const [acaoId, setAcaoId] = useState<string | null>(null);
   /**
    * ─ O CATÁLOGO INTEIRO, E NÃO SÓ OS CLIENTES (rodada 2) ────────────────────────────────────────
    *
@@ -149,15 +156,20 @@ export default function VagasPendentesDeRevisaoPage() {
        * O `contexto` entra na mesma leva porque a trilha o exige (é ele que diz o papel de A&S de
        * quem está preenchendo). Ele é o mesmo endpoint que a Central de Vagas já lê.
        */
-      const [fila, ops, ctx, jaLiberadas] = await Promise.all([
+      const [fila, ops, ctx, recusadasLista, jaLiberadas] = await Promise.all([
         carregarFilaDeRevisao(token),
         apiFetch<Opcoes>("/as/vagas/opcoes", { token }),
         apiFetch<VagaContextoAs>("/as/vagas/contexto", { token }),
+        // AS RECUSADAS VÊM PARA TODOS, não só para o Master: a recusa e a devolução são de QUALQUER
+        // consultor (decisão do diretor), então a aba que as mostra é de todos. As LIBERADAS seguem
+        // restritas ao Master (é a tela de correção), e por isso continuam atrás do `isAdmin`.
+        carregarRecusadas(token),
         isAdmin ? carregarLiberadasDaRevisao(token) : Promise.resolve([] as VagaEmRevisao[]),
       ]);
       setPendentes(fila);
       setOpcoes(ops);
       setContexto(ctx);
+      setRecusadas(recusadasLista);
       setLiberadas(jaLiberadas);
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível carregar a fila de revisão.");
@@ -186,6 +198,38 @@ export default function VagasPendentesDeRevisaoPage() {
       setErroRevisao("Não foi possível abrir a vaga. Tente de novo.");
     } finally {
       setCarregandoRevisao(false);
+    }
+  }
+
+  /**
+   * RECUSAR A LIBERAÇÃO, DIRETO NA LINHA (botão é comando, age no clique, sem motivo). A vaga sai da
+   * fila de pendentes e passa para a aba Recusadas. Quem recusa é o servidor; a releitura é o que faz
+   * a linha trocar de aba, sem a tela adivinhar. Falhou, o erro aparece e a vaga fica onde estava.
+   */
+  async function recusar(v: VagaEmRevisao) {
+    setAcaoId(v.id);
+    setErro(null);
+    try {
+      await recusarLiberacao(v.id, token);
+      await carregar();
+    } catch (e) {
+      setErro(mensagemDoErro(e, "Não foi possível recusar a liberação. Tente de novo."));
+    } finally {
+      setAcaoId(null);
+    }
+  }
+
+  /** DEVOLVER A VAGA RECUSADA PARA A REVISÃO. Gesto inverso: ela volta para a fila de pendentes. */
+  async function devolver(v: VagaRecusada) {
+    setAcaoId(v.id);
+    setErro(null);
+    try {
+      await devolverARevisao(v.id, token);
+      await carregar();
+    } catch (e) {
+      setErro(mensagemDoErro(e, "Não foi possível devolver a vaga para a revisão. Tente de novo."));
+    } finally {
+      setAcaoId(null);
     }
   }
 
@@ -227,7 +271,8 @@ export default function VagasPendentesDeRevisaoPage() {
     [opcoes.cargos],
   );
 
-  const linhas = aba === "pendentes" ? pendentes : liberadas;
+  const linhas: VagaEmRevisao[] =
+    aba === "pendentes" ? pendentes : aba === "recusadas" ? recusadas : liberadas;
 
   /** Busca da tela, no espírito da Liberação Admissional: código, nome de divulgação e cargo. */
   const filtradas = useMemo(() => {
@@ -240,8 +285,8 @@ export default function VagasPendentesDeRevisaoPage() {
     );
   }, [linhas, busca]);
 
-  const colunas = useMemo<ColOrd<VagaEmRevisao>[]>(
-    () => [
+  const colunas = useMemo<ColOrd<VagaEmRevisao>[]>(() => {
+    const base: ColOrd<VagaEmRevisao>[] = [
       { chave: "codigo", tipo: "texto", valor: (v) => v.codigo },
       { chave: "vaga", tipo: "texto", valor: (v) => v.nomeDivulgacao },
       { chave: "cargo", tipo: "texto", valor: (v) => v.cargoNome },
@@ -252,9 +297,18 @@ export default function VagasPendentesDeRevisaoPage() {
       // cliente errado, então ele fica na fila e não escondido num painel.
       { chave: "candidatos", tipo: "numero", valor: (v) => v.ocupacao?.emSelecao ?? 0 },
       { chave: "entrada", tipo: "data", valor: (v) => v.criadoEm },
-    ],
-    [],
-  );
+    ];
+    // A aba Recusadas ganha QUEM recusou e QUANDO, as duas ordenáveis (§A.29). O carimbo vive no
+    // item da lista de recusadas (`VagaRecusada`), não no `VagaEmRevisao` das outras abas, então o
+    // acesso é por recorte, válido porque essas colunas só existem quando a aba é Recusadas.
+    if (aba === "recusadas") {
+      base.push(
+        { chave: "recusadaPor", tipo: "texto", valor: (v) => (v as VagaRecusada).recusadaPorNome },
+        { chave: "recusadaEm", tipo: "data", valor: (v) => (v as VagaRecusada).recusadaEm },
+      );
+    }
+    return base;
+  }, [aba]);
   const ord = useOrdenacao(colunas, filtradas);
 
   const semCliente = pendentes.filter((v) => !v.codCliente).length;
@@ -296,33 +350,35 @@ export default function VagasPendentesDeRevisaoPage() {
         </div>
       )}
 
-      {/* AS ABAS (§A.24, rótulo de aba é TAG, então title case). A segunda só existe para quem pode
-          corrigir: ela lista vagas que JÁ saíram da fila, e oferecê-la a quem não é Master seria
-          mostrar a porta e trancá-la. */}
-      {isAdmin && (
-        <div className="mb-3 flex gap-2">
-          {(
-            [
-              ["pendentes", `Pendentes De Revisão (${pendentes.length})`],
-              ["liberadas", `Liberadas Recentemente (${liberadas.length})`],
-            ] as [Aba, string][]
-          ).map(([id, rotulo]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setAba(id)}
-              className={cn(
-                "rounded-full border px-3 py-1.5 text-[13px] font-semibold transition",
-                aba === id
-                  ? "border-[var(--accent)] bg-[var(--accent)] text-white"
-                  : "border-[var(--border)] text-dim hover:text-text",
-              )}
-            >
-              {rotulo}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* AS ABAS (§A.24, rótulo de aba é TAG, então title case). Pendentes e Recusadas são de TODOS:
+          qualquer consultor recusa e devolve (decisão do diretor), então a aba que mostra as
+          recusadas é de todos. Liberadas Recentemente só aparece para o Master, porque é a tela de
+          correção; oferecê-la a quem não é Master seria mostrar a porta e trancá-la. */}
+      <div className="mb-3 flex gap-2">
+        {(
+          [
+            ["pendentes", `Pendentes De Revisão (${pendentes.length})`],
+            ["recusadas", `Recusadas (${recusadas.length})`],
+            ...(isAdmin
+              ? ([["liberadas", `Liberadas Recentemente (${liberadas.length})`]] as [Aba, string][])
+              : []),
+          ] as [Aba, string][]
+        ).map(([id, rotulo]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setAba(id)}
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-[13px] font-semibold transition",
+              aba === id
+                ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                : "border-[var(--border)] text-dim hover:text-text",
+            )}
+          >
+            {rotulo}
+          </button>
+        ))}
+      </div>
 
       <GlassCard className="overflow-hidden p-2">
         <div className="ea-scroll overflow-x-auto">
@@ -332,7 +388,9 @@ export default function VagasPendentesDeRevisaoPage() {
               largura e engolia todo o espaço sobrando, abrindo um vão morto antes de Cargo, e ao
               mesmo tempo ficava espremida na largura mínima (a soma das fixas quase batia o `min-w`).
               Com largura própria, a folga se distribui entre todas as colunas. */}
-          <table className="ds-table min-w-[1380px]">
+          <table
+            className={cn("ds-table", aba === "recusadas" ? "min-w-[1700px]" : "min-w-[1380px]")}
+          >
             <thead>
               <tr>
                 <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[120px]">
@@ -359,6 +417,17 @@ export default function VagasPendentesDeRevisaoPage() {
                 <ColunaOrdenavel as="th" ord={ord} chave="entrada" className="w-[120px]">
                   Entrada
                 </ColunaOrdenavel>
+                {/* QUEM recusou e QUANDO, só na aba Recusadas, as duas ordenáveis (§A.29). */}
+                {aba === "recusadas" && (
+                  <>
+                    <ColunaOrdenavel as="th" ord={ord} chave="recusadaPor" className="w-[180px]">
+                      Recusada Por
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ord} chave="recusadaEm" className="w-[150px]">
+                      Recusada Em
+                    </ColunaOrdenavel>
+                  </>
+                )}
                 {/* Largura medida no rótulo mais longo do botão, que cabe em UMA linha (§A.20). */}
                 <th className="w-[190px]">Ação</th>
               </tr>
@@ -366,18 +435,20 @@ export default function VagasPendentesDeRevisaoPage() {
             <tbody>
               {carregando ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-faint">
+                  <td colSpan={aba === "recusadas" ? 11 : 9} className="py-8 text-center text-faint">
                     Carregando…
                   </td>
                 </tr>
               ) : ord.itens.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-faint">
+                  <td colSpan={aba === "recusadas" ? 11 : 9} className="py-8 text-center text-faint">
                     {busca
                       ? "Nenhuma vaga encontrada para a busca."
                       : aba === "pendentes"
                         ? "Nenhuma vaga esperando revisão."
-                        : "Nenhuma vaga liberada pela revisão até agora."}
+                        : aba === "recusadas"
+                          ? "Nenhuma vaga recusada."
+                          : "Nenhuma vaga liberada pela revisão até agora."}
                   </td>
                 </tr>
               ) : (
@@ -430,13 +501,43 @@ export default function VagasPendentesDeRevisaoPage() {
                       <td className="text-center">{v.posicoesOficiais ?? "não informado"}</td>
                       <td className="text-center">{v.ocupacao?.emSelecao ?? 0}</td>
                       <td className="whitespace-nowrap text-center">{dataBr(v.criadoEm)}</td>
+                      {aba === "recusadas" && (
+                        <>
+                          <td className="text-center">
+                            {(v as VagaRecusada).recusadaPorNome || "não informado"}
+                          </td>
+                          <td className="whitespace-nowrap text-center">
+                            {dataHoraBr((v as VagaRecusada).recusadaEm)}
+                          </td>
+                        </>
+                      )}
                       <td>
                         {aba === "pendentes" ? (
+                          // DUAS AÇÕES NA LINHA: revisar (o caminho principal) e recusar (devolver a
+                          // vaga sem motivo). Botão é comando, escrita normal (§A.24).
+                          <div className="flex flex-col gap-1.5">
+                            <Button
+                              className="w-full whitespace-nowrap py-2"
+                              onClick={() => void abrirRevisao(v)}
+                            >
+                              Revisar vaga
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              className="w-full whitespace-nowrap py-2"
+                              disabled={acaoId === v.id}
+                              onClick={() => void recusar(v)}
+                            >
+                              {acaoId === v.id ? "Recusando…" : "Recusar liberação"}
+                            </Button>
+                          </div>
+                        ) : aba === "recusadas" ? (
                           <Button
                             className="w-full whitespace-nowrap py-2"
-                            onClick={() => void abrirRevisao(v)}
+                            disabled={acaoId === v.id}
+                            onClick={() => void devolver(v as VagaRecusada)}
                           >
-                            Revisar vaga
+                            {acaoId === v.id ? "Devolvendo…" : "Devolver para revisão"}
                           </Button>
                         ) : (
                           <Button

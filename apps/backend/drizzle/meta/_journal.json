@@ -1009,6 +1009,13 @@
       "when": 1790646009719,
       "tag": "0143_vaga_edicoes_exclusoes",
       "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1790646011719,
+      "tag": "0144_as_planilha_status_e_vaga_recusa",
+      "breakpoints": true
     }
   ]
 }

@@ -47,13 +47,15 @@ function bancoFingido(existentes: Record<string, unknown>[] = []) {
 }
 
 /** A planilha fingida, no formato que a borda HTTP devolve depois de peneirar. */
-function planilhaFingida(linhas: { codigo: string | null; cliente: string | null }[]) {
+function planilhaFingida(
+  linhas: { codigo: string | null; cliente: string | null; status?: string | null }[],
+) {
   return {
     estaAtiva: () => true,
     ler: () =>
       Promise.resolve({
         totalLinhas: linhas.length,
-        linhas: linhas.map((l) => ({ ...l, cargo: null, status: null })),
+        linhas: linhas.map((l) => ({ codigo: l.codigo, cliente: l.cliente, cargo: null, status: l.status ?? null })),
       }),
   } as never;
 }
@@ -326,13 +328,18 @@ describe("o que a planilha recusa é CONTADO, e cada classe tem o seu contador",
     }
   });
 
-  it("a planilha NÃO é copiada para o catálogo além do código e do nome do cliente", async () => {
+  it("a planilha NÃO é copiada para o catálogo além do código, do nome do cliente e do STATUS (F2)", async () => {
     /*
-     * ┌─ POR QUE A TABELA NÃO GUARDA "MAIS UMA COLUNA PARA CONTEXTO" ────────────────────────────┐
-     * │ Guardar criaria CÓPIA de dado da planilha fora do alcance de qualquer rotina de expurgo, e  │
-     * │ a planilha tem salário, consultor e nome de candidato aprovado. O cargo e o status chegam   │
-     * │ pela rede (são 2 das 4 colunas da lista branca) e morrem aqui: o cargo é frente PRÓPRIA por │
-     * │ decisão do diretor, e a divergência de status entre os dois registros não é desta frente.   │
+     * ┌─ O QUE É COPIADO, E O QUE NÃO É (atualizado na F2, 06/10/2026) ──────────────────────────┐
+     * │ Guardar coluna da planilha criaria CÓPIA de dado fora do alcance do expurgo, e a planilha   │
+     * │ tem salário, consultor e nome de candidato aprovado. O CARGO continua morrendo aqui (frente │
+     * │ própria por decisão do diretor, texto livre).                                              │
+     * │                                                                                            │
+     * │ O STATUS MUDOU DE LADO: a F2 passou a gravá-lo em `status_planilha`, mas como TOKEN         │
+     * │ CANÔNICO FECHADO (ABERTO/ENTREGUE/FECHADO/CANCELADO/OUTRO), não como texto cru. Status é    │
+     * │ ciclo de vida da vaga, NÃO dado pessoal (§A.6), e é o ESPELHO que o gate de entrada e a fila │
+     * │ de revisão leem. Então a coluna `status_planilha` É esperada no insert; o que não pode é o   │
+     * │ CABEÇALHO/texto cru da planilha chegar ao banco.                                            │
      * └──────────────────────────────────────────────────────────────────────────────────────────┘
      */
     const { db, instrucoes } = bancoFingido([]);
@@ -341,10 +348,58 @@ describe("o que a planilha recusa é CONTADO, e cada classe tem o seu contador",
     await new DeParaClienteService(db, planilha).sincronizar();
 
     const insert = escritas(instrucoes)[0]?.sql ?? "";
-    for (const campo of ["cargo", "status"]) {
-      expect(insert, `a sincronização copiou a coluna ${campo} da planilha`).not.toContain(campo);
-    }
-    /* E o cabeçalho real da planilha não vira coluna de banco por acidente. */
+    /* O CARGO continua fora, e o cabeçalho real da planilha nunca vira coluna de banco. */
+    expect(insert, "a sincronização copiou a coluna cargo da planilha").not.toContain("cargo");
     expect(insert).not.toContain(CABECALHOS_DA_PLANILHA_DE_CLIENTE.cargo);
+    expect(insert).not.toContain(CABECALHOS_DA_PLANILHA_DE_CLIENTE.status);
+    /* O STATUS da vaga, agora SIM, como coluna canônica do espelho (F2). */
+    expect(insert, "a F2 passou a gravar o status canônico da vaga no espelho").toContain(
+      "status_planilha",
+    );
+  });
+
+  it("grava o STATUS CANÔNICO (não o texto cru): 'Aberto' vira 'ABERTO' no insert da linha nova (F2)", async () => {
+    const { db, instrucoes } = bancoFingido([]);
+    const planilha = planilhaFingida([
+      { codigo: "900001", cliente: "ALFA SERVICOS LTDA", status: "Aberto" },
+    ]);
+
+    await new DeParaClienteService(db, planilha).sincronizar();
+
+    const insert = escritas(instrucoes)[0];
+    expect(insert?.sql ?? "").toContain("status_planilha");
+    expect(insert?.params, "o token canônico ABERTO foi gravado").toContain("ABERTO");
+    expect(insert?.params, "o texto cru da planilha não é gravado").not.toContain("Aberto");
+  });
+
+  it("refresca o STATUS de linha JÁ EXISTENTE quando ele muda, sem reabrir curadoria (F2)", async () => {
+    const { db, instrucoes } = bancoFingido([
+      linhaExistente({ confirmado: true, cod_cliente: "CLI-TESTE-1", status_planilha: "ABERTO" }),
+    ]);
+    const planilha = planilhaFingida([
+      { codigo: "900001", cliente: "ALFA SERVICOS LTDA", status: "Fechado" },
+    ]);
+
+    await new DeParaClienteService(db, planilha).sincronizar();
+
+    const updates = escritas(instrucoes);
+    expect(updates.length, "só a atualização do status, sem tocar a curadoria confirmada").toBe(1);
+    const u = updates[0];
+    expect(u.sql).toContain("status_planilha");
+    expect(u.sql, "não reabre curadoria de cliente").not.toContain("confirmado_em = null");
+    expect(u.params, "o novo status canônico FECHADO foi gravado").toContain("FECHADO");
+  });
+
+  it("passada ESTÁVEL de status é MUDA: status igual não escreve (F2)", async () => {
+    const { db, instrucoes } = bancoFingido([
+      linhaExistente({ status_planilha: "ABERTO" }),
+    ]);
+    const planilha = planilhaFingida([
+      { codigo: "900001", cliente: "ALFA SERVICOS LTDA", status: "aberto" },
+    ]);
+
+    await new DeParaClienteService(db, planilha).sincronizar();
+
+    expect(escritas(instrucoes), "status igual e palpite igual: nada a escrever").toEqual([]);
   });
 });

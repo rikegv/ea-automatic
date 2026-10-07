@@ -3465,6 +3465,29 @@ export const vagas = pgTable(
      */
     encerradaEm: timestamp("encerrada_em", { withTimezone: true }),
 
+    /**
+     * ─ A MARCA DE RECUSA DE LIBERAÇÃO DA VAGA (F4, 06/10/2026), ESPELHANDO A DA ADMISSÃO ──────────
+     *
+     * ┌─ É UMA MARCA, NÃO UM STATUS, E A DISTINÇÃO É DELIBERADA ─────────────────────────────────┐
+     * │ A decisão do diretor foi ESPELHAR o mecanismo da admissão (`admissoes.recusado_em`), e NÃO  │
+     * │ criar papel novo de vaga nem tocar `VAGA_STATUS_PAPEIS`. A vaga recusada CONTINUA no seu     │
+     * │ status (PENDENTE_REVISAO), e `recusada_em` é o que a tira da FILA e a põe na aba RECUSADAS.  │
+     * │ Nula é o estado de toda vaga que ninguém recusou; não nula é recusada, com autor e data.     │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ A VARREDURA RESPEITA ESTA MARCA (decisão 6 do diretor, §A.38) ─────────────────────────────┐
+     * │ Com `recusada_em` não nula, a varredura NÃO recria, NÃO reabre e NÃO tira a vaga da recusa,  │
+     * │ mesmo que a planilha a traga como ABERTA. Só o botão "devolver" (humano) limpa a marca. A    │
+     * │ guarda mora em `ingestao-repositorio.escreverVaga` e tem teste.                             │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `recusada_por_id` com `set null` no DELETE do usuário, no mesmo molde de `aberto_por_id`: a
+     * trilha permanente de QUEM recusou vive em `vaga_recusa_eventos`; esta coluna é só o autor ATUAL
+     * da recusa em pé, e apagar o usuário não pode derrubar a vaga.
+     */
+    recusadaEm: timestamp("recusada_em", { withTimezone: true }),
+    recusadaPorId: uuid("recusada_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+
     criadoEm,
     atualizadoEm,
   },
@@ -3479,6 +3502,12 @@ export const vagas = pgTable(
     idxStatus: index("idx_vagas_status").on(t.status),
     idxAbertura: index("idx_vagas_data_abertura").on(t.dataAbertura),
     idxIdVacancyPandape: index("idx_vagas_id_vacancy_pandape").on(t.idVacancyPandape),
+    /**
+     * A ABA RECUSADAS varre por `recusada_em` não nula, e a FILA de revisão a exclui pela mesma
+     * coluna. ÍNDICE PARCIAL (só as recusadas), no desenho dos demais parciais desta tabela: a vaga
+     * que ninguém recusou é a maioria esmagadora, e não é trabalho da aba RECUSADAS.
+     */
+    idxRecusadaEm: index("idx_vagas_recusada_em").on(t.recusadaEm).where(sql`${t.recusadaEm} is not null`),
     // Meta zero ou negativa não é meta, é linha que deveria ter sido apagada (mesmo check de
     // `projeto_vaga_cargo`, e pelo mesmo motivo: a meta entra em divisão na tela). O CHECK antigo
     // `ck_vagas_posicoes` é o MESMO, renomeado junto com a coluna, para o nome do check não continuar
@@ -3553,6 +3582,40 @@ export const vagas = pgTable(
       .where(sql`${t.dataReabertura} is not null`),
     // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
     // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
+  }),
+);
+
+/**
+ * ─ A TRILHA DA RECUSA DE LIBERAÇÃO DA VAGA (F4, 06/10/2026) ────────────────────────────────────
+ *
+ * ┌─ POR QUE UMA TABELA PRÓPRIA, E NÃO `as_vaga_status_eventos` ─────────────────────────────────┐
+ * │ Recusar a liberação NÃO é uma transição de status: a vaga continua em PENDENTE_REVISAO, e o   │
+ * │ que muda é a MARCA `vagas.recusada_em`. `as_vaga_status_eventos` modela `de -> para` de        │
+ * │ status, e usá-la aqui gravaria `de == para`, uma trilha que mente. Esta tabela registra a AÇÃO │
+ * │ (RECUSOU/DEVOLVEU), com autor e instante, no mesmo espírito do `candidato_alteracoes_log` que  │
+ * │ a recusa da ADMISSÃO usa. Decisão do diretor foi ESPELHAR a admissão.                         │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: SEM TEXTO LIVRE. "Sem motivo" foi dispensado pelo diretor, então não há campo de observação
+ * por onde PII pudesse entrar: a trilha é vaga, ação, autor e data, e nada mais. CASCADE na vaga (a
+ * trilha não sobrevive à vaga apagada); `set null` no autor (apagar o usuário não derruba a trilha,
+ * e perder o nome não apaga o fato).
+ */
+export const vagaRecusaEventos = pgTable(
+  "vaga_recusa_eventos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    /** Lista FECHADA com CHECK: RECUSOU tira da fila; DEVOLVEU limpa a marca e devolve para a fila. */
+    acao: varchar("acao", { length: 10 }).notNull(),
+    porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    em: timestamp("em", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    idxVaga: index("idx_vaga_recusa_eventos_vaga").on(t.vagaId),
+    ckAcao: check("ck_vaga_recusa_eventos_acao", sql`${t.acao} in ('RECUSOU','DEVOLVEU')`),
   }),
 );
 
@@ -5353,6 +5416,21 @@ export const asDeparaClienteVaga = pgTable(
      * EXATO é conferência de um segundo, PREFIXO é onde o erro humano de confirmação vai acontecer.
      */
     casamento: varchar("casamento", { length: 20 }),
+    /**
+     * ─ O STATUS DA VAGA NA PLANILHA, JÁ CANÔNICO (F2/F3, 06/10/2026) ──────────────────────────
+     *
+     * O token FECHADO (`ABERTO`/`ENTREGUE`/`FECHADO`/`CANCELADO`/`OUTRO`) que
+     * `normalizarStatusDaPlanilha` produz a partir do texto cru da planilha. É este ESPELHO
+     * (frescor ~1h, materializado pelo scheduler) que a varredura lê para o GATE DE ENTRADA e que
+     * a fila de revisão lê para o FILTRO: só `ABERTO`/`ENTREGUE` entram, por
+     * `STATUS_DE_PLANILHA_QUE_ENTRAM`. Nulo é "a planilha não disse o status desta vaga", e não
+     * entra, como o status desconhecido.
+     *
+     * §A.6: STATUS É CICLO DE VIDA, não dado pessoal. Ao contrário do nome do cliente e do código,
+     * ele não identifica ninguém, então gravá-lo aqui é minimização respeitada. Guardar o texto
+     * CRU seria desnecessário e abriria a porta para variação; o token canônico é o que a régua usa.
+     */
+    statusPlanilha: varchar("status_planilha", { length: 20 }),
     /**
      * ┌─ PROPOSTA NÃO CONFIRMADA NÃO RESOLVE NADA, e por isso a confirmação tem AUTOR E DATA ─────┐
      * │ Um booleano responderia "foi confirmado?" e não responderia "por quem", que é a única      │

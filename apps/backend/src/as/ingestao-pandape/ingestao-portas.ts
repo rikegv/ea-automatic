@@ -181,6 +181,33 @@ export interface PortaPropostaDeClienteDaVaga {
   ): Promise<void>;
 }
 
+/**
+ * ─ O GATE DE ENTRADA PELA PLANILHA VIVA DO TIME (F2, 06/10/2026) ───────────────────────────────
+ *
+ * ┌─ ELE GATEIA SÓ A ESCRITA, E JAMAIS O CONJUNTO ATS-ATIVO (trava do `seguranca`, §A.6) ───────┐
+ * │ A varredura só ESPELHA/CRIA (e varre as páginas de) uma vaga que a planilha "Geral 2026"     │
+ * │ marque como ABERTO ou ENTREGUE. Mas o conjunto `ativos[]` que alimenta `encerrarAusentes`    │
+ * │ continua sendo o ATS-ativo COMPLETO: o encerramento deriva de AUSÊNCIA REAL no ATS, NUNCA de │
+ * │ "não estar na planilha". Confundir os dois acenderia o relógio de expurgo de dezenas de      │
+ * │ milhares de candidaturas por base ilícita. Por isso o gate mora AQUI, no caminho da escrita, │
+ * │ e não toca o laço de descoberta das ativas.                                                  │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ OPCIONAL NO TIPO, E AUSENTE NÃO GATEIA NADA ────────────────────────────────────────────────┐
+ * │ Como `cicloDeVida` e `propostaDeClienteDaVaga`, o contrato do `tester` não a declara, e o     │
+ * │ ciclo tem de continuar assinável sem ela. Em produção ela só é injetada quando a planilha     │
+ * │ está CONFIGURADA (`AS_PLANILHA_VIVA_FILE_ID`): sem planilha, não há espelho a ler, e gatear   │
+ * │ por um espelho vazio barraria TODA vaga. Ausente, tudo entra, exatamente como hoje.           │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ELA LÊ O ESPELHO (`as_depara_cliente_vaga.status_planilha`, frescor ~1h), não o Drive ao vivo:
+ * decisão do diretor. §A.6: devolve só um booleano; nenhum dado da planilha atravessa esta porta.
+ */
+export interface PortaFiltroDaPlanilhaDaVaga {
+  /** A vaga (por idVacancy, com a `reference` como segunda chave) entra pela régua da planilha? */
+  vagaEntra(idVacancy: number, reference: string | null): Promise<boolean>;
+}
+
 export interface DependenciasDaIngestao {
   http: PortaHttp;
   banco: PortaBanco;
@@ -244,6 +271,12 @@ export interface DependenciasDaVarredura extends DependenciasDaIngestao {
    * proposto e a vaga segue nascendo sem cliente, como nasce hoje. Ela NÃO devolve cliente nenhum.
    */
   propostaDeClienteDaVaga?: PortaPropostaDeClienteDaVaga;
+  /**
+   * O GATE DE ENTRADA PELA PLANILHA (F2). Injetada só quando a planilha está configurada; ausente,
+   * nada é gateado e toda vaga ATS-ativa entra, como hoje. NUNCA encolhe `ativos[]` (trava do
+   * `seguranca`): gateia o que é ESPELHADO/CRIADO, nunca o que é encerrado por ausência no ATS.
+   */
+  filtroDaPlanilha?: PortaFiltroDaPlanilhaDaVaga;
 }
 
 export interface ResumoDoCiclo {
@@ -314,5 +347,12 @@ export interface ResumoDoCiclo {
    * o dia, não invariante: apareceu uma linha nova entre a cópia da manhã e a leitura da tarde.
    */
   chavesDaPlanilhaDiscordantes?: number;
+  /**
+   * Quantas vagas ATS-ativas NÃO entraram nesta volta porque a planilha não as tem como ABERTO nem
+   * ENTREGUE (F2). §A.6: número, nunca id de vaga. Elas CONTINUAM em `ativos[]`: o gate barra a
+   * escrita, jamais o encerramento por ausência real no ATS. `undefined` = esta volta não gateou
+   * (planilha não configurada), que é o estado de quem roda sem o espelho.
+   */
+  vagasForaDaPlanilha?: number;
   erros: number;
 }

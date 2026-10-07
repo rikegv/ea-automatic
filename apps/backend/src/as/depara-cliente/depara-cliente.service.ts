@@ -12,8 +12,13 @@ import { DRIZZLE } from "../../db/drizzle.module";
 import {
   montarMapaDePara,
   nomeComparavelDeCliente,
+  normalizarCodigoDeVaga,
   type LinhaDoDeParaDeCliente,
 } from "../../domain/as-depara-cliente-vaga";
+import {
+  agregarStatusDaPlanilha,
+  type StatusDePlanilhaCanonico,
+} from "../../domain/as-planilha-status-vaga";
 import {
   proporCasamentoDeCliente,
   type ClienteDoCatalogo,
@@ -266,6 +271,27 @@ export class DeParaClienteService {
 
     resumo.linhasLidas = lida.totalLinhas;
     /*
+     * ─ O STATUS DA VAGA, AGREGADO POR CÓDIGO (F2, 06/10/2026) ──────────────────────────────────
+     *
+     * A planilha tem uma linha por CANDIDATO, então o "Status" da vaga se repete nas várias linhas
+     * dela. `agregarStatusDaPlanilha` reduz cada código a um token canônico FECHADO, fail-closed no
+     * conflito (se qualquer linha não entra, a vaga não entra). A chave é NORMALIZADA pela mesma
+     * `normalizarCodigoDeVaga` do mapa, para casar com `codigo_externo`. §A.6: status é ciclo de
+     * vida, não dado pessoal; o token canônico é o que a régua usa, nunca o texto cru.
+     */
+    const brutosPorCodigo = new Map<string, unknown[]>();
+    for (const l of lida.linhas) {
+      const chave = normalizarCodigoDeVaga(l.codigo);
+      if (chave === null) continue;
+      const atual = brutosPorCodigo.get(chave);
+      if (atual) atual.push(l.status);
+      else brutosPorCodigo.set(chave, [l.status]);
+    }
+    const statusPorCodigo = new Map<string, StatusDePlanilhaCanonico | null>();
+    for (const [chave, brutos] of brutosPorCodigo) {
+      statusPorCodigo.set(chave, agregarStatusDaPlanilha(brutos));
+    }
+    /*
      * AS LINHAS ENTRAM NO DOMÍNIO SEM PALPITE NENHUM (`codCliente: null`, `confirmado: false`): o
      * papel do `montarMapaDePara` aqui é DESDOBRAR as 3.532 linhas em uma por código e separar o que
      * é chave, o que é família interna, o que é malformado, o que é vazio e o que é ambíguo. O
@@ -305,7 +331,13 @@ export class DeParaClienteService {
 
       const atual = existentes.get(codigoExterno);
       if (atual === undefined) {
-        await this.criar(codigoExterno, entrada.nomeCliente, codigoDoPalpite, palpite.tipo);
+        await this.criar(
+          codigoExterno,
+          entrada.nomeCliente,
+          codigoDoPalpite,
+          palpite.tipo,
+          statusPorCodigo.get(codigoExterno) ?? null,
+        );
         resumo.linhasCriadas += 1;
         continue;
       }
@@ -332,6 +364,24 @@ export class DeParaClienteService {
       if (atual.codCliente === codigoDoPalpite && atual.casamento === palpite.tipo) continue;
       await this.atualizarPalpite(atual.id, codigoDoPalpite, palpite.tipo);
       resumo.linhasAtualizadas += 1;
+    }
+
+    /*
+     * ─ SEGUNDA PASSADA: O STATUS DA VAGA, FRESCO E INDEPENDENTE DA CURADORIA DE CLIENTE (F2) ─────
+     *
+     * O status é atributo da VAGA, ORTOGONAL ao vínculo de cliente: ele precisa ficar fresco até em
+     * linha CONFIRMADA (a confirmação é sobre o cliente, não sobre o status). Por isso ele é escrito
+     * à parte, e não no caminho do palpite: a linha nova já nasceu com o status no INSERT (`criar`),
+     * então ela não entra aqui; as existentes são atualizadas só quando o status MUDOU de fato, pelo
+     * `is distinct from` em JS, para a passada estável continuar MUDA. A linha AMBÍGUA é pulada: ela
+     * é desligada pelo cliente contraditório, e tocá-la aqui poluiria a instrução única que a mede.
+     */
+    for (const [codigoExterno, statusNovo] of statusPorCodigo) {
+      if (mapa.get(codigoExterno)?.ambigua) continue;
+      const atual = existentes.get(codigoExterno);
+      if (atual === undefined) continue;
+      if (atual.statusPlanilha === statusNovo) continue;
+      await this.atualizarStatusDaPlanilha(atual.id, statusNovo);
     }
 
     this.logger.log(
@@ -385,11 +435,12 @@ export class DeParaClienteService {
         casamento: TipoDeCasamentoDeCliente | null;
         confirmado: boolean;
         ativo: boolean;
+        statusPlanilha: StatusDePlanilhaCanonico | null;
       }
     >
   > {
     const linhas = (await this.db.execute(sql`
-      select id, codigo_externo, nome_cliente, cod_cliente, casamento,
+      select id, codigo_externo, nome_cliente, cod_cliente, casamento, status_planilha,
              (confirmado_em is not null) as confirmado, ativo
         from as_depara_cliente_vaga
        where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE}
@@ -399,6 +450,7 @@ export class DeParaClienteService {
       nome_cliente: string;
       cod_cliente: string | null;
       casamento: string | null;
+      status_planilha: string | null;
       confirmado: boolean;
       ativo: boolean;
     }[];
@@ -412,6 +464,7 @@ export class DeParaClienteService {
           casamento: (l.casamento ?? null) as TipoDeCasamentoDeCliente | null,
           confirmado: l.confirmado === true,
           ativo: l.ativo,
+          statusPlanilha: (l.status_planilha ?? null) as StatusDePlanilhaCanonico | null,
         },
       ]),
     );
@@ -423,13 +476,33 @@ export class DeParaClienteService {
     nomeCliente: string,
     codCliente: string | null,
     casamento: TipoDeCasamentoDeCliente,
+    /** O status da vaga na planilha, já canônico (F2). Nulo quando a planilha não disse o status. */
+    statusPlanilha: StatusDePlanilhaCanonico | null,
   ): Promise<void> {
     await this.db.execute(sql`
       insert into as_depara_cliente_vaga
-        (fonte, codigo_externo, nome_cliente, cod_cliente, casamento)
+        (fonte, codigo_externo, nome_cliente, cod_cliente, casamento, status_planilha)
       values
-        (${FONTE_DO_DEPARA_DE_CLIENTE}, ${codigoExterno}, ${nomeCliente}, ${codCliente}, ${casamento})
+        (${FONTE_DO_DEPARA_DE_CLIENTE}, ${codigoExterno}, ${nomeCliente}, ${codCliente}, ${casamento}, ${statusPlanilha})
       on conflict (fonte, codigo_externo) do nothing
+    `);
+  }
+
+  /**
+   * O STATUS DA VAGA, ATUALIZADO SOZINHO (F2), independente da curadoria de cliente.
+   *
+   * Condicional (`is distinct from`) para a passada estável não escrever: o status é ciclo de vida da
+   * VAGA, então ele muda por conta própria e NÃO reabre curadoria, NÃO religa linha e NÃO toca o
+   * vínculo de cliente. §A.6: grava token canônico, nunca texto cru da planilha.
+   */
+  private async atualizarStatusDaPlanilha(
+    id: number,
+    statusPlanilha: StatusDePlanilhaCanonico | null,
+  ): Promise<void> {
+    await this.db.execute(sql`
+      update as_depara_cliente_vaga
+         set status_planilha = ${statusPlanilha}, atualizado_em = now()
+       where id = ${id} and status_planilha is distinct from ${statusPlanilha}
     `);
   }
 

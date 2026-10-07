@@ -6,7 +6,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
   AsCidade,
@@ -71,6 +71,9 @@ import {
   vagaMetaReducoes,
   vagas,
 } from "../../db/schema";
+import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
+import { vagaDaPlanilhaEntra } from "../../domain/as-planilha-status-vaga";
+import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { derivarStatusDaVaga } from "./derivar-status-da-vaga";
 /*
  * A PROCEDÊNCIA DO CLIENTE NA LIBERAÇÃO (item 8 do de/para de cliente, 01/10/2026).
@@ -120,6 +123,19 @@ import type {
 } from "./vagas.dto";
 import { idiomasGravados, type VagaIdiomaGravado } from "../../domain/vaga-idioma";
 import type { VagaItemOndaE } from "./vaga-item-onda-e";
+
+/**
+ * ─ O ITEM DA ABA RECUSADAS (F4), PONTE LOCAL ATÉ O SHARED-TYPES GANHAR OS CAMPOS ───────────────
+ *
+ * MESMA FORMA da fila de revisão (`VagaItemOndaE`), MAIS quem recusou e quando. É o contrato que o
+ * front consome. Mora aqui, e não em `packages/shared-types`, pela MESMA razão do `vaga-item-onda-e`:
+ * aquele arquivo é do COORDENADOR nesta frente (§A.39, arquivo compartilhado com dono único). Quando
+ * os dois campos entrarem em `VagaListItem`/um tipo próprio, este alias some.
+ */
+export type VagaItemRecusada = VagaItemOndaE & {
+  recusadaEm: string | null;
+  recusadaPorNome: string | null;
+};
 import {
   pendenciasDaVaga,
   type VagaCamposObrigatoriosComLinha,
@@ -3601,7 +3617,211 @@ export class VagasService {
   async pendentesDeRevisao(): Promise<VagaItemOndaE[]> {
     const regua = await this.statusVaga.regua();
     const codigo = regua.codigoDoPapel("REVISAO");
-    return this.comPropostaDeCliente((await this.list()).filter((v) => v.status === codigo));
+    const emRevisao = (await this.list()).filter((v) => v.status === codigo);
+    const visiveis = await this.filtrarFilaDeRevisao(emRevisao);
+    return this.comPropostaDeCliente(visiveis);
+  }
+
+  /**
+   * ─ O FILTRO DA FILA DE REVISÃO (F3/F4, 06/10/2026): PLANILHA E RECUSA ──────────────────────────
+   *
+   * A fila mostra só o que é trabalho VIVO de revisão. Duas subtrações, as duas ZERO DELEÇÃO (as
+   * vagas continuam no banco, só somem da tela):
+   *   1. F4, RECUSADA: a vaga com `recusada_em` não nula está na aba RECUSADAS, não na fila.
+   *   2. F3, PLANILHA: a vaga do Pandapé só aparece se a planilha a traz como ABERTO/ENTREGUE
+   *      (`vagaDaPlanilhaEntra`, a MESMA régua do gate de entrada da varredura). Vaga MANUAL
+   *      (sem `idVacancyPandape`) não é do Pandapé: a planilha não se aplica, e ela sempre aparece.
+   *
+   * ┌─ O FILTRO DE PLANILHA SÓ VALE QUANDO O ESPELHO ESTÁ POPULADO ────────────────────────────────┐
+   * │ Sem planilha configurada o espelho não tem status nenhum, e filtrar por um espelho vazio      │
+   * │ esvaziaria a fila de TODAS as vagas do Pandapé (dev, homolog, ou antes do primeiro sync). O    │
+   * │ sinal de "planilha ativa" é haver QUALQUER linha com `status_planilha` não nulo, no mesmo       │
+   * │ espírito do gate (que só é injetado com a planilha configurada). Inativo, a F3 não filtra, e   │
+   * │ a fila volta ao comportamento de antes desta frente.                                           │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  private async filtrarFilaDeRevisao(itens: VagaItemOndaE[]): Promise<VagaItemOndaE[]> {
+    if (itens.length === 0) return itens;
+    const recusadas = await this.vagasRecusadas(itens.map((i) => i.id));
+    const semRecusa = itens.filter((v) => !recusadas.has(v.id));
+    const planilha = await this.statusDaPlanilhaDasVagas(semRecusa);
+    if (!planilha.ativa) return semRecusa;
+    return semRecusa.filter((v) => {
+      // Vaga MANUAL (sem id do Pandapé) não é do espelho: a régua da planilha não se aplica a ela.
+      if (v.idVacancyPandape === null) return true;
+      const chaveId = normalizarCodigoDeVaga(v.idVacancyPandape);
+      const chaveRef = normalizarCodigoDeVaga(v.codigo);
+      const status =
+        (chaveId !== null ? planilha.porCodigo.get(chaveId) : undefined) ??
+        (chaveRef !== null ? planilha.porCodigo.get(chaveRef) : undefined) ??
+        null;
+      return vagaDaPlanilhaEntra(status);
+    });
+  }
+
+  /**
+   * As vagas RECUSADAS dentre um conjunto. Raw `sql` de propósito: o fake de teste da fila responde
+   * `execute` com vazio, então a fila não é filtrada por recusa num mundo sem recusa; em produção, lê
+   * `vagas.recusada_em`. §A.6: devolve só ids.
+   */
+  private async vagasRecusadas(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const lista = sql.join(
+      ids.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    );
+    const linhas = (await this.db.execute(sql`
+      select id from vagas where recusada_em is not null and id in (${lista})
+    `)) as unknown as { id: string }[];
+    return new Set(linhas.map((l) => l.id));
+  }
+
+  /**
+   * O STATUS DA PLANILHA (espelho) para um conjunto de vagas, mais o sinal de PLANILHA ATIVA.
+   *
+   * `ativa` é "há qualquer de/para com `status_planilha` não nulo", o sinal de que o F2 populou o
+   * espelho. `porCodigo` casa `codigo_externo` com o `idVacancyPandape`/`codigo` da vaga. Raw `sql`:
+   * no fake, `execute` devolve vazio, logo `ativa = false` e a F3 não filtra. §A.6: só status, token
+   * canônico, nunca nome nem CPF.
+   */
+  private async statusDaPlanilhaDasVagas(
+    itens: VagaItemOndaE[],
+  ): Promise<{ ativa: boolean; porCodigo: Map<string, string | null> }> {
+    const ativaLinhas = (await this.db.execute(sql`
+      select exists(
+        select 1 from as_depara_cliente_vaga
+         where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE} and status_planilha is not null
+      ) as ativa
+    `)) as unknown as { ativa: boolean }[];
+    const ativa = ativaLinhas[0]?.ativa === true;
+    const porCodigo = new Map<string, string | null>();
+    if (!ativa) return { ativa, porCodigo };
+    const chaves = new Set<string>();
+    for (const v of itens) {
+      const chaveId = normalizarCodigoDeVaga(v.idVacancyPandape);
+      const chaveRef = normalizarCodigoDeVaga(v.codigo);
+      if (chaveId !== null) chaves.add(chaveId);
+      if (chaveRef !== null) chaves.add(chaveRef);
+    }
+    if (chaves.size === 0) return { ativa, porCodigo };
+    const lista = sql.join(
+      [...chaves].map((c) => sql`${c}`),
+      sql`, `,
+    );
+    const linhas = (await this.db.execute(sql`
+      select codigo_externo, status_planilha
+        from as_depara_cliente_vaga
+       where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE} and codigo_externo in (${lista})
+    `)) as unknown as { codigo_externo: string; status_planilha: string | null }[];
+    for (const l of linhas) porCodigo.set(l.codigo_externo, l.status_planilha);
+    return { ativa, porCodigo };
+  }
+
+  /**
+   * ─ A ABA RECUSADAS (F4): as vagas que o consultor tirou da fila, com quem recusou e quando ───────
+   *
+   * MESMA FORMA DE ITEM da fila de revisão, MAIS `recusadaEm`/`recusadaPorNome` (contrato do front).
+   * NÃO aplica o filtro de planilha: a recusa é a autoridade, e esconder por planilha prenderia uma
+   * vaga recusada que depois saiu da planilha (ninguém poderia devolvê-la). Mostra TODA vaga com
+   * `recusada_em` não nula, para que o botão "devolver" alcance qualquer uma delas.
+   */
+  async recusadas(): Promise<VagaItemRecusada[]> {
+    const itens = await this.list();
+    const info = await this.infoDeRecusa(itens.map((i) => i.id));
+    const recusadas = itens.filter((v) => info.has(v.id));
+    const comProposta = await this.comPropostaDeCliente(recusadas);
+    return comProposta.map((v) => {
+      const r = info.get(v.id);
+      return { ...v, recusadaEm: r?.recusadaEm ?? null, recusadaPorNome: r?.recusadaPorNome ?? null };
+    });
+  }
+
+  /** Quem recusou + quando, por lote de id. Raw `sql`: no fake, `execute` devolve vazio. §A.6: id, nome do autor, data. */
+  private async infoDeRecusa(
+    ids: string[],
+  ): Promise<Map<string, { recusadaEm: string; recusadaPorNome: string | null }>> {
+    const mapa = new Map<string, { recusadaEm: string; recusadaPorNome: string | null }>();
+    if (ids.length === 0) return mapa;
+    const lista = sql.join(
+      ids.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    );
+    const linhas = (await this.db.execute(sql`
+      select v.id, v.recusada_em, u.nome as recusada_por_nome
+        from vagas v
+        left join usuarios u on u.id = v.recusada_por_id
+       where v.recusada_em is not null and v.id in (${lista})
+    `)) as unknown as { id: string; recusada_em: Date | string; recusada_por_nome: string | null }[];
+    for (const l of linhas) {
+      mapa.set(l.id, {
+        recusadaEm: new Date(l.recusada_em).toISOString(),
+        recusadaPorNome: l.recusada_por_nome,
+      });
+    }
+    return mapa;
+  }
+
+  /**
+   * ─ RECUSAR A LIBERAÇÃO DA VAGA (F4), ESPELHANDO A RECUSA DA ADMISSÃO ───────────────────────────
+   *
+   * SÓ A PARTIR DO PAPEL REVISAO, e só o que ainda não foi recusado. A autoria vem da SESSÃO, NUNCA
+   * do corpo (é trilha). A marca `recusada_em` tira a vaga da fila (F3) e a põe na aba RECUSADAS, sem
+   * mudar o status nem apagar nada. A trilha RECUSOU vai na MESMA transação (§A.3 regra 8).
+   *
+   * SEM `@Roles` na rota (decisão do diretor, paridade com `liberar-revisao`): a trava é o menu
+   * `as-vagas`. A leitura do estado é sob a linha, no molde do `moverStatus`: decidir sobre o instante
+   * travado, não sobre a fotografia da tela.
+   */
+  async recusarLiberacao(id: string, user: AuthUser): Promise<void> {
+    const regua = await this.statusVaga.regua();
+    await this.db.transaction(async (tx) => {
+      const linhas = (await tx.execute(sql`
+        select status, recusada_em from vagas where id = ${id}::uuid for update
+      `)) as unknown as { status: string; recusada_em: Date | string | null }[];
+      const vaga = linhas[0];
+      if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+      if (vaga.recusada_em !== null) {
+        throw new ConflictException("Esta vaga já está recusada.");
+      }
+      if (!regua.ehDoPapel(vaga.status, "REVISAO")) {
+        throw new ConflictException("Só é possível recusar uma vaga pendente de revisão.");
+      }
+      await tx.execute(sql`
+        update vagas
+           set recusada_em = now(), recusada_por_id = ${user.id}::uuid, atualizado_em = now()
+         where id = ${id}::uuid
+      `);
+      await tx.execute(sql`
+        insert into vaga_recusa_eventos (vaga_id, acao, por_id)
+        values (${id}::uuid, 'RECUSOU', ${user.id}::uuid)
+      `);
+    });
+  }
+
+  /**
+   * ─ DEVOLVER A VAGA PARA A FILA DE REVISÃO (F4): o inverso de recusar ───────────────────────────
+   *
+   * Limpa a marca (`recusada_em = null`), devolve a vaga para a fila e registra DEVOLVEU na trilha.
+   * Só a partir de recusada. A marca é a ÚNICA porta de volta (a varredura NÃO tira a vaga da recusa).
+   */
+  async devolverRevisao(id: string, user: AuthUser): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const linhas = (await tx.execute(sql`
+        select recusada_em from vagas where id = ${id}::uuid for update
+      `)) as unknown as { recusada_em: Date | string | null }[];
+      const vaga = linhas[0];
+      if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+      if (vaga.recusada_em === null) throw new ConflictException("Esta vaga não está recusada.");
+      await tx.execute(sql`
+        update vagas
+           set recusada_em = null, recusada_por_id = null, atualizado_em = now()
+         where id = ${id}::uuid
+      `);
+      await tx.execute(sql`
+        insert into vaga_recusa_eventos (vaga_id, acao, por_id)
+        values (${id}::uuid, 'DEVOLVEU', ${user.id}::uuid)
+      `);
+    });
   }
 
   /**
@@ -3640,13 +3860,20 @@ export class VagasService {
    * sobre a coluna indexada, e nenhum dado de vaga sai daqui (§A.6: devolve número, nunca linha).
    */
   async contarPendentesDeRevisao(): Promise<{ count: number }> {
+    /*
+     * ─ O BADGE CONTA O MESMO QUE A FILA MOSTRA (§A.27) ──────────────────────────────────────────
+     *
+     * Antes era um `count` cru sobre `status = REVISAO`. Com a F3 (planilha) e a F4 (recusa) tirando
+     * vagas da FILA, um count cru diria "10 pendentes" enquanto a fila mostra 3: a divergência exata
+     * entre contador e lista que a §A.27 existe para impedir. Então o badge passa pelo MESMO filtro
+     * (`filtrarFilaDeRevisao`), sem a proposta de cliente (que o número não usa). O custo é carregar a
+     * lista no poll; a consistência com o que o diretor abre vale mais do que o count indexado.
+     */
     const regua = await this.statusVaga.regua();
     const codigo = regua.codigoDoPapel("REVISAO");
-    const [linha] = await this.db
-      .select({ total: count() })
-      .from(vagas)
-      .where(eq(vagas.status, codigo));
-    return { count: Number(linha?.total ?? 0) };
+    const emRevisao = (await this.list()).filter((v) => v.status === codigo);
+    const visiveis = await this.filtrarFilaDeRevisao(emRevisao);
+    return { count: visiveis.length };
   }
 
   /**

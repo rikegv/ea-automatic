@@ -18,6 +18,7 @@ import {
 } from "./ingestao-portas";
 import { IngestaoDeParaCliente } from "./ingestao-depara-cliente.service";
 import { IngestaoRepositorio } from "./ingestao-repositorio";
+import { VARIAVEL_DO_ARQUIVO_DA_PLANILHA } from "../depara-cliente/planilha-viva.service";
 import {
   criarConexaoDaVarredura,
   JOB_DESCOBERTA,
@@ -290,7 +291,23 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
        * `AS_PLANILHA_VIVA_FILE_ID` o catálogo fica vazio e a consulta não acha nada a propor.
        */
       propostaDeClienteDaVaga: this.propostaDeCliente,
+      /*
+       * ─ O GATE DE ENTRADA PELA PLANILHA (F2), SÓ QUANDO A PLANILHA ESTÁ CONFIGURADA ─────────────
+       *
+       * Ele lê o ESPELHO (`as_depara_cliente_vaga.status_planilha`), que o scheduler mantém de hora
+       * em hora quando `AS_PLANILHA_VIVA_FILE_ID` existe. SEM a planilha configurada o espelho fica
+       * VAZIO, e gatear por um espelho vazio barraria TODA vaga: por isso o filtro só é injetado
+       * quando a planilha está ligada. O repositório implementa a porta (lê o status, aplica a régua
+       * compartilhada). §A.6: a porta devolve só booleano. Usa a MESMA variável que
+       * `PlanilhaVivaService.estaAtiva` consulta, importada para não duplicar o literal.
+       */
+      filtroDaPlanilha: this.planilhaConfigurada() ? this.repo : undefined,
     };
+  }
+
+  /** A planilha está ligada? É o mesmo sinal de `PlanilhaVivaService.estaAtiva`, sem acoplar ao serviço. */
+  private planilhaConfigurada(): boolean {
+    return (this.config.get<string>(VARIAVEL_DO_ARQUIVO_DA_PLANILHA) ?? "").trim() !== "";
   }
 
   /** §A.6: o resumo do ciclo é CONTAGEM e MARCA de pasta. Nenhum texto livre do ATS entra no log. */
@@ -343,6 +360,17 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
         `De/para de cliente (${etapa}): ${comCodigo} proposta(s) com codigo, ${soNome} so com nome, ` +
           `${semLinha} sem linha na planilha, ${foraDoCatalogo} codigo(s) fora do catalogo, ` +
           `${discordantes} chave(s) discordante(s).`,
+      );
+    }
+    /*
+     * O GATE DE ENTRADA PELA PLANILHA (F2), em linha própria e só quando barrou algo. §A.6: CONTAGEM,
+     * nunca id de vaga. Sem esta linha o gate seria invisível, e "a planilha barrou 300 vagas" ficaria
+     * indistinguível de "a planilha cobre tudo".
+     */
+    const foraDaPlanilha = r.vagasForaDaPlanilha ?? 0;
+    if (foraDaPlanilha > 0) {
+      this.logger.log(
+        `Gate da planilha (${etapa}): ${foraDaPlanilha} vaga(s) ATS-ativa(s) fora da planilha (nao entraram; seguem no conjunto de ativas do encerramento).`,
       );
     }
     if (r.etapasNaoMapeadas.length > 0) {
