@@ -1,0 +1,56 @@
+-- A TRAVA DEFINITIVA DA VAGA GEMEA: DUAS VAGAS COM O MESMO NUMERO DO PANDAPE NAO PODEM EXISTIR
+-- (07/10/2026, decisao do diretor, fase 2 das gemeas).
+--
+-- POR QUE ELA EXISTE. `vagas.id_vacancy_pandape` nunca teve indice unique, so o comum
+-- `idx_vagas_id_vacancy_pandape`. Medido em producao: 9 pares de vaga duplicada nasceram por isso,
+-- sempre com a mesma assinatura (uma linha COM o numero e sem cliente, outra SEM identidade e com
+-- cliente), e as candidaturas ficavam partidas entre as duas. As guardas de aplicacao (a adocao por
+-- codigo e a SEGUNDA CHANCE da varredura) fecham o caminho CONHECIDO; este indice fecha TODOS,
+-- inclusive os que ninguem mapeou ainda, porque o banco passa a recusar a segunda linha.
+--
+-- PARCIAL, E A PARCIALIDADE E O PONTO. A vaga MANUAL nao tem numero de ATS nenhum, e e a maioria
+-- esperada de nascer assim: 546 vagas em producao, 540 com numero, 6 sem. Um unique total sobre uma
+-- coluna nulavel nao barraria nada (NULL nao colide com NULL em btree), mas declarar o predicado
+-- deixa a intencao legivel e mantem o indice do tamanho das vagas que realmente tem numero.
+--
+-- ┌─ A CHAVE E `btrim(...)`, E O BRANCO FICA FORA DO INDICE (dois GAPS achados pelo `tester`) ─────┐
+-- │ A COLUNA E `varchar(40)`, ou seja TEXTO. Para um indice sobre a coluna crua, "3781129" e        │
+-- │ " 3781129" sao chaves DIFERENTES; para quem digita, sao o MESMO numero. A gemea voltaria pela   │
+-- │ porta do espaco: duas linhas que a operacao le como a mesma vaga, e o banco nao reclamaria de   │
+-- │ nada. A chave normalizada fecha essa porta, e `btrim(text)` e IMMUTABLE, que e o que permite    │
+-- │ indexar a expressao.                                                                            │
+-- │                                                                                                 │
+-- │ STRING VAZIA NAO E NULO: ela entraria no indice como VALOR, e a segunda vaga com o numero em    │
+-- │ branco receberia um erro de "numero duplicado" por NAO ter numero, que e a mensagem mais        │
+-- │ confusa possivel. Excluir o branco junto com o nulo faz o branco se comportar como ausencia,    │
+-- │ que e o que ele e.                                                                              │
+-- │                                                                                                 │
+-- │ O INDICE COMUM `idx_vagas_id_vacancy_pandape` CONTINUA, e agora nao e redundancia: a busca da   │
+-- │ varredura e por igualdade na coluna CRUA (`= $1`), e um indice de EXPRESSAO nao atende aquela   │
+-- │ consulta. Os dois tem papeis distintos: o comum serve a leitura, o unique garante a regra.      │
+-- └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ ERRATA, ESCRITA DEPOIS (ver a 0151, que DESFAZ a chave de expressao desta migration) ─────────┐
+-- │ A chave `btrim(...)` desta migration abriu um defeito PIOR que o problema original: indice e   │
+-- │ buscas passaram a comparar coisas diferentes, e uma unica linha gravada com espaco travava a   │
+-- │ vaga para sempre, sem corrida nenhuma. Achado pelo agente `tester`. A 0151 volta a chave para  │
+-- │ a COLUNA CRUA e proibe o espaco por CHECK, que e o que faz as duas pontas concordarem.         │
+-- │                                                                                               │
+-- │ E A FRASE DO BLOCO ACIMA ESTAVA DEDUZIDA, NAO MEDIDA, e e o que mais importa registrar: ela   │
+-- │ dizia que o unique desta migration serviria a busca da varredura, e NAO SERVE. Medido com      │
+-- │ `explain` na producao, com esta migration JA aplicada: a busca por igualdade na coluna crua    │
+-- │ usa `idx_vagas_id_vacancy_pandape`, o COMUM, e o unique de expressao nao e nem considerado.    │
+-- │ O veredito "nao e redundancia" estava certo; a razao estava invertida.                         │
+-- └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- CRIA SEM CONFLITO, MEDIDO AGORA (07/10/2026, contra a producao, nao deduzido):
+--   540 vagas com numero, 540 numeros DISTINTOS, ZERO duplicata;
+--   ZERO linhas com `id_vacancy_pandape = ''`;
+--   ZERO linhas com espaco nas bordas (`btrim(col) <> col`), logo a chave normalizada tem as MESMAS
+--   540 chaves distintas e a normalizacao nao cria colisao nenhuma hoje.
+--
+-- `IF NOT EXISTS` para a re-aplicacao em producao e na homologacao ser segura. Sec. A.6: indice sobre
+-- o identificador de uma VAGA no ATS, nenhum dado pessoal.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vagas_id_vacancy_pandape
+  ON vagas (btrim(id_vacancy_pandape))
+  WHERE id_vacancy_pandape IS NOT NULL AND btrim(id_vacancy_pandape) <> '';

@@ -1051,6 +1051,20 @@
       "when": 1790646016719,
       "tag": "0149_grupo_cliente_meta",
       "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1790646017719,
+      "tag": "0150_uq_vagas_id_vacancy_pandape",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1790646018719,
+      "tag": "0151_uq_vagas_id_vacancy_pandape_coluna_crua",
+      "breakpoints": true
     }
   ]
 }

@@ -12,9 +12,10 @@ import {
 } from "../../domain/as-precedencia-ingestao";
 import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
 import { vagaDaPlanilhaSai } from "../../domain/as-planilha-status-vaga";
+import { ehNumeroPandapeDuplicado } from "../../domain/vaga-numero-pandape-unico";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
-import { VagaStatusService } from "../vaga-status/vaga-status.service";
+import { VagaStatusService, type ReguaDeStatusDaVaga } from "../vaga-status/vaga-status.service";
 import type {
   Escrita,
   PortaBanco,
@@ -46,6 +47,28 @@ import type {
  *
  * §A.6: nenhum método daqui loga qualquer coisa. Quem loga é o ciclo, e só contagem.
  */
+
+/**
+ * A LINHA DA VAGA ESPELHADA JÁ EXISTENTE, do jeito que `escreverVaga` precisa dela.
+ *
+ * O tipo saiu de dentro do método porque passaram a existir DUAS portas que produzem esta mesma
+ * linha: a busca pelo `IdVacancy` e a ADOÇÃO de uma vaga que ainda não tem identidade (ver
+ * `adotarVagaSemIdentidade`). Com uma cópia do tipo em cada porta, a primeira coluna acrescentada à
+ * busca passaria a ser lida como `undefined` na outra, sem nada falhar.
+ */
+interface VagaEspelhadaExistente {
+  id: string;
+  status: string;
+  codigo: string | null;
+  nome_divulgacao: string | null;
+  cidade_id: number | null;
+  posicoes_oficiais: number | null;
+  status_antes: string | null;
+  da_varredura: boolean;
+  recusada_em: Date | string | null;
+  encerrou: boolean;
+}
+
 @Injectable()
 export class IngestaoRepositorio
   implements PortaBanco, PortaCicloDeVidaDaVaga, PortaFiltroDaPlanilhaDaVaga
@@ -724,8 +747,34 @@ export class IngestaoRepositorio
    * │ estão, e a comparação por instante cobre até o caso de um humano fechar de novo o que a       │
    * │ varredura já tinha fechado antes: o carimbo passa a ser o dele, e a varredura não mexe.       │
    * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ A TERCEIRA CHANCE: O BANCO RECUSOU A GÊMEA, ENTÃO RELEIA E SIGA COM A VAGA DELE (0150) ─────┐
+   * │ Com `uq_vagas_id_vacancy_pandape` no lugar, a corrida que escapar da SEGUNDA CHANCE não cria  │
+   * │ mais a gêmea: ela bate em 23505. Aqui a violação NÃO é erro de usuário e NÃO tem mensagem,    │
+   * │ porque ninguém digitou nada: ela significa CORRIDA PERDIDA, e a vaga que a volta vizinha      │
+   * │ acabou de gravar é a vaga certa. O desfecho é reler pelo número e seguir com ela, que é       │
+   * │ exatamente o que a SEGUNDA CHANCE já faz, uma consulta antes.                                 │
+   * │                                                                                               │
+   * │ UMA REPETIÇÃO SÓ, e ela é a prova de que a disputa acabou: na segunda passada a busca de       │
+   * │ entrada acha a vaga pelo número (a identidade já está gravada e é ÚNICA, pelo índice), então  │
+   * │ o caminho do insert nem é alcançado. Um laço não teria como dar volta a mais sem ser defeito. │
+   * │                                                                                               │
+   * │ SÓ A NOSSA VIOLAÇÃO É TRATADA. Qualquer outro erro sobe intacto: quem chama conta a falha e   │
+   * │ registra o número da vaga, e engolir erro de banco aqui transformaria queda de escrita em     │
+   * │ "nada aconteceu" numa varredura de 137 mil inscrições.                                        │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   private async escreverVaga(e: Escrita): Promise<ResultadoDaEscrita> {
+    try {
+      return await this.escreverVagaUmaVez(e);
+    } catch (err) {
+      if (!ehNumeroPandapeDuplicado(err)) throw err;
+      return await this.escreverVagaUmaVez(e);
+    }
+  }
+
+  /** Uma passada de `escreverVaga`. Repetida UMA vez quando o unique do número acusa corrida. */
+  private async escreverVagaUmaVez(e: Escrita): Promise<ResultadoDaEscrita> {
     const idVacancy = String(e.valores.id_vacancy_pandape);
     const codigo = textoOuNulo(e.valores.codigo);
     const nomeDivulgacao = textoOuNulo(e.valores.nome_divulgacao);
@@ -753,50 +802,43 @@ export class IngestaoRepositorio
     const codigoDaFila = () => regua.codigoDoPapel("REVISAO");
 
     /*
-     * UMA CONSULTA RESPONDE AS DUAS PERGUNTAS: existe vaga com este número, e ela é DA VARREDURA.
-     * O `order by` prefere a matriculada, para o caso em que as duas linhas coexistam (a digitada
-     * por gente veio antes, a varredura criou a sua depois de o conflito ser resolvido à mão).
+     * ┌─ NÃO ACHOU PELO NÚMERO? TENTA ADOTAR ANTES DE CRIAR (07/10/2026) ──────────────────────────┐
+     * │ Era aqui que nascia a VAGA GÊMEA, e isto foi medido em PRODUÇÃO: 9 pares de vaga duplicada, │
+     * │ sempre com a mesma assinatura, uma linha COM `id_vacancy_pandape` e sem cliente, outra SEM  │
+     * │ identidade e COM cliente. A causa é só esta: a busca acima casa EXCLUSIVAMENTE pelo         │
+     * │ `IdVacancy`, então a vaga que a carga deixou no banco com o `codigo` certo e a identidade    │
+     * │ NULA (8 de 481) não era reconhecida, e a volta seguinte da varredura criava uma SEGUNDA.     │
+     * │ As candidaturas passavam a ser partidas entre as duas.                                      │
+     * │                                                                                            │
+     * │ A ADOÇÃO DÁ IDENTIDADE E NADA MAIS, e ela é de UMA VEZ SÓ: adotada a vaga, a busca acima    │
+     * │ passa a casar por número e este caminho nem é alcançado de novo (idempotência, com teste).  │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
      */
-    const existentes = (await this.db.execute(sql`
-      select v.id,
-             v.status,
-             -- OS QUATRO CAMPOS ATUAIS, e eles entraram em 30/09/2026 com a TRAVA DE PRECEDENCIA:
-             -- vaga JA LIBERADA nao e mais sobrescrita pelo ATS, e comparar os dois lados exige
-             -- saber o que esta gravado. Vem na MESMA ida, porque uma segunda consulta por vaga
-             -- pagaria uma viagem a mais em toda volta da varredura.
-             v.codigo,
-             v.nome_divulgacao,
-             v.cidade_id,
-             v.posicoes_oficiais,
-             -- O DESTINO DA REABERTURA É O ESTADO DE ANTES DO FECHAMENTO, e é esta coluna que o
-             -- guarda, escrita pelo encerramento automatico na mesma instrucao que fecha a vaga. A
-             -- pergunta que estava aqui antes era "tem cliente?", e ela ERRAVA no único caminho em
-             -- que a vaga está na fila COM cliente: o Master devolveu a vaga para a fila sem trocar
-             -- o cliente. Aquela vaga voltava PUBLICADA, com o vínculo que ele pôs em dúvida.
-             m.status_antes_do_encerramento as status_antes,
-             (m.vaga_id is not null) as da_varredura,
-             -- F4: a MARCA de recusa de liberacao. Vaga recusada e intocavel pela varredura (ver abaixo).
-             v.recusada_em as recusada_em,
-             (m.encerrada_pela_varredura_em is not null
-              and v.encerrada_em is not distinct from m.encerrada_pela_varredura_em) as encerrou
-        from vagas v
-        left join as_varredura_vagas m on m.vaga_id = v.id
-       where v.id_vacancy_pandape = ${idVacancy}
-       order by (m.vaga_id is not null) desc
-       limit 1
-    `)) as unknown as {
-      id: string;
-      status: string;
-      codigo: string | null;
-      nome_divulgacao: string | null;
-      cidade_id: number | null;
-      posicoes_oficiais: number | null;
-      status_antes: string | null;
-      da_varredura: boolean;
-      recusada_em: Date | string | null;
-      encerrou: boolean;
-    }[];
-    const existente = existentes[0];
+    const achada = await this.buscarVagaEspelhada(idVacancy);
+    const adotada = achada ? null : await this.adotarVagaSemIdentidade(idVacancy, codigo, regua);
+    /*
+     * ┌─ A SEGUNDA CHANCE, E ELA EXISTE PARA QUE A GÊMEA NÃO VOLTE PELA PORTA DA CORRIDA ──────────┐
+     * │ Duas voltas simultâneas sobre o MESMO número: as duas leem "não existe", uma adota, e a      │
+     * │ PERDEDORA não acha mais candidata (a identidade já foi gravada) e cairia no insert. A gêmea  │
+     * │ nasceria igual, e `vagas.id_vacancy_pandape` tem índice NÃO único, então nem o banco          │
+     * │ reclamaria. Antes disto, só a `concurrency: 1` da fila segurava o caso, e isso é propriedade  │
+     * │ da FILA, não da regra: mudar a concorrência da fila reabriria o defeito sem tocar este        │
+     * │ arquivo.                                                                                     │
+     * │                                                                                              │
+     * │ CUSTA UMA CONSULTA, E SÓ NO CAMINHO QUE IA CRIAR: vaga já conhecida não paga nada, e o        │
+     * │ nascimento legítimo paga um `select` por índice. Achando alguma coisa aqui, foi a volta       │
+     * │ vizinha que acabou de criar/adotar, então ela já tem matrícula e o fluxo segue normal.        │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const segundaChance =
+      achada || adotada ? null : await this.buscarVagaEspelhada(idVacancy);
+    const existente = achada ?? adotada ?? segundaChance;
+    /*
+     * ADOTAR É ESCREVER, e o contador tem de dizer isso. Sem esta linha, a adoção de uma vaga JÁ
+     * LIBERADA voltaria `linhasAfetadas: 0` (os quatro campos do ATS estão travados e o status não
+     * muda), e o ciclo registraria "nada aconteceu" na única volta em que a vaga ganhou identidade.
+     */
+    const afetadas = (n: number): number => (adotada ? 1 : n);
 
     if (!existente) {
       /*
@@ -969,7 +1011,7 @@ export class IngestaoRepositorio
      * └───────────────────────────────────────────────────────────────────────────────────────────┘
      */
     if (!emRevisao && destino === null) {
-      return { linhasAfetadas: 0, id: existente.id, divergencias: divergenciasDaVaga };
+      return { linhasAfetadas: afetadas(0), id: existente.id, divergencias: divergenciasDaVaga };
     }
     const movimento = sql`
       update vagas
@@ -1002,9 +1044,214 @@ export class IngestaoRepositorio
           returning vaga_id as id`;
     const linhas = (await this.db.execute(instrucao)) as unknown as { id: string }[];
     return {
-      linhasAfetadas: linhas.length > 0 ? 1 : 0,
+      linhasAfetadas: afetadas(linhas.length > 0 ? 1 : 0),
       id: existente.id,
       divergencias: divergenciasDaVaga,
+    };
+  }
+
+  /**
+   * A BUSCA DA VAGA ESPELHADA PELO NÚMERO DO ATS.
+   *
+   * UMA CONSULTA RESPONDE AS DUAS PERGUNTAS: existe vaga com este número, e ela é DA VARREDURA.
+   * O `order by` prefere a matriculada, para o caso em que as duas linhas coexistam (a digitada
+   * por gente veio antes, a varredura criou a sua depois de o conflito ser resolvido à mão).
+   *
+   * VIROU MÉTODO porque `escreverVaga` a faz DUAS vezes: a busca de entrada e a SEGUNDA CHANCE do
+   * caminho que ia criar (ver o bloco da corrida, lá). Duas cópias do mesmo `select` divergiriam na
+   * primeira coluna acrescentada, e a divergência apareceria como campo `undefined` num dos dois.
+   */
+  private async buscarVagaEspelhada(idVacancy: string): Promise<VagaEspelhadaExistente | null> {
+    const linhas = (await this.db.execute(sql`
+      select v.id,
+             v.status,
+             -- OS QUATRO CAMPOS ATUAIS, e eles entraram em 30/09/2026 com a TRAVA DE PRECEDENCIA:
+             -- vaga JA LIBERADA nao e mais sobrescrita pelo ATS, e comparar os dois lados exige
+             -- saber o que esta gravado. Vem na MESMA ida, porque uma segunda consulta por vaga
+             -- pagaria uma viagem a mais em toda volta da varredura.
+             v.codigo,
+             v.nome_divulgacao,
+             v.cidade_id,
+             v.posicoes_oficiais,
+             -- O DESTINO DA REABERTURA É O ESTADO DE ANTES DO FECHAMENTO, e é esta coluna que o
+             -- guarda, escrita pelo encerramento automatico na mesma instrucao que fecha a vaga. A
+             -- pergunta que estava aqui antes era "tem cliente?", e ela ERRAVA no único caminho em
+             -- que a vaga está na fila COM cliente: o Master devolveu a vaga para a fila sem trocar
+             -- o cliente. Aquela vaga voltava PUBLICADA, com o vínculo que ele pôs em dúvida.
+             m.status_antes_do_encerramento as status_antes,
+             (m.vaga_id is not null) as da_varredura,
+             -- F4: a MARCA de recusa de liberacao. Vaga recusada e intocavel pela varredura.
+             v.recusada_em as recusada_em,
+             (m.encerrada_pela_varredura_em is not null
+              and v.encerrada_em is not distinct from m.encerrada_pela_varredura_em) as encerrou
+        from vagas v
+        left join as_varredura_vagas m on m.vaga_id = v.id
+       where v.id_vacancy_pandape = ${idVacancy}
+       order by (m.vaga_id is not null) desc
+       limit 1
+    `)) as unknown as VagaEspelhadaExistente[];
+    return linhas[0] ?? null;
+  }
+
+  /**
+   * ─ A ADOÇÃO: A VAGA QUE JÁ EXISTE SEM IDENTIDADE RECEBE O `IdVacancy`, E MAIS NADA ─────────────
+   *
+   * ┌─ POR QUE ADOTAR, E POR QUE SÓ SOB UNICIDADE ABSOLUTA ────────────────────────────────────────┐
+   * │ `vagas.codigo` é REPETÍVEL de propósito e DIGITADO por gente (o schema registra a decisão),   │
+   * │ então casar por ele é, no geral, exatamente o que o bloco "o número do ATS digitado por gente │
+   * │ é conflito, nunca adoção" proíbe. A relaxação é ESTREITA e as quatro condições são o que a    │
+   * │ torna segura, não uma delas sozinha:                                                          │
+   * │   1. mesmo `codigo` que veio do ATS neste evento (e evento sem código não adota nada);        │
+   * │   2. `id_vacancy_pandape IS NULL`, ou seja a vaga não tem identidade de ATS NENHUMA, então     │
+   * │      não há como estar adotando a vaga de OUTRO número;                                       │
+   * │   3. `recusada_em IS NULL`, porque a vaga recusada é INTOCÁVEL pela varredura (F4, decisão 6); │
+   * │   4. EXATAMENTE UMA candidata. Com zero ou com duas, NÃO adota e cai no insert de sempre:      │
+   * │      adotar no escuro é pior do que criar, e criar continua sendo reversível por gente.        │
+   * │ Censo que torna isto seguro hoje: nos 16 grupos de mesmo código em produção, o número de       │
+   * │ linhas SEM identidade é no máximo 1 por código, e os grupos legítimos têm identidade em TODAS  │
+   * │ as linhas, logo nunca são alvo de uma busca que só olha identidade nula.                       │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ ESCREVE UMA COLUNA SÓ, E `atualizado_em` NÃO É TOCADO. ISTO É §A.6, NÃO ESTILO ─────────────┐
+   * │ `vagas.atualizado_em` é o RELÓGIO DO EXPURGO de quem está dentro da vaga, e é por isso que o  │
+   * │ caminho de cima deixa de emitir `update` quando não tem o que escrever. A adoção segue a      │
+   * │ mesma régua pelo motivo mais forte possível: ela não precisa de `atualizado_em` para nada, e   │
+   * │ empurrá-lo renovaria, sem autor e sem trilha, a retenção de todas as candidaturas da vaga.    │
+   * │ Cliente, cargo, status, datas e posições também ficam intocados, pela razão já provada no      │
+   * │ nascimento: esses campos foram olhados por gente, e a varredura volta de 30 em 30 minutos.    │
+   * │ A ADOÇÃO DÁ IDENTIDADE. Nada mais.                                                             │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ A QUINTA CONDIÇÃO: SÓ A CANDIDATA EM PAPEL REVISAO É ADOTADA (decisão do coordenador) ─────┐
+   * │ A vaga JÁ LIBERADA por uma pessoa (papel ABERTURA, com autor e trilha) NÃO é adotada, e isto │
+   * │ foi MEDIDO em produção, não arbitrado. A fronteira do `encerrarAusentes` (neste arquivo) não │
+   * │ é o status: é a MATRÍCULA (`exists ... m.vaga_id = v.id`). As 5 vagas sem número que restam  │
+   * │ em produção têm ZERO matrícula (2161521, 3703768, 3781129, 3781368, 3784372, todas com       │
+   * │ `encerra = false`): elas vieram da CARGA, nunca passaram pelo espelho, e por isso NÃO estão  │
+   * │ nesse regime hoje. É a adoção, que grava a matrícula, que as COLOCARIA nele. Ou seja: adotar │
+   * │ uma vaga liberada entregaria ao ATS o poder de FECHAR, sem autor e sem trilha, a vaga que uma│
+   * │ pessoa liberou. Abster-se não causa dano; adotar causa dano irreversível sem autor.           │
+   * │                                                                                              │
+   * │ O PREÇO DESTA ESCOLHA ESTÁ REGISTRADO E É DECISÃO PENDENTE DO DIRETOR: estreitando, o buraco │
+   * │ da vaga gêmea continua aberto exatamente para as vagas que uma pessoa já trabalhou, que é o  │
+   * │ pior caso para partir candidaturas entre duas linhas. Quem decide se o ATS pode fechar vaga  │
+   * │ liberada por gente é o diretor, não a fábrica. Até a decisão, vale o conservador.             │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ DUAS FECHADURAS NO PAPEL, E AS DUAS SÃO DE PROPÓSITO ──────────────────────────────────────┐
+   * │ O papel é exigido no SQL (`as_vaga_status.papel`, que é vocabulário de SISTEMA, nunca o       │
+   * │ CÓDIGO, que o diretor edita) E conferido em TypeScript pela RÉGUA, a mesma que este arquivo   │
+   * │ usa para tudo. A de fora é a que vale em produção; a de dentro é a que impede a regra de      │
+   * │ depender de um predicado que nenhuma leitura de teste consegue observar. Predicado que só     │
+   * │ existe no texto do SQL fica sem medição: a condição pode sair numa refatoração e todo teste   │
+   * │ continua verde, porque quem filtrava era o banco.                                             │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ LER E ESCREVER EM DOIS PASSOS, COM AS GUARDAS REPETIDAS NO `where` DO `update` ────────────┐
+   * │ A leitura decide (unicidade e papel) e a escrita confirma: o `update` repete TODAS as         │
+   * │ condições, então é um compare-and-swap. Duas voltas simultâneas sobre a mesma candidata: a    │
+   * │ segunda não casa mais `id_vacancy_pandape is null`, devolve zero linha, e NÃO adota. Sem a    │
+   * │ repetição, a segunda sobrescreveria a identidade gravada pela primeira.                        │
+   * │                                                                                              │
+   * │ Devolvendo zero linha, não houve adoção, e o fluxo cai no insert de hoje, que é o             │
+   * │ comportamento anterior. A corrida que isso ainda deixaria aberta (a perdedora criando a       │
+   * │ gêmea) é fechada pela SEGUNDA CHANCE, em `escreverVaga`.                                      │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  private async adotarVagaSemIdentidade(
+    idVacancy: string,
+    codigo: string | null,
+    regua: ReguaDeStatusDaVaga,
+  ): Promise<VagaEspelhadaExistente | null> {
+    // Evento sem codigo nao tem por onde casar: `codigo = null` nao casa linha nenhuma em SQL, e
+    // deixar a clausula passar seria pedir ao banco uma comparacao que nunca e verdadeira.
+    if (codigo === null) return null;
+    const candidatas = (await this.db.execute(sql`
+      select id, status, codigo, nome_divulgacao, cidade_id, posicoes_oficiais
+        from vagas
+       where codigo = ${codigo}
+         and id_vacancy_pandape is null
+         and recusada_em is null
+         -- SO A VAGA AINDA EM REVISAO. O papel e vocabulario de SISTEMA; o codigo e editavel pelo
+         -- diretor, e um literal de codigo aqui falharia para o lado ERRADO no dia de um recadastro.
+         and exists (
+               select 1 from as_vaga_status s
+                where s.codigo = vagas.status and s.papel = 'REVISAO')
+       -- O limit 2 e a regra "EXATAMENTE UMA": com duas ou mais, nada e adotado, e duas bastam
+       -- para saber isso. Ler a terceira nao muda a decisao.
+       limit 2
+    `)) as unknown as {
+      id: string;
+      status: string;
+      codigo: string | null;
+      nome_divulgacao: string | null;
+      cidade_id: number | null;
+      posicoes_oficiais: number | null;
+    }[];
+    // AMBIGUIDADE NAO SE RESOLVE NO ESCURO: zero ou duas ou mais, nao adota.
+    if (candidatas.length !== 1) return null;
+    const candidata = candidatas[0];
+    // A SEGUNDA FECHADURA DO PAPEL, pela regua do dominio (ver o bloco acima).
+    if (!regua.ehDoPapel(candidata.status, "REVISAO")) return null;
+    /*
+     * ┌─ O UNIQUE DO NÚMERO (0150) TAMBÉM ALCANÇA A ADOÇÃO, E AQUI A VIOLAÇÃO É CORRIDA PERDIDA ───┐
+     * │ O compare-and-swap acima protege a MESMA candidata (`id_vacancy_pandape is null` deixa de   │
+     * │ casar). O que ele não alcança é a volta vizinha que gravou aquele número em OUTRA linha:    │
+     * │ ali o `where` ainda casa, e é o índice que recusa, com 23505.                               │
+     * │                                                                                             │
+     * │ NÃO ADOTOU É A RESPOSTA CERTA, e ela é a MESMA do caso "o `update` devolveu zero linha" que │
+     * │ este método já trata: devolvendo nulo, a SEGUNDA CHANCE de `escreverVaga` relê pelo número  │
+     * │ e segue com a vaga da vizinha. Nada de mensagem de usuário: ninguém digitou nada.           │
+     * │                                                                                             │
+     * │ SÓ A NOSSA VIOLAÇÃO É ENGOLIDA. Outro erro sobe intacto, senão falha de banco na adoção     │
+     * │ viraria "não adotou" em silêncio, e a gêmea voltaria pelo insert sem ninguém saber.         │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    let linhas: { id: string }[];
+    try {
+      linhas = (await this.db.execute(sql`
+        update vagas
+           set id_vacancy_pandape = ${idVacancy}
+         where id = ${candidata.id}::uuid
+           and id_vacancy_pandape is null
+           and recusada_em is null
+           and exists (
+                 select 1 from as_vaga_status s
+                  where s.codigo = vagas.status and s.papel = 'REVISAO')
+        returning id
+      `)) as unknown as { id: string }[];
+    } catch (err) {
+      if (!ehNumeroPandapeDuplicado(err)) throw err;
+      return null;
+    }
+    const adotada = linhas[0] ? candidata : null;
+    if (!adotada) return null;
+    /*
+     * A MATRÍCULA É O REGISTRO DE PROPRIEDADE, e ela nasce aqui pela mesma razão pela qual nasce no
+     * insert: sem ela, a volta seguinte acharia a vaga pelo número e a recusaria como "vaga de outro
+     * dono", e a adoção viraria uma exceção de 30 em 30 minutos. O `do update` cobre o mesmo caso que
+     * o do nascimento: a linha do número pode ter sobrevivido a um `cascade` apontando para nada.
+     */
+    await this.db.execute(sql`
+      insert into as_varredura_vagas (id_vacancy_pandape, vaga_id)
+      values (${idVacancy}, ${adotada.id}::uuid)
+      on conflict (id_vacancy_pandape) do update
+         set vaga_id = excluded.vaga_id,
+             ultimo_insert_date = null,
+             encerrada_pela_varredura_em = null,
+             atualizado_em = now()
+    `);
+    /*
+     * OS TRÊS CAMPOS DERIVADOS, e cada um é verdade por construção: a matrícula acabou de ser
+     * escrita (`da_varredura`), a vaga não tem marca de recusa (as duas instruções exigiram isso), e
+     * ela não foi encerrada por esta varredura, então não há reabertura a calcular.
+     */
+    return {
+      ...adotada,
+      status_antes: null,
+      da_varredura: true,
+      recusada_em: null,
+      encerrou: false,
     };
   }
 

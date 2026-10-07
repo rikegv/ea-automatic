@@ -18,8 +18,14 @@ import { createDb } from "./client";
  * re-rodar retoma de onde parou. Dentro da transacao do par:
  *  (a) RESTAURA A IDENTIDADE de Row A (grava nela o id_vacancy_pandape de B). Sem isso a varredura
  *      nao reconhece Row A e DUPLICA DE NOVO (o item 1 so impede zerar dali pra frente, nao
- *      restaura). `vagas.id_vacancy_pandape` tem indice NAO-unico (`idx_vagas_id_vacancy_pandape`),
- *      entao A e B partilharem o id dentro da transacao, antes do DELETE de B, NAO colide.
+ *      restaura). A IDENTIDADE DE B E ZERADA LOGO ANTES, e isto mudou com a migration 0150: desde
+ *      ela existe um UNIQUE PARCIAL em `vagas.id_vacancy_pandape` (`where ... is not null`), entao
+ *      A e B partilharem o numero DENTRO da transacao passou a COLIDIR (23505) e o par inteiro
+ *      cairia em rollback. O texto antigo deste bloco dizia o contrario ("indice NAO-unico ... NAO
+ *      colide") e estava correto ATE a 0150; ele e a premissa que o indice derrubou. Zerar B
+ *      primeiro NAO muda o estado final: B e apagado em (d), na mesma transacao.
+ *      (O NOME do indice nao e citado de proposito: ele e o token que a varredura de fonte do
+ *      `tester` usa para decidir quais modulos IMPORTAR, e importar este arquivo executa o `main`.)
  *  (b) REPONTA A MATRICULA: `as_varredura_vagas.vaga_id` de B para A. (a) e (b) andam JUNTOS, ambos
  *      ou nenhum (Q4): a restauracao da identidade e a matricula sao um so fato. A PK da varredura e
  *      o id_vacancy_pandape (1 linha por id) e o unique em vaga_id nao colide porque Row A nunca teve
@@ -243,6 +249,22 @@ async function aplicarPar(sql: Sql, p: Par) {
       `par codigo=${p.codigo} rowB=${p.rowB} tem ${shortlists} shortlist(s); recusado (RESTRICT, rollback do par)`,
     );
   }
+
+  /*
+   * (a0) A IDENTIDADE DE B SAI ANTES DE A IDENTIDADE DE A ENTRAR (exigencia da migration 0150).
+   *
+   * O indice da 0150 e UNIQUE PARCIAL e e verificado LINHA A LINHA, na hora, nao no
+   * commit: com B ainda segurando o numero, o UPDATE de A abaixo levanta 23505 e derruba o par
+   * inteiro em rollback. Era este o unico ponto do script que dependia do indice ser nao-unico.
+   *
+   * O ESTADO FINAL E IDENTICO: B e apagado em (d), na MESMA transacao, entao zerar a coluna dele
+   * antes nao deixa rastro nenhum. Rollback do par tambem desfaz isto, como todo o resto.
+   *
+   * `atualizado_em` de B NAO e empurrado (ele e o relogio do expurgo de quem esta dentro da vaga, e
+   * a vaga esta sendo apagada: mexer no relogio dela nao significa nada).
+   */
+  await sql`UPDATE vagas SET id_vacancy_pandape = NULL
+            WHERE id = ${p.rowB} AND id_vacancy_pandape = ${p.idv}`;
 
   // (a) restaura a identidade de Row A (guard IS NULL = idempotente) + (b) reaponta a matricula.
   const restaurada = (

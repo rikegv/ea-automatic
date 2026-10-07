@@ -368,9 +368,12 @@ describe("o repositório da ingestão", () => {
    * digitar, e as centenas de vagas espelhadas ficavam paradas sem nenhuma tela acusar.
    */
   it("a vaga espelhada NASCE na FILA DE REVISÃO, sem cliente e sem cargo que case", async () => {
-    // As respostas, em ordem: a busca da vaga (nada), o CARGO do catálogo (não casou), o insert da
-    // vaga e a matrícula. O cargo entrou na sequência quando o nascimento passou a resolvê-lo.
-    const { repo, sqls, papeis } = repositorioFalso([[], [], [{ id: "v" }], []]);
+    // As respostas, em ordem: a busca da vaga (nada), a tentativa de ADOÇÃO (nenhuma candidata), a
+    // SEGUNDA CHANCE da busca (nada), o CARGO do catálogo (não casou), o insert da vaga e a
+    // matrícula. O cargo entrou na sequência quando o nascimento passou a resolvê-lo; a adoção e a
+    // segunda chance entraram em 07/10/2026, quando a vaga sem identidade passou a ser procurada
+    // antes de criar uma segunda (a vaga gêmea).
+    const { repo, sqls, papeis } = repositorioFalso([[], [], [], [], [{ id: "v" }], []]);
     await repo.escrever({
       tabela: "vagas",
       acao: "upsert",
@@ -432,7 +435,9 @@ describe("o repositório da ingestão", () => {
    */
   it("o cargo que CASA no catálogo entra no nascimento da vaga", async () => {
     const CARGO = "00000000-0000-4000-8000-00000000c0c0";
-    const { repo, sqls } = repositorioFalso([[], [{ id: CARGO }], [{ id: "v" }], []]);
+    // As duas respostas vazias do meio são a tentativa de ADOÇÃO (nenhuma candidata sem identidade)
+    // e a SEGUNDA CHANCE da busca pelo número.
+    const { repo, sqls } = repositorioFalso([[], [], [], [{ id: CARGO }], [{ id: "v" }], []]);
     await repo.escrever({
       tabela: "vagas",
       acao: "upsert",

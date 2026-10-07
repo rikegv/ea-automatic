@@ -5,6 +5,7 @@ import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import type { LinhaDeParaEtapaExternaCrua } from "../../domain/as-etapa-externa";
 import { emailParaDesempateDigai } from "../../domain/digai";
+import { ehNumeroPandapeDuplicado } from "../../domain/vaga-numero-pandape-unico";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 
@@ -407,11 +408,39 @@ export class DigaiRepositorio {
 
     const regua = await this.vagaStatus.regua();
     const codigoDaFila = regua.codigoDoPapel("REVISAO");
-    const linhas = (await this.db.execute(sql`
-      insert into vagas (id_vacancy_pandape, cod_cliente, cargo_id, status)
-      values (${idVacancyPandape}, null, null, ${codigoDaFila})
-      returning id
-    `)) as unknown as { id: string }[];
+    /*
+     * ┌─ O UNIQUE DO NUMERO (0150): LEU "NAO EXISTE", PERDEU A CORRIDA, RELE E SEGUE COM A VAGA ───┐
+     * │ A busca acima e o insert sao DOIS passos, entao duas entregas simultaneas do mesmo          │
+     * │ `partnerJobId` (ou uma entrega concorrente com a varredura do Pandape, que casa pela MESMA  │
+     * │ chave) leem as duas "nao existe" e as duas tentam inserir. Antes do indice, a segunda criava │
+     * │ a vaga GEMEA e as candidaturas ficavam partidas entre as duas; agora ela bate em 23505.      │
+     * │                                                                                             │
+     * │ ISTO NAO E ERRO DE USUARIO E NAO TEM MENSAGEM: ninguem digitou nada. O desfecho e o MESMO do │
+     * │ caminho de cima, reusar a vaga que existe, e o contrato do metodo nao muda (ele devolve a    │
+     * │ vaga daquele numero, nao "a vaga que eu criei"). SO a nossa violacao e tratada: outro erro   │
+     * │ sobe intacto, senao falha de banco viraria vaga inexistente devolvida como existente.        │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    let linhas: { id: string }[];
+    try {
+      linhas = (await this.db.execute(sql`
+        insert into vagas (id_vacancy_pandape, cod_cliente, cargo_id, status)
+        values (${idVacancyPandape}, null, null, ${codigoDaFila})
+        returning id
+      `)) as unknown as { id: string }[];
+    } catch (err) {
+      if (!ehNumeroPandapeDuplicado(err)) throw err;
+      const releitura = (await this.db.execute(sql`
+        select id from vagas where id_vacancy_pandape = ${idVacancyPandape} limit 1
+      `)) as unknown as { id: string }[];
+      const vencedora = releitura[0];
+      if (!vencedora) {
+        throw new Error(
+          "O numero da vaga do Digai colidiu no banco e a releitura nao achou a vaga vencedora.",
+        );
+      }
+      return { id: vencedora.id };
+    }
     const criada = linhas[0];
     if (!criada) throw new Error("A vaga espelhada do Digai nao devolveu linha.");
     return { id: criada.id };

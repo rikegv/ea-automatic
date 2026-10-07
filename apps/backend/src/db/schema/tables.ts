@@ -3544,6 +3544,44 @@ export const vagas = pgTable(
     idxAbertura: index("idx_vagas_data_abertura").on(t.dataAbertura),
     idxIdVacancyPandape: index("idx_vagas_id_vacancy_pandape").on(t.idVacancyPandape),
     /**
+     * ┌─ DUAS VAGAS COM O MESMO NÚMERO DO PANDAPÉ NÃO PODEM EXISTIR (0150, decisão do diretor) ────┐
+     * │ Esta é a trava DEFINITIVA da vaga gêmea, e ela é do BANCO de propósito. As guardas de        │
+     * │ aplicação (a adoção por código e a SEGUNDA CHANCE, em `ingestao-repositorio`) fecham o       │
+     * │ caminho CONHECIDO; medido em produção, 9 pares nasceram enquanto só elas existiam, porque    │
+     * │ nada impedia a segunda linha de ser gravada. Com o unique, qualquer porta futura que         │
+     * │ ninguém mapeou bate no 23505 em vez de duplicar a vaga e partir as candidaturas entre duas.  │
+     * │                                                                                             │
+     * │ PARCIAL, E A PARCIALIDADE É O PONTO: a vaga MANUAL não tem número de ATS nenhum, e é estado  │
+     * │ normal (546 vagas, 540 com número, 6 sem). O predicado deixa a intenção legível e mantém o   │
+     * │ índice do tamanho das vagas que realmente têm número.                                        │
+     * │                                                                                             │
+     * │ A CHAVE É A COLUNA CRUA, E ISSO É UM CONSERTO (0151 desfazendo a chave da 0150) ───────────  │
+     * │ A 0150 indexou `btrim(...)` para impedir que "123" e " 123" fossem vagas diferentes, e abriu │
+     * │ um defeito PIOR: todas as buscas comparam a coluna CRUA, então uma única linha gravada com   │
+     * │ espaço travava a vaga PARA SEMPRE, sem corrida nenhuma (insert recusado pelo índice, que vê  │
+     * │ a colisão aparada, e releitura vazia, que procura o valor cru: não há vencedora a reler).    │
+     * │ Achado pelo agente `tester`. A saída foi PROIBIR o espaço, no `ckSemEspaco` abaixo: com ele, │
+     * │ a coluna crua JÁ É a forma normalizada, e as buscas concordam com o índice por construção,   │
+     * │ sem nenhuma delas ser tocada (§A.26: o caminho da varredura é quente e validado).            │
+     * │                                                                                             │
+     * │ O BRANCO FICA FORA DO ÍNDICE: string VAZIA não é nulo, entraria como valor, e a segunda vaga │
+     * │ em branco receberia erro de "número duplicado" por NÃO ter número. Fora, ela se comporta     │
+     * │ como ausência, que é o que é.                                                                │
+     * │                                                                                             │
+     * │ O COMUM ACIMA CONTINUA, E NÃO É REDUNDÂNCIA, agora MEDIDO e não deduzido (banco de prova com │
+     * │ a forma da produção): a busca por igualdade na coluna crua passa a usar ESTE unique, e quem  │
+     * │ serve a busca da ADOÇÃO (`id_vacancy_pandape is null`) é o COMUM, porque o predicado parcial │
+     * │ daqui exclui justamente os nulos. Papéis distintos, os dois usados.                          │
+     * │                                                                                             │
+     * │ ISTO NÃO VALE PARA `vagas.codigo`, e confundir os dois já custou quase um desastre: o código │
+     * │ é o `reference` do ATS, é REPETÍVEL de propósito (ver o índice comum, acima) e é DIGITADO    │
+     * │ por gente. A identidade da vaga-Pandapé é o `id_vacancy_pandape`, e só ele.                  │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    uqIdVacancyPandape: uniqueIndex("uq_vagas_id_vacancy_pandape")
+      .on(t.idVacancyPandape)
+      .where(sql`${t.idVacancyPandape} is not null and ${t.idVacancyPandape} <> ''`),
+    /**
      * A ABA RECUSADAS varre por `recusada_em` não nula, e a FILA de revisão a exclui pela mesma
      * coluna. ÍNDICE PARCIAL (só as recusadas), no desenho dos demais parciais desta tabela: a vaga
      * que ninguém recusou é a maioria esmagadora, e não é trabalho da aba RECUSADAS.
@@ -3554,6 +3592,31 @@ export const vagas = pgTable(
     // `ck_vagas_posicoes` é o MESMO, renomeado junto com a coluna, para o nome do check não continuar
     // apontando para uma coluna que não existe mais.
     ckPosicoesOficiais: check("ck_vagas_posicoes_oficiais", sql`${t.posicoesOficiais} > 0`),
+    /**
+     * ┌─ O NÚMERO DO PANDAPÉ NÃO PODE TER ESPAÇO NAS BORDAS (0151) ────────────────────────────────┐
+     * │ Este CHECK é a peça que sustenta o `uqIdVacancyPandape` acima, e não uma validação solta:   │
+     * │ é ele que faz a COLUNA CRUA ser a forma normalizada, e por isso as buscas da varredura      │
+     * │ podem continuar comparando `id_vacancy_pandape = $1` sem divergir do índice.                 │
+     * │                                                                                             │
+     * │ SEM ELE, " 123" convive com "123" e a operação passa a ter duas linhas que ela lê como a     │
+     * │ MESMA vaga, que é exatamente o dano que o unique existe para impedir. A alternativa era      │
+     * │ ensinar `btrim` a todas as buscas, e ela foi recusada: mexe no caminho quente e validado da │
+     * │ varredura (§A.26), e reconcilia depois em vez de impedir no nascimento.                      │
+     * │                                                                                             │
+     * │ NENHUM ESCRITOR LEGÍTIMO FALHA AQUI, conferido um por um: `create` passa por `texto()` (que  │
+     * │ apara e manda branco para nulo), a varredura grava `String(idVacancy)` com `idVacancy`       │
+     * │ sendo `number`, `espelhoDaVagaDigai` já faz `.trim()` com alfabeto fechado, e a rotina de    │
+     * │ consolidação reescreve valor LIDO da própria tabela.                                         │
+     * │                                                                                             │
+     * │ `btrim` APARA SÓ O ESPAÇO: tabulação e quebra de linha nas bordas passam (medido). Com a     │
+     * │ chave crua isso NÃO reabre a incoerência, porque índice e buscas comparam o mesmo valor;     │
+     * │ sobra como classe de digitação, irmã do zero à esquerda, e é decisão do diretor.             │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    ckSemEspaco: check(
+      "ck_vagas_id_vacancy_pandape_sem_espaco",
+      sql`${t.idVacancyPandape} is null or ${t.idVacancyPandape} = btrim(${t.idVacancyPandape})`,
+    ),
     /**
      * A PROPOSTA DE CLIENTE É SEMPRE UM NOME, E PODE NÃO TER CÓDIGO (159 das 470 têm código, 154 só
      * o nome, medido). O INVERSO é impossível, e é isso que o CHECK fecha: código sem nome seria um

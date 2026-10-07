@@ -126,6 +126,10 @@ import type {
   TransferirConsultorDaVagaDto,
 } from "./vagas.dto";
 import { idiomasGravados, type VagaIdiomaGravado } from "../../domain/vaga-idioma";
+import {
+  MENSAGEM_NUMERO_PANDAPE_DUPLICADO,
+  ehNumeroPandapeDuplicado,
+} from "../../domain/vaga-numero-pandape-unico";
 import type { VagaItemOndaE } from "./vaga-item-onda-e";
 
 /**
@@ -1052,6 +1056,10 @@ export class VagasService {
     // A IDENTIDADE VAI JUNTO: no create a vaga é inserida com o `id_vacancy_pandape` do corpo, então
     // é ele que diz se a vaga é manual (nulo) ou veio do Pandapé.
     await this.travaDuplicidadeDeCodigo(campos.codigo, null, campos.idVacancyPandape);
+    // O NÚMERO DO PANDAPÉ É ÚNICO NO BANCO DESDE A 0150, e esta é a PRIMEIRA das duas camadas: ela
+    // responde a frase antes de o insert sair, então a vaga nem é tentada. A segunda é a tradução do
+    // 23505, logo abaixo, para a corrida que escapa desta.
+    await this.travaNumeroPandapeUnico(campos.idVacancyPandape, null);
     const beneficios = await this.validaBeneficios(dto.beneficios ?? []);
 
     // OS DOIS LADOS DA VAGA, pela régua do domínio. Quem não tem papel de A&S não abre vaga, nem em
@@ -1061,26 +1069,39 @@ export class VagasService {
 
     // TRANSAÇÃO porque são duas escritas: a vaga e os benefícios dela. Sem ela, uma falha no segundo
     // insert deixaria a vaga gravada sem os benefícios que o consultor marcou, em silêncio.
-    const id = await this.db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(vagas)
-        .values({
-          ...campos,
-          abertoPorId,
-          consultorId: lados.consultorId,
-          recruiterId: lados.recruiterId,
-        })
-        .returning({ id: vagas.id });
+    //
+    // O `catch` TRADUZ A COLISÃO DO NÚMERO DO PANDAPÉ, e ele é a SEGUNDA camada: quando o 23505
+    // chega, a pré-checagem acima já leu o banco e não viu a linha, então quem gravou foi uma
+    // requisição simultânea. O desfecho é o MESMO das duas camadas (409 com a mesma frase), e é por
+    // isso que elas não divergem: a de cima existe só para não desperdiçar o insert.
+    const id = await this.db
+      .transaction(async (tx) => {
+        const [row] = await tx
+          .insert(vagas)
+          .values({
+            ...campos,
+            abertoPorId,
+            consultorId: lados.consultorId,
+            recruiterId: lados.recruiterId,
+          })
+          .returning({ id: vagas.id });
 
-      if (beneficios.length > 0) {
-        await tx
-          .insert(vagaBeneficio)
-          .values(
-            beneficios.map((b) => ({ vagaId: row.id, beneficioId: b.beneficioId, valor: b.valor })),
-          );
-      }
-      return row.id;
-    });
+        if (beneficios.length > 0) {
+          await tx
+            .insert(vagaBeneficio)
+            .values(
+              beneficios.map((b) => ({
+                vagaId: row.id,
+                beneficioId: b.beneficioId,
+                valor: b.valor,
+              })),
+            );
+        }
+        return row.id;
+      })
+      .catch((err: unknown) => {
+        throw this.traduzirColisaoDoNumeroPandape(err);
+      });
 
     return this.devolverVaga(id, "Vaga criada, mas não encontrada na listagem.");
   }
@@ -5022,6 +5043,61 @@ export class VagasService {
       `O código ${codigo} já está em uso por outra vaga. Cada processo seletivo tem um código ` +
         `próprio: confira o número no Pandapé.`,
     );
+  }
+
+  /**
+   * ─ O NÚMERO DO PANDAPÉ É ÚNICO, E A COLISÃO VIRA FRASE ANTES DE VIRAR ERRO (0150) ──────────────
+   *
+   * ┌─ POR QUE ESTA TRAVA É DIFERENTE DA DO CÓDIGO, QUE ESTÁ LOGO ACIMA ──────────────────────────┐
+   * │ `vagas.codigo` é REPETÍVEL de propósito (recebe o `reference` do ATS, que repete: 7 valores  │
+   * │ em 42 vagas) e por isso a trava dele é uma RÉGUA, que só acusa colisão entre duas vagas       │
+   * │ MANUAIS. O `id_vacancy_pandape` é o oposto: é a IDENTIDADE da vaga-Pandapé, e duas vagas com  │
+   * │ o mesmo número não podem existir, ponto. A régua aqui é trivial, e é o BANCO que a garante;   │
+   * │ esta função existe para a violação chegar como explicação em vez de erro 500.                 │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NÚMERO AUSENTE NÃO COLIDE: a vaga MANUAL nasce sem número nenhum, e é o estado da maioria das
+   * que uma pessoa cadastra. O índice é PARCIAL exatamente por isso, e cobrar unicidade de uma
+   * ausência barraria toda vaga manual a partir da segunda.
+   */
+  private async travaNumeroPandapeUnico(
+    idVacancyPandape: string | null,
+    ignorarVagaId: string | null,
+  ): Promise<void> {
+    const numero = (idVacancyPandape ?? "").trim();
+    if (numero === "") return;
+
+    const existentes = await this.db
+      .select({ id: vagas.id })
+      .from(vagas)
+      .where(
+        // A PRÓPRIA VAGA FICA DE FORA quando a linha já gravada é a que tem aquele número: sem isto,
+        // salvar de novo a mesma vaga acusaria o número dela como duplicado dela mesma.
+        ignorarVagaId
+          ? and(eq(vagas.idVacancyPandape, numero), ne(vagas.id, ignorarVagaId))
+          : eq(vagas.idVacancyPandape, numero),
+      )
+      .limit(1);
+
+    if (existentes.length === 0) return;
+    throw new ConflictException(MENSAGEM_NUMERO_PANDAPE_DUPLICADO);
+  }
+
+  /**
+   * A VIOLAÇÃO DO UNIQUE DO NÚMERO DO PANDAPÉ virando `409` com frase de gente.
+   *
+   * RECONHECIDA POR CÓDIGO (`23505`) E NOME DE ÍNDICE, nunca por texto da mensagem: a regra mora em
+   * `domain/vaga-numero-pandape-unico`, com a prosa do porquê. §A.6: a mensagem do Postgres NÃO é
+   * repassada, ela traz o valor que violou o índice.
+   *
+   * O QUE NÃO É DELA PASSA INTACTO. Traduzir erro que não se reconheceu é o jeito de uma falha de
+   * banco virar "conflito" na tela e o diagnóstico começar do zero.
+   */
+  private traduzirColisaoDoNumeroPandape(err: unknown): unknown {
+    if (ehNumeroPandapeDuplicado(err)) {
+      return new ConflictException(MENSAGEM_NUMERO_PANDAPE_DUPLICADO);
+    }
+    return err;
   }
 
   /**

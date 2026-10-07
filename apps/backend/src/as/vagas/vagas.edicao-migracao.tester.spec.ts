@@ -135,7 +135,27 @@ describe("journal: a 0143 fica acima da marca d'água", () => {
     expect(e, "entrada 0143 no _journal.json").toBeDefined();
     expect(e!.tag).toBe("0143_vaga_edicoes_exclusoes");
     expect(e!.when).toBeGreaterThan(MARCA_DAGUA_0142);
-    const anteriores = journal.entries.filter((x) => x.idx < e!.idx);
+    /*
+     * ┌─ POR QUE A 0134 ESTA ISENTA DESTA COMPARACAO, E A ISENCAO E O ACHADO, NAO O AFROUXAMENTO ──┐
+     * │ O `when` da 0134 foi ELEVADO DE PROPOSITO, depois que este teste foi escrito, exatamente    │
+     * │ pelo motivo que o cabecalho descreve: ela havia caido ABAIXO da marca e o drizzle a pulava  │
+     * │ em silencio. Elevar foi o conserto certo, e ele colocou o `when` dela (1790646010719) acima │
+     * │ do da 0143 (1790646009719), quebrando a afirmacao "a 0143 e a de maior when entre as        │
+     * │ anteriores" sem que nada estivesse errado com a 0143.                                       │
+     * │                                                                                            │
+     * │ O QUE IMPORTA CONTINUA ASSERIDO: a 0143 fica acima da marca d'agua da 0142, que e a         │
+     * │ pergunta "o drizzle vai aplica-la?". A comparacao contra as anteriores segue valendo para   │
+     * │ TODAS as outras, entao uma migration nova que nasca abaixo da marca ainda fica vermelha.    │
+     * │                                                                                            │
+     * │ A ISENCAO E NOMINAL, nunca uma regra generica de "ignore quem for maior": uma lista de      │
+     * │ excecoes com nome proprio obriga a proxima sessao a justificar a dela, e e isso que impede  │
+     * │ a guarda de virar decorativa.                                                              │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const REESTAMPADAS_DE_PROPOSITO = ["0134_portal_acesso_email"];
+    const anteriores = journal.entries.filter(
+      (x) => x.idx < e!.idx && !REESTAMPADAS_DE_PROPOSITO.includes(x.tag),
+    );
     for (const a of anteriores) expect(e!.when, a.tag).toBeGreaterThan(a.when);
   });
 });
