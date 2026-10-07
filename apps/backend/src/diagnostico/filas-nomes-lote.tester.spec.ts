@@ -129,6 +129,9 @@ function filaComFalhados(ids: string[]) {
   return {
     getJobCounts: vi.fn(async () => ({ active: 0, waiting: 0, failed: jobs.length, delayed: 0 })),
     getFailed: vi.fn(async (inicio = 0, fim = -1) => jobs.slice(inicio, fim < 0 ? undefined : fim + 1)),
+    // `alvosPandapeFalhados` agora soma failed + delayed. Sem atrasado aqui, mas o método tem de
+    // existir, senão a leitura lança e o lote de nomes volta vazio.
+    getDelayed: vi.fn(async () => [] as JobFake[]),
     getJob: vi.fn(async (jobId: string) => jobs.find((j) => j.id === jobId)),
     /** O jobId da linha que carrega este id externo, que é o que a tela manda no corpo. */
     jobDo: (id: string) => `j${ids.indexOf(id) + 1}`,
