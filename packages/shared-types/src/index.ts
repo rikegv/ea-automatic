@@ -961,18 +961,33 @@ export const VAGA_NATUREZA = [
   // escolhe a que descreve a vaga. A ordem aqui é só de exibição; no banco o enum acrescenta no fim.
   "REPOSICAO",
   "REPOSICAO_EFETIVA",
+  // A PLANILHA "Geral 2026" ESCREVE "Reposição Temporária", E ELA NÃO TINHA PAR AQUI (07/10/2026).
+  // Medido na planilha real: 2 ocorrências. O diretor decidiu CRIAR o par em vez de jogar no
+  // `REPOSICAO` genérico, porque o de/para do pré-preenchimento copia o que a planilha diz, e
+  // achatar dois valores distintos da fonte num só é perder informação que alguém já classificou.
+  // Simétrico ao `REPOSICAO_EFETIVA`: aquele é a reposição de posição efetiva, este o de temporária.
+  "REPOSICAO_TEMPORARIA",
   "TERCEIRA",
   "ESTAGIO",
   "VAGA_BANCO",
 ] as const;
 export type VagaNatureza = (typeof VAGA_NATUREZA)[number];
 
-/** Rótulos como a operação fala (§A.24: tag em title case). */
+/**
+ * Rótulos como a operação fala (§A.24: tag em title case).
+ *
+ * `Record<VagaNatureza, string>` é FECHADO de propósito: valor novo na lista acima sem o rótulo aqui
+ * deixa o pacote VERMELHO na hora, que é a trava de graça. É por isso que as duas edições andam
+ * juntas, e por isso este arquivo é de dono único (§A.39). Depois delas, `pnpm build` do pacote é
+ * OBRIGATÓRIO: sem o rebuild a const nova chega `undefined` no consumidor com typecheck VERDE, e o
+ * seletor perde a opção em tempo de execução.
+ */
 export const VAGA_NATUREZA_LABEL: Record<VagaNatureza, string> = {
   EFETIVA: "Efetiva",
   TEMPORARIA: "Temporária",
   REPOSICAO: "Reposição",
   REPOSICAO_EFETIVA: "Reposição Efetiva",
+  REPOSICAO_TEMPORARIA: "Reposição Temporária",
   TERCEIRA: "Terceira",
   ESTAGIO: "Estágio",
   VAGA_BANCO: "Vaga Banco",

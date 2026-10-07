@@ -37,6 +37,7 @@ import {
   ladoDaCandidatura,
   ocupacaoDaVaga,
 } from "../../domain/candidatura";
+import { procedenciaALimpar } from "../../domain/as-planilha-prepreenchimento";
 import { excessoDePosicoes, normalizarCodigoVaga } from "../../domain/vaga";
 import {
   VAGA_EDICAO_CAMPOS_DA_TRILHA,
@@ -412,6 +413,23 @@ export class VagasEdicaoService {
         if (c === "beneficios") continue;
         set[c] = resultado[c];
       }
+      /*
+       * ─ A GRAVAÇÃO HUMANA LIMPA A PROCEDÊNCIA DO CAMPO QUE ELA MUDOU (0146 + 0147) ─────────────
+       *
+       * ESTA PORTA JÁ GRAVA SÓ O QUE MUDOU, então aqui a régua de `procedenciaALimpar` coincide com
+       * o que o `set` contém, e é por isso que ela recebe o `set` e não o `campos`: campo que esta
+       * porta nem vai gravar não é gravação humana, e a função o ignora (a chave nem existe no
+       * objeto). Passar `campos`, que traz os cinco sempre, faria a edição de uma observação limpar
+       * a procedência de um cargo em que ninguém encostou.
+       *
+       * ELA ENTRA DEPOIS DO LAÇO, e nunca em `COLUNAS_ESCRITAS` nem em
+       * `VAGA_EDICAO_CAMPOS_DA_TRILHA`: procedência é DERIVADA da gravação, não campo de
+       * formulário, e a lista da trilha tem CHECK no banco (`ck_vaga_edicoes_campo`). Um nome de
+       * coluna de procedência ali derrubaria a transação da edição inteira.
+       *
+       * NADA MUDOU, NADA SE LIMPA: o retorno antecipado do passo 4 acontece antes desta linha.
+       */
+      Object.assign(set, procedenciaALimpar(atual, set));
       await tx.update(vagas).set(set).where(eq(vagas.id, id));
 
       if (alterou("beneficios")) {

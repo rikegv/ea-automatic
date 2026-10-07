@@ -1,0 +1,43 @@
+-- O RETRATO DA PROCEDENCIA DA VAGA NO INSTANTE DO ENVIO PARA A ADMISSAO (07/10/2026).
+--
+-- Ver a prosa da coluna no schema (db/schema/tables.ts, as_candidatura_etapas) e o dominio
+-- (domain/as-planilha-prepreenchimento.ts, camposComProcedenciaDaPlanilha).
+--
+-- POR QUE ELA EXISTE. Medido pelo agente de seguranca: 273 de 394 envios para a admissao (69%)
+-- saem de vaga ainda em PENDENTE_REVISAO, pela PONTE do funil (registrarSaida), sem nunca passar
+-- pelo "Liberar Vaga". A trilha de procedencia so era escrita na liberacao, entao no caminho
+-- DOMINANTE nao ficava registrado quem agiu sobre valores vindos da planilha.
+--
+-- POR QUE NESTA TABELA, E NAO EM UMA NOVA. E o mesmo argumento ja escrito para aceite/aceite_numero
+-- (duas colunas acima no schema): o EVENTO do desfecho ja e gravado aqui, na MESMA transacao da
+-- mudanca de situacao, e ja carrega QUEM (por_id, da sessao), QUANDO (ocorrido_em) e O QUE
+-- (situacao). Faltava o QUALIFICADOR da decisao, nao o registro dela. Tabela separada admitiria o
+-- estado impossivel de existir o retrato sem o envio, ou o inverso.
+--
+-- E POR QUE NAO EM as_vaga_status_eventos: aquela tabela modela de -> para de STATUS, e enviar para
+-- a admissao NAO move o status da vaga. A linha teria de ser inventada como "X para X", e
+-- vaga-status.service.remover CONTA eventos por de/para para escolher entre APAGAR e INATIVAR um
+-- status do catalogo. O registro inventado passaria a mentir naquela decisao tambem.
+--
+-- OS TRES ESTADOS, E O VAZIO E GRAVADO DE PROPOSITO:
+--   NULL  = este evento nao e um envio para a admissao, ou e anterior a esta migration.
+--   '{}'  = envio MEDIDO, e nenhum campo daquela vaga veio da planilha.
+--   '{..}'= envio MEDIDO, e estes campos vieram.
+-- Deixar de gravar o vazio achataria "nao medimos" com "medimos e deu zero", e a contagem que a
+-- coluna existe para responder perderia o denominador.
+--
+-- SEM BACKFILL, e a omissao e obrigatoria: os eventos anteriores nao foram medidos, e escrever '{}'
+-- neles afirmaria que foram medidos e deram zero. Nulo e a unica resposta honesta para o passado.
+--
+-- SEM CHECK DE VOCABULARIO, de proposito: quem fecha a lista dos cinco campos e o dominio puro
+-- (CAMPOS_DO_PRE_PREENCHIMENTO), que e a mesma constante que o servico usa, e um CHECK sobre array
+-- de texto no Postgres exigiria subconsulta ou operador de continencia com uma lista redigitada
+-- aqui, que divergiria do dominio na primeira correcao feita so em um dos dois lados.
+--
+-- ADITIVA E IDEMPOTENTE: so ADD COLUMN IF NOT EXISTS. Nada e apagado, nada e renomeado, nenhum
+-- default e escrito em linha existente (Sec. A.27).
+--
+-- Sec. A.6: a coluna guarda NOME DE CAMPO de vocabulario fechado (natureza, linhaServico, cargo,
+-- dataAbertura, dataLimite). Nenhum nome de candidato, nenhum CPF, nenhum valor de campo e nenhum
+-- texto de celula da planilha. Quem agiu continua saindo de por_id, que e usuario INTERNO.
+ALTER TABLE "as_candidatura_etapas" ADD COLUMN IF NOT EXISTS "procedencia_planilha" text[];

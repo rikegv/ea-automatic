@@ -73,6 +73,7 @@ import {
 } from "../../db/schema";
 import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
 import { vagaDaPlanilhaSai } from "../../domain/as-planilha-status-vaga";
+import { procedenciaALimpar } from "../../domain/as-planilha-prepreenchimento";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { derivarStatusDaVaga } from "./derivar-status-da-vaga";
 /*
@@ -996,6 +997,17 @@ export class VagasService {
    * UM CAMINHO SÓ para os dois, e isso é deliberado: uma rota "criar rascunho" separada duplicaria as
    * validações de formato, de benefício, de região e de CPF, e as duas cópias divergiriam na primeira
    * correção feita em uma delas. O que muda entre os dois estados é UMA linha, `travaObrigatorios`.
+   *
+   * ┌─ A PROCEDÊNCIA NÃO ENTRA AQUI, E A AUSÊNCIA FOI CONFERIDA (0146 + 0147) ───────────────────┐
+   * │ As cinco colunas `*_origem` nascem NULAS neste INSERT, e isso já é a resposta certa: vaga   │
+   * │ aberta por uma pessoa não tem valor vindo da planilha, então não há carimbo a limpar nem a  │
+   * │ escrever. Nenhuma linha de código é preciso: `CreateVagaDto` não tem os cinco campos,       │
+   * │ `camposDaTrilha` não os emite (há teste de fonte para isso) e o INSERT grava só as chaves   │
+   * │ que recebe.                                                                                 │
+   * │                                                                                             │
+   * │ O DIA EM QUE ALGUÉM OS ACRESCENTAR AO DTO, a porta certa continua sendo esta, e a trava     │
+   * │ continua sendo a mesma: procedência é DERIVADA da gravação, nunca campo de formulário.      │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async create(dto: CreateVagaDto, abertoPorId: string): Promise<VagaListItem> {
     // O CATÁLOGO ANTES DE TUDO: é ele que diz qual código é o da ABERTURA e se o pedido da tela pode
@@ -1202,6 +1214,19 @@ export class VagasService {
           // coluna. No ramo REVISAO isso apagava o `id_vacancy_pandape` e a varredura do Pandapé
           // criava uma vaga DUPLICATA. No RASCUNHO é no-op (a coluna já é nula). Omitir preserva.
           ...this.semCarimbosDeIntegracao(campos),
+          /*
+           * A GRAVAÇÃO HUMANA LIMPA A PROCEDÊNCIA DO CAMPO QUE ELA MUDOU (0146 + 0147).
+           *
+           * DEPOIS do montador, e nunca dentro dele: `camposDaTrilha` emitiria a procedência como
+           * campo de formulário, e campo de formulário ausente é campo LIMPO, então um salvamento
+           * parcial apagaria as cinco em silêncio. Aqui entram SÓ as chaves dos campos que
+           * MUDARAM; as outras ficam de fora do `.set()` e a coluna segue intocada.
+           *
+           * O PORQUÊ DE "MUDOU" E NÃO "GRAVOU" está escrito em `procedenciaALimpar`: esta tela
+           * manda o formulário COMPLETO, então limpar por gravação zeraria as cinco no primeiro
+           * Salvar de qualquer campo.
+           */
+          ...procedenciaALimpar(atual, campos),
           consultorId: lados.consultorId,
           recruiterId: lados.recruiterId,
           atualizadoEm: new Date(),
@@ -4111,6 +4136,19 @@ export class VagasService {
           // o UPDATE apagaria o `id_vacancy_pandape`. Sem ele, a varredura do Pandapé não reconhece
           // a vaga e cria uma DUPLICATA no ciclo seguinte. Omitir a chave deixa a coluna intocada.
           ...this.semCarimbosDeIntegracao(campos),
+          /*
+           * A LIBERAÇÃO TAMBÉM É GRAVAÇÃO HUMANA, e é nela que o pré-preenchimento é conferido:
+           * o campo que a pessoa TROCOU no formulário de completude perde a procedência, campo a
+           * campo, pela mesma régua de `atualizar` (ver `procedenciaALimpar`).
+           *
+           * SEM CORPO, NADA SE LIMPA: `campos` é nulo na liberação que só vincula o cliente, e a
+           * função devolve objeto vazio. Liberar não é editar, e quem não mandou campo não mudou
+           * campo nenhum.
+           *
+           * OS CINCO VALORES VÊM DA LINHA TRAVADA (`vaga` já os seleciona), então a comparação é
+           * contra o que está gravado NESTE instante, e não contra a fotografia que a tela viu.
+           */
+          ...procedenciaALimpar(vaga, campos),
           status: codigoAbertura,
           /*
            * O CARIMBO MANUAL NASCE LIMPO AQUI (Frente B, ponto 2). A vaga espelhada nunca foi

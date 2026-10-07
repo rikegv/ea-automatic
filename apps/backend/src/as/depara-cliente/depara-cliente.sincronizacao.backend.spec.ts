@@ -48,14 +48,30 @@ function bancoFingido(existentes: Record<string, unknown>[] = []) {
 
 /** A planilha fingida, no formato que a borda HTTP devolve depois de peneirar. */
 function planilhaFingida(
-  linhas: { codigo: string | null; cliente: string | null; status?: string | null }[],
+  linhas: {
+    codigo: string | null;
+    cliente: string | null;
+    status?: string | null;
+    /** O cargo é a coluna "Vaga". Desde 07/10/2026 ele é usado (pré-preenchimento), não descartado. */
+    cargo?: string | null;
+  }[],
 ) {
   return {
     estaAtiva: () => true,
     ler: () =>
       Promise.resolve({
         totalLinhas: linhas.length,
-        linhas: linhas.map((l) => ({ codigo: l.codigo, cliente: l.cliente, cargo: null, status: l.status ?? null })),
+        linhas: linhas.map((l) => ({
+          codigo: l.codigo,
+          cliente: l.cliente,
+          cargo: l.cargo ?? null,
+          status: l.status ?? null,
+          /* As QUATRO colunas novas, nulas aqui: este arquivo mede a curadoria de CLIENTE. */
+          tipoVaga: null,
+          celulaAtendimento: null,
+          dataAbertura: null,
+          slaEntrega: null,
+        })),
       }),
   } as never;
 }
@@ -328,7 +344,7 @@ describe("o que a planilha recusa é CONTADO, e cada classe tem o seu contador",
     }
   });
 
-  it("a planilha NÃO é copiada para o catálogo além do código, do nome do cliente e do STATUS (F2)", async () => {
+  it("a planilha NÃO é copiada para o catálogo: nenhum TEXTO de célula vira coluna de banco", async () => {
     /*
      * ┌─ O QUE É COPIADO, E O QUE NÃO É (atualizado na F2, 06/10/2026) ──────────────────────────┐
      * │ Guardar coluna da planilha criaria CÓPIA de dado fora do alcance do expurgo, e a planilha   │
@@ -340,22 +356,42 @@ describe("o que a planilha recusa é CONTADO, e cada classe tem o seu contador",
      * │ ciclo de vida da vaga, NÃO dado pessoal (§A.6), e é o ESPELHO que o gate de entrada e a fila │
      * │ de revisão leem. Então a coluna `status_planilha` É esperada no insert; o que não pode é o   │
      * │ CABEÇALHO/texto cru da planilha chegar ao banco.                                            │
+     * │                                                                                            │
+     * │ E O CARGO MUDOU DE LADO EM 07/10/2026, pelo pré-preenchimento da vaga em revisão. *(Este    │
+     * │ bloco dizia "o CARGO continua morrendo aqui". Está DEFASADO.)* A coluna nova é               │
+     * │ `cargo_id_planilha`, e a §A.6 continua inteira porque o que ela guarda NÃO É O TEXTO: é o     │
+     * │ UUID do catálogo `cargos` DO EA, resolvido pelo domínio puro com abstenção na ambiguidade.   │
+     * │ A régua que não muda é esta, e é ela que o teste assere agora: TEXTO de célula não vira      │
+     * │ coluna de banco, nem no nome da coluna nem no VALOR do parâmetro.                            │
      * └──────────────────────────────────────────────────────────────────────────────────────────┘
      */
     const { db, instrucoes } = bancoFingido([]);
-    const planilha = planilhaFingida([{ codigo: "900001", cliente: "ALFA SERVICOS LTDA" }]);
+    const CARGO_CRU = "ANALISTA DE TESTE SINTETICO";
+    const planilha = planilhaFingida([
+      { codigo: "900001", cliente: "ALFA SERVICOS LTDA", cargo: CARGO_CRU },
+    ]);
 
     await new DeParaClienteService(db, planilha).sincronizar();
 
-    const insert = escritas(instrucoes)[0]?.sql ?? "";
-    /* O CARGO continua fora, e o cabeçalho real da planilha nunca vira coluna de banco. */
-    expect(insert, "a sincronização copiou a coluna cargo da planilha").not.toContain("cargo");
-    expect(insert).not.toContain(CABECALHOS_DA_PLANILHA_DE_CLIENTE.cargo);
-    expect(insert).not.toContain(CABECALHOS_DA_PLANILHA_DE_CLIENTE.status);
+    const insert = escritas(instrucoes)[0];
+    const sqlDoInsert = insert?.sql ?? "";
+    /* NENHUM cabeçalho real da planilha vira coluna de banco. */
+    expect(sqlDoInsert).not.toContain(CABECALHOS_DA_PLANILHA_DE_CLIENTE.cargo);
+    expect(sqlDoInsert).not.toContain(CABECALHOS_DA_PLANILHA_DE_CLIENTE.status);
+    /*
+     * ┌─ A ASSERÇÃO QUE DE FATO GUARDA A §A.6 AQUI, E ELA É SOBRE O PARÂMETRO ──────────────────┐
+     * │ O nome da coluna ser `cargo_id_planilha` não prova nada sozinho: o defeito que importa é   │
+     * │ o TEXTO da célula viajando como valor. Asserir o parâmetro é o que mata o mutante           │
+     * │ "gravar o cargo cru nesta coluna, e resolver o id depois".                                 │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    expect(insert?.params ?? [], "o TEXTO do cargo da planilha foi gravado").not.toContain(CARGO_CRU);
     /* O STATUS da vaga, agora SIM, como coluna canônica do espelho (F2). */
-    expect(insert, "a F2 passou a gravar o status canônico da vaga no espelho").toContain(
+    expect(sqlDoInsert, "a F2 passou a gravar o status canônico da vaga no espelho").toContain(
       "status_planilha",
     );
+    /* E o cargo, SIM, como identificador do catálogo do EA (pré-preenchimento, 07/10/2026). */
+    expect(sqlDoInsert).toContain("cargo_id_planilha");
   });
 
   it("grava o STATUS CANÔNICO (não o texto cru): 'Aberto' vira 'ABERTO' no insert da linha nova (F2)", async () => {

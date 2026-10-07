@@ -1,4 +1,11 @@
-"""Leitura da planilha VIVA do Drive, projetada em 4 colunas. Somente leitura.
+"""Leitura da planilha VIVA do Drive, projetada por LISTA BRANCA. Somente leitura.
+
+A projecao tem 4 colunas EXIGIDAS (fail-closed: cabecalho ausente faz a leitura falhar) e 4
+OPCIONAIS (ausente devolve nulo e NAO derruba a leitura). As opcionais sao opcionais de proposito:
+o espelho que esta leitura alimenta e o gate da varredura e o filtro da fila de revisao, entao um
+rotulo renomeado na planilha que o time mantem a mao nao pode congelar a fila. *(Esta linha dizia
+"projetada em 4 colunas", defasado desde 07/10/2026.)* A planilha tem 65 colunas; o que nao esta nas
+duas listas NAO atravessa a rede (Sec. A.6).
 
 Uma rota, um verbo: exporta a planilha como CSV, recorta as colunas da lista branca e devolve as
 linhas cruas. O backend consome por HTTP e é ELE quem decide o que casa, o que é ambíguo, o que é

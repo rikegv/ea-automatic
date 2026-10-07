@@ -20,6 +20,13 @@ import {
   type StatusDePlanilhaCanonico,
 } from "../../domain/as-planilha-status-vaga";
 import {
+  agregarPrePreenchimentoPorCodigo,
+  temAlgoAPrePreencher,
+  CAMPOS_DO_PRE_PREENCHIMENTO,
+  type CatalogosDoPrePreenchimento,
+  type ValoresDoPrePreenchimento,
+} from "../../domain/as-planilha-prepreenchimento";
+import {
   proporCasamentoDeCliente,
   type ClienteDoCatalogo,
   type TipoDeCasamentoDeCliente,
@@ -92,6 +99,20 @@ export interface ResumoDaSincronizacaoDoDePara {
   palpitesPorPrefixo: number;
   /** Nomes para os quais a fábrica NÃO propôs nada. 59 dos 95 não existem no catálogo da Admissão. */
   semPalpite: number;
+  /**
+   * Códigos para os quais a planilha deu ALGUM valor pré-preenchível (tipo, célula, cargo ou data).
+   *
+   * É CONTAGEM DE CÓDIGO, não de campo: a pergunta que ela responde é "o pré-preenchimento está
+   * chegando?", e ela é o que distingue "a planilha não tem as colunas novas" de "a leitura
+   * parou". §A.6: número, e nenhum valor.
+   */
+  prePreenchimentosComValor: number;
+  /**
+   * Pares (código + campo) que se ABSTIVERAM porque a planilha disse DUAS coisas sobre o mesmo
+   * código naquele campo. Medido: 37 códigos com dois tipos, 29 com duas células, 49 com dois
+   * cargos. Contar isto é o que torna a abstenção VISÍVEL em vez de silenciosa.
+   */
+  prePreenchimentosAmbiguosPorCampo: number;
   /** Preenchida só quando a leitura falhou. Nada foi escrito, e nada foi apagado. */
   falha?: FamiliaDeFalhaDaPlanilha;
 }
@@ -319,6 +340,32 @@ export class DeParaClienteService {
     resumo.ambiguos = resumoDoMapa.ambiguos;
     resumo.chaves = resumoDoMapa.chaves;
 
+    /*
+     * ─ O PRÉ-PREENCHIMENTO, AGREGADO POR CÓDIGO (07/10/2026) ────────────────────────────────────
+     *
+     * MESMO MOLDE DO STATUS, e pela mesma razão: a planilha tem uma linha por CANDIDATO, então os
+     * atributos da VAGA se repetem nas várias linhas dela. A diferença é a REGRA DE CONFLITO, e ela
+     * é deliberadamente outra: o status escolhe um token no conflito (a aberta ganha da fechada,
+     * porque vaga aberta não pode sumir da fila), e o pré-preenchimento SE ABSTÉM, POR CAMPO,
+     * porque aqui não há nada a perder por ficar vazio e há muito a perder por preencher errado.
+     *
+     * OS CATÁLOGOS ENTRAM POR ARGUMENTO, e o domínio é puro: é ele que decide o que casa, o que é
+     * ambíguo e o que se abstém, com teste próprio e sem banco. Esta classe só lê, agrega e grava.
+     */
+    const catalogosDoPrePreenchimento = await this.catalogosDoPrePreenchimento();
+    const prePreenchimentoPorCodigo = agregarPrePreenchimentoPorCodigo(
+      lida.linhas,
+      catalogosDoPrePreenchimento,
+    );
+    for (const item of prePreenchimentoPorCodigo.values()) {
+      if (temAlgoAPrePreencher(item.valores)) resumo.prePreenchimentosComValor += 1;
+      for (const campo of CAMPOS_DO_PRE_PREENCHIMENTO) {
+        if (item.veredictos[campo] === "AMBIGUO_NA_PLANILHA") {
+          resumo.prePreenchimentosAmbiguosPorCampo += 1;
+        }
+      }
+    }
+
     const catalogo = await this.catalogoDeClientes();
     const existentes = await this.linhasExistentes();
 
@@ -345,6 +392,7 @@ export class DeParaClienteService {
           codigoDoPalpite,
           palpite.tipo,
           statusPorCodigo.get(codigoExterno) ?? null,
+          prePreenchimentoPorCodigo.get(codigoExterno)?.valores ?? null,
         );
         resumo.linhasCriadas += 1;
         continue;
@@ -392,6 +440,31 @@ export class DeParaClienteService {
       await this.atualizarStatusDaPlanilha(atual.id, statusNovo);
     }
 
+    /*
+     * ─ TERCEIRA PASSADA: O PRÉ-PREENCHIMENTO, NO MOLDE EXATO DA SEGUNDA ──────────────────────────
+     *
+     * As cinco colunas são atributo da VAGA, ORTOGONAIS ao vínculo de cliente: elas precisam ficar
+     * frescas até em linha CONFIRMADA (a confirmação é sobre o CLIENTE, e não sobre o cargo nem
+     * sobre a data de abertura). Por isso são escritas à parte, e não no caminho do palpite.
+     *
+     * A LINHA NOVA JÁ NASCEU COM OS VALORES NO INSERT (`criar`), então ela não entra aqui; as
+     * EXISTENTES são atualizadas SÓ QUANDO ALGO MUDOU DE FATO, pelo `is distinct from` EM JS, para
+     * a passada estável continuar MUDA. É o que faz 263 códigos com a mesma planilha de ontem
+     * produzirem ZERO instrução de escrita, de 30 em 30 minutos.
+     *
+     * A LINHA AMBÍGUA É PULADA, pelo mesmo motivo da segunda passada: ela é desligada pelo cliente
+     * contraditório, e tocá-la aqui poluiria a instrução única que a mede. Note que esta é a
+     * ambiguidade de CLIENTE, outra coisa da ambiguidade POR CAMPO do pré-preenchimento (que já se
+     * resolveu em nulo dentro do domínio, campo por campo).
+     */
+    for (const [codigoExterno, item] of prePreenchimentoPorCodigo) {
+      if (mapa.get(codigoExterno)?.ambigua) continue;
+      const atual = existentes.get(codigoExterno);
+      if (atual === undefined) continue;
+      if (!this.prePreenchimentoMudou(atual.prePreenchimento, item.valores)) continue;
+      await this.atualizarPrePreenchimento(atual.id, item.valores);
+    }
+
     this.logger.log(
       `De/para de cliente: ${resumo.linhasLidas} linha(s) lida(s), ${resumo.chaves} chave(s), ` +
         `${resumo.linhasCriadas} criada(s), ${resumo.linhasAtualizadas} atualizada(s), ` +
@@ -399,7 +472,9 @@ export class DeParaClienteService {
         `${resumo.semPalpite} sem palpite, ${resumo.ambiguos} ambigua(s) ` +
         `(${resumo.linhasDesligadasPorAmbiguidade} desligada(s)), ` +
         `${resumo.confirmacoesDesfeitasPorTrocaDeNome} confirmacao(oes) reaberta(s), ` +
-        `${resumo.malformados} malformada(s), ${resumo.codigosInternos} do EA, ${resumo.vazios} vazia(s).`,
+        `${resumo.malformados} malformada(s), ${resumo.codigosInternos} do EA, ${resumo.vazios} vazia(s), ` +
+        `${resumo.prePreenchimentosComValor} com pre-preenchimento ` +
+        `(${resumo.prePreenchimentosAmbiguosPorCampo} campo(s) ambiguo(s), abstidos).`,
     );
     return resumo;
   }
@@ -433,6 +508,36 @@ export class DeParaClienteService {
     return entradas;
   }
 
+  /**
+   * OS DOIS CATÁLOGOS DO PRÉ-PREENCHIMENTO, lidos de uma vez e passados ao domínio puro.
+   *
+   * O CARGO VEM COM `ativo`, E A COLUNA É LIDA, NÃO FILTRADA NO `where`. A ordem das duas coisas é
+   * a regra, e ela está escrita no domínio: o cargo INATIVO participa da contagem de ambiguidade
+   * (tirá-lo no `where` faria um par colidente virar casamento único, e o módulo passaria a propor
+   * um cargo que o catálogo esconde) e, vencendo, o resultado é ABSTENÇÃO. Filtrar aqui inverteria
+   * as duas, em silêncio, e o teste do domínio não pegaria porque o filtro estaria no SQL.
+   *
+   * A LINHA DE SERVIÇO VEM PELO CÓDIGO IMUTÁVEL, nunca pelo rótulo: o rótulo é editável na tela de
+   * administração (renomear corrige o nome em toda vaga), e um de/para amarrado nele quebraria no
+   * dia em que alguém trocasse "OneShot" por "One Shot".
+   */
+  private async catalogosDoPrePreenchimento(): Promise<CatalogosDoPrePreenchimento> {
+    const cargos = (await this.db.execute(sql`
+      select id, nome, ativo from cargos
+    `)) as unknown as { id: string; nome: string | null; ativo: boolean }[];
+    const linhasServico = (await this.db.execute(sql`
+      select id, codigo from as_linhas_servico where ativo = true
+    `)) as unknown as { id: number; codigo: string | null }[];
+    return {
+      cargos: cargos
+        .filter((c) => (c.nome ?? "").trim() !== "")
+        .map((c) => ({ id: c.id, nome: c.nome as string, ativo: c.ativo === true })),
+      linhasServico: linhasServico
+        .filter((l) => (l.codigo ?? "").trim() !== "")
+        .map((l) => ({ id: l.id, codigo: l.codigo as string })),
+    };
+  }
+
   private async linhasExistentes(): Promise<
     Map<
       string,
@@ -444,11 +549,15 @@ export class DeParaClienteService {
         confirmado: boolean;
         ativo: boolean;
         statusPlanilha: StatusDePlanilhaCanonico | null;
+        /** O que JÁ está gravado no espelho, para a terceira passada só escrever o que mudou. */
+        prePreenchimento: ValoresDoPrePreenchimento;
       }
     >
   > {
     const linhas = (await this.db.execute(sql`
       select id, codigo_externo, nome_cliente, cod_cliente, casamento, status_planilha,
+             natureza_planilha, linha_servico_id_planilha, cargo_id_planilha,
+             data_abertura_planilha, data_limite_planilha,
              (confirmado_em is not null) as confirmado, ativo
         from as_depara_cliente_vaga
        where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE}
@@ -459,6 +568,11 @@ export class DeParaClienteService {
       cod_cliente: string | null;
       casamento: string | null;
       status_planilha: string | null;
+      natureza_planilha: string | null;
+      linha_servico_id_planilha: number | string | null;
+      cargo_id_planilha: string | null;
+      data_abertura_planilha: string | Date | null;
+      data_limite_planilha: string | Date | null;
       confirmado: boolean;
       ativo: boolean;
     }[];
@@ -473,8 +587,47 @@ export class DeParaClienteService {
           confirmado: l.confirmado === true,
           ativo: l.ativo,
           statusPlanilha: (l.status_planilha ?? null) as StatusDePlanilhaCanonico | null,
+          prePreenchimento: {
+            natureza: (l.natureza_planilha ?? null) as ValoresDoPrePreenchimento["natureza"],
+            linhaServicoId:
+              l.linha_servico_id_planilha === null || l.linha_servico_id_planilha === undefined
+                ? null
+                : Number(l.linha_servico_id_planilha),
+            cargoId: l.cargo_id_planilha ?? null,
+            dataAbertura: DeParaClienteService.dataComparavel(l.data_abertura_planilha),
+            dataLimite: DeParaClienteService.dataComparavel(l.data_limite_planilha),
+          },
         },
       ]),
+    );
+  }
+
+  /**
+   * A DATA DO BANCO EM `AAAA-MM-DD`, que é a forma em que o domínio a produz.
+   *
+   * O DRIVER DEVOLVE `date` COMO STRING OU COMO `Date` dependendo da configuração, e comparar as
+   * duas formas com a do domínio daria "mudou" em TODA volta: 263 escritas inúteis a cada 30
+   * minutos, que é exatamente o defeito que o `is distinct from` existe para impedir. O corte é por
+   * `toISOString`, em UTC, sem relógio: `date` não tem hora, então não há fuso a deslocar.
+   */
+  private static dataComparavel(valor: string | Date | null | undefined): string | null {
+    if (valor === null || valor === undefined) return null;
+    if (valor instanceof Date) return valor.toISOString().slice(0, 10);
+    const texto = String(valor).trim();
+    return texto === "" ? null : texto.slice(0, 10);
+  }
+
+  /** Mudou ALGO nos cinco campos? É o `is distinct from` em JS que mantém a passada estável MUDA. */
+  private prePreenchimentoMudou(
+    atual: ValoresDoPrePreenchimento,
+    novo: ValoresDoPrePreenchimento,
+  ): boolean {
+    return (
+      atual.natureza !== novo.natureza ||
+      atual.linhaServicoId !== novo.linhaServicoId ||
+      atual.cargoId !== novo.cargoId ||
+      atual.dataAbertura !== novo.dataAbertura ||
+      atual.dataLimite !== novo.dataLimite
     );
   }
 
@@ -486,13 +639,61 @@ export class DeParaClienteService {
     casamento: TipoDeCasamentoDeCliente,
     /** O status da vaga na planilha, já canônico (F2). Nulo quando a planilha não disse o status. */
     statusPlanilha: StatusDePlanilhaCanonico | null,
+    /**
+     * O pré-preenchimento agregado por código (07/10/2026). Nulo é abstenção, por campo.
+     *
+     * ELE ENTRA NO INSERT, e não só na terceira passada, pelo MESMO motivo do `status_planilha`: a
+     * passada que CRIA a linha é a única que sabe que ela é nova, e a terceira passada pula linha
+     * inexistente. Sem isso, um código recém-lançado na planilha ficaria sem pré-preenchimento até
+     * a volta seguinte, e "chegou na volta seguinte" é um atraso que ninguém investiga.
+     */
+    prePreenchimento: ValoresDoPrePreenchimento | null,
   ): Promise<void> {
     await this.db.execute(sql`
       insert into as_depara_cliente_vaga
-        (fonte, codigo_externo, nome_cliente, cod_cliente, casamento, status_planilha)
+        (fonte, codigo_externo, nome_cliente, cod_cliente, casamento, status_planilha,
+         natureza_planilha, linha_servico_id_planilha, cargo_id_planilha,
+         data_abertura_planilha, data_limite_planilha)
       values
-        (${FONTE_DO_DEPARA_DE_CLIENTE}, ${codigoExterno}, ${nomeCliente}, ${codCliente}, ${casamento}, ${statusPlanilha})
+        (${FONTE_DO_DEPARA_DE_CLIENTE}, ${codigoExterno}, ${nomeCliente}, ${codCliente}, ${casamento}, ${statusPlanilha},
+         ${prePreenchimento?.natureza ?? null},
+         ${prePreenchimento?.linhaServicoId ?? null}::int,
+         ${prePreenchimento?.cargoId ?? null}::uuid,
+         ${prePreenchimento?.dataAbertura ?? null}::date,
+         ${prePreenchimento?.dataLimite ?? null}::date)
       on conflict (fonte, codigo_externo) do nothing
+    `);
+  }
+
+  /**
+   * O PRÉ-PREENCHIMENTO DE UMA LINHA EXISTENTE, ATUALIZADO SOZINHO, no molde do status.
+   *
+   * CONDICIONAL EM DOIS LUGARES: o chamador já comparou em JS (`prePreenchimentoMudou`), e a
+   * instrução repete a comparação no `where` com `is distinct from`. A redundância é de propósito:
+   * a comparação em JS evita a IDA ao banco, e a do `where` é a que vale sob concorrência, se duas
+   * voltas se cruzarem.
+   *
+   * NÃO REABRE CURADORIA, NÃO RELIGA LINHA E NÃO TOCA O VÍNCULO DE CLIENTE: estes cinco campos são
+   * atributo da VAGA, e a confirmação humana desta tabela é sobre o CLIENTE. Por isso não há
+   * `confirmado_em is null` no `where`: linha confirmada continua recebendo cargo e data frescos.
+   */
+  private async atualizarPrePreenchimento(
+    id: number,
+    valores: ValoresDoPrePreenchimento,
+  ): Promise<void> {
+    await this.db.execute(sql`
+      update as_depara_cliente_vaga
+         set natureza_planilha = ${valores.natureza},
+             linha_servico_id_planilha = ${valores.linhaServicoId}::int,
+             cargo_id_planilha = ${valores.cargoId}::uuid,
+             data_abertura_planilha = ${valores.dataAbertura}::date,
+             data_limite_planilha = ${valores.dataLimite}::date,
+             atualizado_em = now()
+       where id = ${id}
+         and (natureza_planilha, linha_servico_id_planilha, cargo_id_planilha,
+              data_abertura_planilha, data_limite_planilha)
+             is distinct from (${valores.natureza}, ${valores.linhaServicoId}::int, ${valores.cargoId}::uuid,
+                               ${valores.dataAbertura}::date, ${valores.dataLimite}::date)
     `);
   }
 
@@ -620,6 +821,8 @@ export class DeParaClienteService {
       palpitesExatos: 0,
       palpitesPorPrefixo: 0,
       semPalpite: 0,
+      prePreenchimentosComValor: 0,
+      prePreenchimentosAmbiguosPorCampo: 0,
     };
   }
 }

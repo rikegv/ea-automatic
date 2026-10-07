@@ -140,6 +140,27 @@ export interface CenarioFingido {
    * envio lê este valor; nenhum outro caminho do fake o usa.
    */
   cpfDoFunil?: string | null;
+  /**
+   * QUAIS CAMPOS DA VAGA ESTÃO COM PROCEDÊNCIA `PLANILHA` (0146), como a PONTE os lê no instante do
+   * envio para a admissão. Default VAZIO, que é o estado da esmagadora maioria das vagas (nenhum
+   * campo pré-preenchido) e o caso em que o retrato gravado tem de ser a lista vazia, não nulo.
+   *
+   * Nomes de CAMPO do vocabulário fechado (`natureza`, `linhaServico`, `cargo`, `dataAbertura`,
+   * `dataLimite`). §A.6: nenhum valor e nenhum dado de pessoa atravessa este override.
+   */
+  procedenciaDaVaga?: readonly string[];
+}
+
+/** As cinco colunas `*_origem` da vaga, montadas a partir dos nomes de campo do cenário. */
+function origensDaVaga(campos: readonly string[]): Record<string, string | null> {
+  const marcada = (campo: string) => (campos.includes(campo) ? "PLANILHA" : null);
+  return {
+    naturezaOrigem: marcada("natureza"),
+    linhaServicoOrigem: marcada("linhaServico"),
+    cargoOrigem: marcada("cargo"),
+    dataAberturaOrigem: marcada("dataAbertura"),
+    dataLimiteOrigem: marcada("dataLimite"),
+  };
 }
 
 export function bancoFingido(cenario: CenarioFingido) {
@@ -217,7 +238,17 @@ export function bancoFingido(cenario: CenarioFingido) {
     b.then = (r: (v: unknown) => unknown) => {
       void projecao;
       void tabela;
-      const linha = juntouCandidatos ? [{ candCpf: cpfDoFunil, candNome: "Fulano" }] : [];
+      const linha = juntouCandidatos
+        ? [
+            {
+              candCpf: cpfDoFunil,
+              candNome: "Fulano",
+              // AS CINCO PROCEDÊNCIAS (0147): a ponte as lê na MESMA consulta do candidato, e é
+              // delas que sai o retrato gravado no evento do envio.
+              ...origensDaVaga(cenario.procedenciaDaVaga ?? []),
+            },
+          ]
+        : [];
       return Promise.resolve(linha).then(r);
     };
     return b;

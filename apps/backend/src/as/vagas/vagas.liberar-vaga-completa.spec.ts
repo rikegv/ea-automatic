@@ -870,3 +870,111 @@ describe("o papel RASCUNHO continua se comportando como antes", () => {
     expect(banco.escritas).toEqual([]);
   });
 });
+
+// ── (h) A GRAVAÇÃO HUMANA LIMPA A PROCEDÊNCIA DO CAMPO QUE ELA MUDOU (0146 + 0147) ────────────
+
+/**
+ * ─ O CARIMBO DA PLANILHA NÃO SOBREVIVE À CORREÇÃO DE UMA PESSOA ────────────────────────────────
+ *
+ * O pré-preenchimento carimba `PLANILHA` no campo que ELE preencheu. Sem esta limpeza, a pessoa
+ * TROCA o valor na tela e o carimbo continua afirmando "este veio da planilha" sobre um valor que
+ * alguém escolheu: ele passa a mentir na direção OPOSTA, e a contagem que a coluna existe para
+ * responder ("quantas vagas herdaram o mesmo erro da planilha?") passa a incluir exatamente as
+ * vagas JÁ CORRIGIDAS.
+ *
+ * AS DUAS PORTAS DESTE ARQUIVO SÃO AS DUAS QUE ESPALHAM `camposDaTrilha` NUM UPDATE: o PATCH no
+ * ramo REVISAO e a LIBERAÇÃO. A terceira (a edição da vaga já liberada) é medida no spec dela.
+ *
+ * A REGRA MEDIDA AQUI É "MUDOU", E NÃO "GRAVOU": salvar o formulário devolvendo o MESMO valor que a
+ * planilha propôs NÃO limpa nada. Esta tela manda o formulário COMPLETO, então limpar por gravação
+ * zeraria as cinco procedências no primeiro Salvar de qualquer campo.
+ */
+describe("a edição humana limpa a procedência do campo que mudou, e só dele", () => {
+  /** A vaga da fila com os cinco valores da planilha e os cinco carimbos. */
+  const DA_PLANILHA = {
+    natureza: "EFETIVA",
+    linhaServicoId: 1,
+    cargoId: CARGO,
+    dataAbertura: "2026-09-01",
+    dataLimite: "2026-09-30",
+    naturezaOrigem: "PLANILHA",
+    linhaServicoOrigem: "PLANILHA",
+    cargoOrigem: "PLANILHA",
+    dataAberturaOrigem: "PLANILHA",
+    dataLimiteOrigem: "PLANILHA",
+  };
+
+  const setDaVaga = (banco: ReturnType<typeof cenario>["banco"]) =>
+    (escritasEm(banco, "vagas", "update")[0]?.valores ?? {}) as Record<string, unknown>;
+
+  it("PATCH: trocar o CARGO limpa `cargo_origem` e NÃO toca a procedência dos outros", async () => {
+    const { service, banco } = cenario("REVISAO", DA_PLANILHA);
+    await service.atualizar(
+      "vaga-1",
+      { ...FORMULARIO_COMPLETO, cargoId: "99999999-9999-4999-8999-999999999999" } as never,
+      USUARIO.id,
+    );
+
+    const set = setDaVaga(banco);
+    expect(set.cargoOrigem, "o carimbo sobreviveu à troca e passou a mentir").toBeNull();
+    // A LIMPEZA É POR CAMPO: as outras quatro chaves nem existem no `.set()`, e chave omitida no
+    // Drizzle deixa a coluna INTOCADA. Se aparecessem, trocar o cargo apagaria a procedência do
+    // tipo de vaga, da célula e das duas datas de uma vez.
+    for (const outra of [
+      "naturezaOrigem",
+      "linhaServicoOrigem",
+      "dataAberturaOrigem",
+      "dataLimiteOrigem",
+    ]) {
+      expect(set, `a troca do cargo alcançou \`${outra}\``).not.toHaveProperty(outra);
+    }
+  });
+
+  it("PATCH: SALVAR SEM MUDAR não limpa nada (abrir e salvar não é trocar)", async () => {
+    const { service, banco } = cenario("REVISAO", DA_PLANILHA);
+    // O formulário devolve exatamente os cinco valores que já estão gravados.
+    await service.atualizar("vaga-1", { ...FORMULARIO_COMPLETO } as never, USUARIO.id);
+
+    const set = setDaVaga(banco);
+    for (const chave of Object.keys(set)) {
+      expect(chave.endsWith("Origem"), `o salvamento sem mudança limpou \`${chave}\``).toBe(false);
+    }
+  });
+
+  it("PATCH: esvaziar a data limite também limpa o carimbo dela", async () => {
+    const { service, banco } = cenario("REVISAO", DA_PLANILHA);
+    await service.atualizar(
+      "vaga-1",
+      { ...FORMULARIO_COMPLETO, dataLimite: null } as never,
+      USUARIO.id,
+    );
+    // Carimbo sobre campo VAZIO é o mesmo tipo de mentira, e é por isso que a 0146 não tem check de
+    // coerência dentro do campo: o gesto de esvaziar na tela não pode virar violação de restrição.
+    expect(setDaVaga(banco).dataLimiteOrigem).toBeNull();
+  });
+
+  it("LIBERAÇÃO: o formulário de completude que TROCA o tipo de vaga limpa o carimbo dele", async () => {
+    const { service, banco } = cenario("REVISAO", DA_PLANILHA);
+    await service.liberarPendenteRevisao("vaga-1", USUARIO, {
+      ...FORMULARIO_COMPLETO,
+      natureza: "TEMPORARIA",
+    } as never);
+
+    const set = setDaVaga(banco);
+    expect(set.naturezaOrigem).toBeNull();
+    expect(set, "a liberação alcançou a procedência do cargo, que ninguém trocou").not.toHaveProperty(
+      "cargoOrigem",
+    );
+  });
+
+  it("LIBERAÇÃO SEM CORPO (só vincula o cliente) não limpa procedência nenhuma", async () => {
+    // Liberar não é editar: quem não mandou campo não mudou campo nenhum, e `campos` é nulo.
+    const { service, banco } = cenario("REVISAO", { ...DA_PLANILHA, codCliente: CLIENTE });
+    await service.liberarPendenteRevisao("vaga-1", USUARIO, {} as never);
+
+    const set = setDaVaga(banco);
+    for (const chave of Object.keys(set)) {
+      expect(chave.endsWith("Origem"), `a liberação sem corpo limpou \`${chave}\``).toBe(false);
+    }
+  });
+});

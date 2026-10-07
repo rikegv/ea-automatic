@@ -580,3 +580,80 @@ describe("prévia da edição", () => {
     expect(p.camposTravadosPelaAdmissao.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * ─ A EDIÇÃO LIMPA A PROCEDÊNCIA DO CAMPO QUE ELA MUDOU (0146 + 0147) ───────────────────────────
+ *
+ * Esta é a TERCEIRA porta de gravação humana dos cinco campos pré-preenchidos (as outras duas, o
+ * PATCH em revisão e a liberação, são medidas em `vagas.liberar-vaga-completa.spec.ts`). Sem a
+ * limpeza, o carimbo `PLANILHA` sobrevive à correção e passa a afirmar "este veio da planilha" sobre
+ * um valor que alguém escolheu, e a CONTAGEM de vagas que herdaram um erro da planilha passa a
+ * incluir justamente as já corrigidas.
+ *
+ * ESTA PORTA JÁ GRAVA SÓ O QUE MUDOU, então aqui a régua coincide com o próprio `set`, e é por isso
+ * que o segundo caso importa tanto: editar um campo que não é nenhum dos cinco NÃO pode encostar em
+ * procedência nenhuma.
+ */
+describe("editar: a gravação humana limpa a procedência do campo que mudou", () => {
+  const CARIMBOS = {
+    naturezaOrigem: "PLANILHA",
+    linhaServicoOrigem: "PLANILHA",
+    cargoOrigem: "PLANILHA",
+    dataAberturaOrigem: "PLANILHA",
+    dataLimiteOrigem: "PLANILHA",
+  };
+  const CARGO_NOVO = "88888888-8888-8888-8888-888888888888";
+
+  const setDaVaga = (escritas: Escrita[]) =>
+    (doTipo(escritas, getTableName(vagas), "update")[0]?.valores ?? {}) as Record<string, unknown>;
+
+  it("trocar o CARGO limpa `cargo_origem` e não toca a procedência dos outros quatro", async () => {
+    const { service, escritas } = montar({ vaga: CARIMBOS });
+    await editar(service, { cargoId: CARGO_NOVO });
+
+    const set = setDaVaga(escritas);
+    expect(set.cargoId).toBe(CARGO_NOVO);
+    expect(set.cargoOrigem, "o carimbo sobreviveu à troca e passou a mentir").toBeNull();
+    for (const outra of [
+      "naturezaOrigem",
+      "linhaServicoOrigem",
+      "dataAberturaOrigem",
+      "dataLimiteOrigem",
+    ]) {
+      expect(set, `a troca do cargo alcançou \`${outra}\``).not.toHaveProperty(outra);
+    }
+  });
+
+  it("editar um campo QUE NÃO É dos cinco não limpa procedência nenhuma", async () => {
+    const { service, escritas } = montar({ vaga: CARIMBOS });
+    await editar(service, { observacoes: "só isto" });
+
+    const set = setDaVaga(escritas);
+    expect(Object.keys(set).sort()).toEqual(["atualizadoEm", "observacoes"]);
+  });
+
+  it("trocar a DATA LIMITE por outra limpa o carimbo dela", async () => {
+    // ESVAZIAR não é exercitável NESTA porta, e isso é a régua e não uma lacuna: os cinco campos
+    // estão entre os onze obrigatórios, e a vaga já liberada é conferida como vaga publicada, então
+    // `travaObrigatorios` recusa o campo em branco antes de qualquer escrita. O caso do
+    // esvaziamento vive na porta da REVISÃO, onde a régua não roda, e é medido no spec dela.
+    const { service, escritas } = montar({ vaga: CARIMBOS });
+    await editar(service, { dataLimite: "2026-12-15" });
+
+    const set = setDaVaga(escritas);
+    expect(set.dataLimite).toBe("2026-12-15");
+    expect(set.dataLimiteOrigem).toBeNull();
+  });
+
+  it("a procedência NÃO entra na trilha da edição (`ck_vaga_edicoes_campo` a recusaria)", async () => {
+    const { service, escritas } = montar({ vaga: CARIMBOS });
+    await editar(service, { cargoId: CARGO_NOVO });
+
+    // A limpeza é DERIVADA da gravação, não campo de formulário: um nome de coluna de procedência
+    // na trilha derrubaria a transação inteira da edição pelo CHECK do banco.
+    for (const linha of trilha(escritas)) {
+      expect(String(linha.campo).endsWith("Origem")).toBe(false);
+    }
+    expect(trilha(escritas).map((l) => l.campo)).toEqual(["cargoId"]);
+  });
+});

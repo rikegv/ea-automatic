@@ -1,4 +1,4 @@
-"""Leitura SOMENTE LEITURA da planilha viva do Drive, projetada em 4 colunas.
+"""Leitura SOMENTE LEITURA da planilha viva do Drive, projetada por LISTA BRANCA de colunas.
 
 O QUE ESTE MODULO FAZ, e é tudo o que ele faz: exporta a planilha como CSV
 (`GET /drive/v3/files/{id}/export?mimeType=text/csv`), acha as colunas pelo TEXTO do cabeçalho,
@@ -18,8 +18,21 @@ O QUE ELE NAO FAZ, de propósito:
 LISTA BRANCA POR NOME DE CABEÇALHO, NUNCA POR ÍNDICE. A planilha é editada por gente e tem 65
 colunas, entre elas salário, consultor, recrutador e nome de candidato aprovado. Inserir uma coluna
 no meio reordena as 65 posições, e um recorte por índice passaria a devolver salário e nome de
-pessoa sem que nada falhasse. Então o recorte é por texto de cabeçalho e é FAIL-CLOSED: cabeçalho
-esperado ausente, ou repetido, a leitura FALHA e não devolve o que achou.
+pessoa sem que nada falhasse. Então o recorte é por texto de cabeçalho.
+
+A LISTA BRANCA TEM DOIS NÍVEIS, e a diferença entre eles é de disponibilidade, nunca de superfície:
+  * `COLUNAS_EXIGIDAS` é FAIL-CLOSED. Rótulo ausente, ou repetido, a leitura FALHA e não devolve o
+    que achou. São as quatro que o espelho precisa para existir.
+  * `COLUNAS_OPCIONAIS` é FAIL-OPEN NO CAMPO, nunca na leitura. Rótulo ausente (ou repetido, que é
+    tratado como ausente, porque escolher "a primeira" devolveria outra coluna qualquer das 65)
+    devolve `None` naquele campo em toda linha, e `colunas` NÃO declara o campo. MOTIVO MEDIDO: o
+    espelho que esta leitura alimenta (`as_depara_cliente_vaga.status_planilha`) é o GATE da
+    varredura do Pandapé e o FILTRO da fila de revisão. Exigir uma coluna acessória faria uma
+    renomeação na planilha que o time mantém à mão derrubar a leitura inteira, congelar o espelho e
+    APAGAR vaga real da tela. Opcional é o que impede isso.
+
+`None` e `""` NÃO são a mesma coisa, de propósito: `None` é "o cabeçalho não existe", `""` é "a
+célula está vazia". Sem essa distinção, pré-preenchimento que parou de chegar fica silencioso.
 
 §A.6: nenhum conteúdo de célula entra em log, em corpo de exceção ou em `detail` de resposta. O que
 pode aparecer é contagem e RÓTULO de coluna (que é nome de campo, não dado de pessoa).
@@ -66,11 +79,25 @@ TIMEOUT_S: tuple[float, float] = (10.0, 60.0)
 _FILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
 
 # A LISTA BRANCA. Campo devolvido -> rótulo esperado no cabeçalho da planilha.
+#
+# NAO ACRESCENTAR COLUNA AQUI SEM A FRENTE QUE A PEDIU. A cardinalidade destas duas listas é a
+# superfície de auditoria do módulo: as outras 57 colunas da planilha (salário, consultor,
+# recrutador, telefone, nome de candidato aprovado) ficam FORA, e é só por ficarem fora que não
+# atravessam a rede (§A.6).
 COLUNAS_EXIGIDAS: dict[str, str] = {
     "cliente": "Cliente",
     "codigoVaga": "Código da vaga",
     "cargo": "Vaga",
     "status": "Status",
+}
+
+# Opcionais: enriquecem a tela, não sustentam o espelho. Ausência não derruba a leitura (ver a
+# docstring do módulo). Mesma régua de texto normalizado, mesma proibição de índice fixo.
+COLUNAS_OPCIONAIS: dict[str, str] = {
+    "tipoVaga": "Tipo de Vaga",
+    "celulaAtendimento": "Célula de Atendimento",
+    "dataAbertura": "Data de Abertura / Alinhamento",
+    "slaEntrega": "SLA acordado para entrega",
 }
 
 # O cabeçalho costuma ser a primeira linha, mas planilha de gente às vezes tem linha de título
@@ -110,12 +137,24 @@ class LinhaPlanilhaViva(_CamelModel):
     codigo_vaga: str
     cargo: str
     status: str
+    # Opcionais. `None` significa CABEÇALHO AUSENTE na planilha; `""` significa célula vazia.
+    tipo_vaga: str | None = None
+    celula_atendimento: str | None = None
+    data_abertura: str | None = None
+    sla_entrega: str | None = None
 
 
 class LeituraPlanilhaViva(_CamelModel):
     total_linhas: int = Field(description="Linhas de dados no CSV, depois do cabeçalho.")
-    linhas_uteis: int = Field(description="Linhas devolvidas, as que têm algum dos 4 campos.")
-    colunas: dict[str, str] = Field(description="Campo devolvido para rótulo achado no cabeçalho.")
+    linhas_uteis: int = Field(
+        description="Linhas devolvidas, as que têm algum dos 4 campos exigidos."
+    )
+    colunas: dict[str, str] = Field(
+        description=(
+            "Campo devolvido para rótulo achado no cabeçalho. Declara SÓ o que foi achado: campo "
+            "opcional ausente no cabeçalho não aparece aqui."
+        )
+    )
     linhas: list[LinhaPlanilhaViva] = Field(default_factory=list)
 
 
@@ -234,6 +273,26 @@ def indices_das_colunas(cabecalho: list[str]) -> dict[str, int]:
     return achados
 
 
+def indices_opcionais(cabecalho: list[str]) -> dict[str, int]:
+    """Resolve campo para POSIÇÃO das colunas OPCIONAIS. Nunca levanta erro.
+
+    Rótulo ausente é omitido do resultado. Rótulo REPETIDO também é omitido, pelo mesmo motivo do
+    fail-closed das exigidas: com rótulo repetido não há como saber qual coluna é a certa, e
+    escolher "a primeira" poderia devolver outra coluna qualquer das 65. Omitir é a opção segura:
+    o campo sai `None` e `colunas` não o declara, então quem consome vê que a coluna não resolveu.
+    """
+    posicoes: dict[str, list[int]] = {}
+    for i, bruto in enumerate(cabecalho):
+        posicoes.setdefault(_normalizar(bruto), []).append(i)
+
+    achados: dict[str, int] = {}
+    for campo, rotulo in COLUNAS_OPCIONAIS.items():
+        encontrados = posicoes.get(_normalizar(rotulo), [])
+        if len(encontrados) == 1:
+            achados[campo] = encontrados[0]
+    return achados
+
+
 def _achar_cabecalho(linhas: list[list[str]]) -> tuple[int, dict[str, int]]:
     ultimo: ErroPlanilhaViva | None = None
     for i, linha in enumerate(linhas[:MAX_LINHAS_CABECALHO]):
@@ -247,11 +306,12 @@ def _achar_cabecalho(linhas: list[list[str]]) -> tuple[int, dict[str, int]]:
 
 
 def projetar(csv_texto: str) -> LeituraPlanilhaViva:
-    """Recorta as 4 colunas da lista branca e devolve o texto cru delas.
+    """Recorta as colunas da lista branca (exigidas + opcionais achadas) e devolve o texto cru.
 
-    Linha em que os quatro campos estão vazios não é devolvida: é linha sem conteúdo, não é decisão
-    de negócio. Linha curta (a planilha nem sempre preenche até a última coluna) devolve vazio no
-    campo que falta, em vez de estourar.
+    Linha em que os quatro campos EXIGIDOS estão vazios não é devolvida: é linha sem conteúdo, não é
+    decisão de negócio. O opcional não participa desse julgamento, de propósito: coluna acessória não
+    pode passar a ressuscitar linha que hoje é descartada. Linha curta (a planilha nem sempre
+    preenche até a última coluna) devolve vazio no campo que falta, em vez de estourar.
     """
     try:
         todas = list(csv.reader(io.StringIO(csv_texto, newline="")))
@@ -263,10 +323,20 @@ def projetar(csv_texto: str) -> LeituraPlanilhaViva:
 
     pos_cabecalho, indices = _achar_cabecalho(todas)
     cabecalho = todas[pos_cabecalho]
-    rotulos = {campo: cabecalho[i].strip() for campo, i in indices.items()}
+    opcionais = indices_opcionais(cabecalho)
+    # `colunas` declara SÓ o que foi achado: opcional ausente (ou repetido) não aparece aqui.
+    rotulos = {campo: cabecalho[i].strip() for campo, i in [*indices.items(), *opcionais.items()]}
 
     def valor(linha: list[str], campo: str) -> str:
         i = indices[campo]
+        return linha[i].strip() if i < len(linha) else ""
+
+    def opcional(linha: list[str], campo: str) -> str | None:
+        i = opcionais.get(campo)
+        if i is None:
+            # Cabeçalho ausente. `None`, não `""`: a diferença é o que deixa o consumidor saber
+            # que a coluna não existe, em vez de achar que a planilha está vazia naquele campo.
+            return None
         return linha[i].strip() if i < len(linha) else ""
 
     dados = todas[pos_cabecalho + 1 :]
@@ -275,6 +345,9 @@ def projetar(csv_texto: str) -> LeituraPlanilhaViva:
         campos = {campo: valor(linha, campo) for campo in indices}
         if not any(campos.values()):
             continue
+        # MONTAGEM CAMPO A CAMPO, e isto NAO é verbosidade: espalhamento (`**`), `dict(zip(...))`
+        # ou desestruturação com resto levariam as 65 colunas da planilha pela rede passando VERDE
+        # no teste. É o ponto mais importante do arquivo (§A.6). Não "simplificar".
         linhas.append(
             LinhaPlanilhaViva(
                 # 1-based sobre o CSV inteiro, para o backend conseguir apontar a linha ao time.
@@ -283,6 +356,10 @@ def projetar(csv_texto: str) -> LeituraPlanilhaViva:
                 codigo_vaga=campos["codigoVaga"],
                 cargo=campos["cargo"],
                 status=campos["status"],
+                tipo_vaga=opcional(linha, "tipoVaga"),
+                celula_atendimento=opcional(linha, "celulaAtendimento"),
+                data_abertura=opcional(linha, "dataAbertura"),
+                sla_entrega=opcional(linha, "slaEntrega"),
             )
         )
 

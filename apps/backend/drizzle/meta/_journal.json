@@ -1016,6 +1016,27 @@
       "when": 1790646011719,
       "tag": "0144_as_planilha_status_e_vaga_recusa",
       "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1790646012719,
+      "tag": "0145_vaga_natureza_reposicao_temporaria",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1790646013719,
+      "tag": "0146_as_planilha_prepreenchimento",
+      "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1790646014719,
+      "tag": "0147_envio_admissao_retrato_da_procedencia",
+      "breakpoints": true
     }
   ]
 }

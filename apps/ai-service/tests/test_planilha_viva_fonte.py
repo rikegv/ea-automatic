@@ -162,6 +162,54 @@ def test_a_rota_e_o_modulo_nao_logam_conteudo(alvo: pathlib.Path):
             assert proibido not in chamada, f"{alvo.name}: log com {proibido}"
 
 
+# ── A projeção é CAMPO A CAMPO, e a lista branca tem cardinalidade fechada ────────────────────
+
+
+def test_a_projecao_monta_a_linha_campo_a_campo():
+    """§A.6, e é o ponto mais importante do módulo.
+
+    Espalhamento (`**`), `dict(zip(...))` ou desestruturação com resto levariam as 65 colunas da
+    planilha pela rede PASSANDO VERDE em todo teste de comportamento, porque o teste de
+    comportamento só olha as colunas que ele conhece. Então a montagem é asserida na FONTE: o
+    construtor de `LinhaPlanilhaViva` só aceita argumento nomeado, um por campo.
+    """
+    arvore = ast.parse(limpo(RAIZ / "app" / "planilha_viva.py"))
+    construcoes = [
+        no
+        for no in ast.walk(arvore)
+        if isinstance(no, ast.Call)
+        and isinstance(no.func, ast.Name)
+        and no.func.id == "LinhaPlanilhaViva"
+    ]
+    assert construcoes, "a projeção não constrói mais LinhaPlanilhaViva: a guarda ficou cega"
+    for chamada in construcoes:
+        assert chamada.args == [], "argumento posicional na linha projetada"
+        nomes = [kw.arg for kw in chamada.keywords]
+        # `**algo` entra como keyword de `arg` None. É exatamente o que está proibido.
+        assert None not in nomes, "espalhamento (**) na construção da linha projetada"
+        assert len(nomes) == len(set(nomes))
+
+
+def test_a_projecao_nao_usa_zip_nem_dict_de_pares_do_cabecalho():
+    fonte = limpo(RAIZ / "app" / "planilha_viva.py")
+    for proibido in [r"\bzip\s*\(", r"\bdict\s*\(\s*zip", r"model_construct", r"\bvars\s*\("]:
+        assert re.search(proibido, fonte) is None, proibido
+
+
+def test_a_lista_branca_tem_cardinalidade_FECHADA_na_fonte():
+    """Coluna a mais na lista branca é coluna a mais na rede. Crescer exige mexer AQUI também."""
+    from app import planilha_viva as pv
+
+    assert len(pv.COLUNAS_EXIGIDAS) == 4
+    assert len(pv.COLUNAS_OPCIONAIS) == 4
+    # 1 (`linha`) + 4 exigidas + 4 opcionais. Nada entra sem passar por este número.
+    assert len(pv.LinhaPlanilhaViva.model_fields) == 9
+    # Nenhum rótulo sensível conhecido da planilha de 65 colunas entrou por descuido.
+    rotulos = {*pv.COLUNAS_EXIGIDAS.values(), *pv.COLUNAS_OPCIONAIS.values()}
+    for proibido in ["Salário", "Consultor", "Recrutador", "Telefone", "Candidata", "Candidato"]:
+        assert not any(proibido.lower() in r.lower() for r in rotulos), proibido
+
+
 def test_a_rota_exige_o_token_interno_na_fonte():
     fonte = limpo(RAIZ / "app" / "routers" / "planilha_viva.py")
     assert fonte.count("Depends(require_internal_token)") == fonte.count("@router.")

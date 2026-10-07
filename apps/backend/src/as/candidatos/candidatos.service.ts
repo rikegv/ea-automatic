@@ -79,6 +79,10 @@ import {
   type PosicaoLado,
   type SituacaoQueOcupaPosicao,
 } from "../../domain/candidatura";
+import {
+  camposComProcedenciaDaPlanilha,
+  type CampoDoPrePreenchimento,
+} from "../../domain/as-planilha-prepreenchimento";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
 import { acaoDaRetencao } from "../../domain/retencao-evento";
 
@@ -2101,6 +2105,27 @@ export class CandidatosService {
          * └─────────────────────────────────────────────────────────────────────────────────────────────┘
          */
         { exigeCandidaturaViva: true },
+        /*
+         * ┌─ O RETRATO DA PROCEDÊNCIA VAI JUNTO, E É ESTE O CAMINHO QUE FALTAVA (0147) ───────┐
+         * │ 273 DE 394 ENVIOS (69%) SAEM POR AQUI, de vaga ainda em PENDENTE_REVISAO, sem     │
+         * │ nunca passar pelo "Liberar Vaga" (medido pelo `seguranca`). Como a trilha de      │
+         * │ procedência só era escrita na liberação, no caminho DOMINANTE não ficava           │
+         * │ registrado quem agiu sobre valores vindos da planilha.                             │
+         * │                                                                                    │
+         * │ ISTO SÓ ACRESCENTA REGISTRO: nenhum status muda, nenhum papel muda, nenhuma        │
+         * │ liberação dispara, e a régua de quem pode enviar fica como está (§A.47, o gatilho  │
+         * │ da esteira não se mexe).                                                           │
+         * │                                                                                    │
+         * │ O RETRATO VEM DA MESMA LEITURA QUE A PONTE JÁ FEZ, logo acima, e é por isso que    │
+         * │ ele descreve o instante do envio: a partir desta frente a gravação humana LIMPA a  │
+         * │ procedência na vaga, então perguntar depois responderia sobre o estado de HOJE.    │
+         * │                                                                                    │
+         * │ `?? []` NÃO É DEFENSIVO À TOA: `ponte` é tipada como nula, e aqui ela nunca é (o   │
+         * │ CPF acima já teria lançado). O vazio é o valor certo nos dois casos, e é ele que   │
+         * │ mantém o denominador da contagem.                                                  │
+         * └────────────────────────────────────────────────────────────────────────────────────┘
+         */
+        ponte?.procedenciaDaPlanilha ?? [],
       );
 
       /*
@@ -2929,6 +2954,15 @@ export class CandidatosService {
         cargoId: string | null;
         idVacancy: string | null;
         vagaFolha: PreAdmissaoDoFunilInput["vagaFolha"];
+        /**
+         * O RETRATO DA PROCEDÊNCIA (0147): quais campos desta vaga estão, NESTE instante, com o
+         * carimbo `PLANILHA`. NOME DE CAMPO apenas, vocabulário fechado, §A.6.
+         *
+         * ELE SAI DAQUI, e não de uma segunda consulta, porque esta leitura JÁ traz a vaga da
+         * candidatura e é feita no gesto do envio. Uma consulta à parte leria a mesma linha de novo
+         * para responder sobre o mesmo instante, e seria uma segunda chance de divergir.
+         */
+        procedenciaDaPlanilha: CampoDoPrePreenchimento[];
       }
     | null
   > {
@@ -2951,6 +2985,13 @@ export class CandidatosService {
         substituidoNome: vagas.substituidoNome,
         substituidoCpf: vagas.substituidoCpf,
         localTrabalho: vagas.localTrabalho,
+        // AS CINCO PROCEDÊNCIAS (0146), para o retrato do instante do envio. Elas NÃO vão para a
+        // admissão: a ponte copia valor de vaga, e procedência é rastro, não dado de folha.
+        naturezaOrigem: vagas.naturezaOrigem,
+        linhaServicoOrigem: vagas.linhaServicoOrigem,
+        cargoOrigem: vagas.cargoOrigem,
+        dataAberturaOrigem: vagas.dataAberturaOrigem,
+        dataLimiteOrigem: vagas.dataLimiteOrigem,
       })
       .from(asCandidaturas)
       .innerJoin(asCandidatos, eq(asCandidaturas.candidatoId, asCandidatos.id))
@@ -2982,6 +3023,7 @@ export class CandidatosService {
         substituidoCpf: linha.substituidoCpf,
         endereco: linha.localTrabalho,
       },
+      procedenciaDaPlanilha: camposComProcedenciaDaPlanilha(linha),
     };
   }
 
@@ -3035,6 +3077,32 @@ export class CandidatosService {
      * └───────────────────────────────────────────────────────────────────────────────────────────┘
      */
     opcoes: { exigeCandidaturaViva: boolean },
+    /**
+     * ─ O RETRATO DA PROCEDÊNCIA DA VAGA, SÓ NO ENVIO PARA A ADMISSÃO (0147) ────────────────────
+     *
+     * Quais campos daquela vaga estavam com carimbo `PLANILHA` no instante do envio. NOME DE CAMPO
+     * apenas, vocabulário fechado (§A.6: nada de candidato, nada de CPF, nada de valor).
+     *
+     * ┌─ POR QUE PARÂMETRO PRÓPRIO, E NÃO UM CAMPO DENTRO DE `opcoes` ──────────────────────────┐
+     * │ `opcoes` é o conjunto das GUARDAS que o chamador liga ou desliga, e a sua forma literal é │
+     * │ lida por um teste de fonte (`candidatos.fronteira-encerrada.cobertura-independente`) que │
+     * │ existe para provar que `exigeCandidaturaViva` nunca volte a ser opcional, porque foi a    │
+     * │ omissão dele que ressuscitava candidatura morta. Pendurar um dado de TRILHA ali misturaria│
+     * │ duas coisas de naturezas diferentes e quebraria aquela prova por um motivo que não tem    │
+     * │ nada a ver com o que ela afirma.                                                          │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * OPCIONAL, E AQUI O DEFAULT SILENCIOSO É SEGURO, ao contrário do que aconteceu com
+     * `exigeCandidaturaViva` (o bloco acima conta a história): lá a omissão DESLIGAVA uma trava;
+     * aqui ela só deixa a coluna NULA, que é exatamente o significado correto para os outros dois
+     * chamadores. `aprovar` e `finalizarPosicao` NÃO são envio para a admissão, e carimbar o
+     * retrato neles faria a linha do tempo afirmar uma medição que ninguém fez, que é a mesma razão
+     * de `posicao_lado` entrar condicionalmente.
+     *
+     * LISTA VAZIA NÃO É AUSÊNCIA: `[]` quer dizer "envio medido, nenhum campo veio da planilha", e
+     * é ela que dá o denominador da contagem. Ver a prosa da coluna no schema.
+     */
+    procedenciaDaPlanilha?: readonly CampoDoPrePreenchimento[],
   ): Promise<void> {
     /*
      * O CATÁLOGO ANTES DA TRANSAÇÃO. ISTO NÃO MOVE A TRAVA 2 PARA FORA DO LOCK, e a diferença é a
@@ -3326,6 +3394,21 @@ export class CandidatosService {
          */
         ...(posicao ? { posicaoLado: posicao.lado } : {}),
         ...aceiteRegistrado,
+        /*
+         * ─ O RETRATO DA PROCEDÊNCIA, SÓ QUANDO O CHAMADOR MEDIU (0147) ────────────────────────
+         *
+         * MESMA FORMA CONDICIONAL DO LADO E DO ACEITE, e pela mesma razão: chamador que não é o
+         * envio para a admissão não mediu nada, e escrever `{}` nele afirmaria uma medição que não
+         * aconteceu. A chave omitida deixa a coluna NULA, que é o estado "não é envio".
+         *
+         * O VAZIO, ESSE, É GRAVADO: quem mediu e não achou campo nenhum da planilha manda `[]`, e
+         * é esse `[]` que dá o denominador da contagem ("de quantos envios, quantos saíram sobre
+         * vaga pré-preenchida?"). A distinção entre `null` e `[]` é a mesma de `AUSENTE` x
+         * `NAO_CASOU` no domínio do pré-preenchimento.
+         *
+         * §A.6: nomes de campo de vocabulário fechado. Quem agiu já está em `por_id`, da sessão.
+         */
+        ...(procedenciaDaPlanilha ? { procedenciaPlanilha: [...procedenciaDaPlanilha] } : {}),
       });
 
       /*

@@ -13,7 +13,10 @@ from app.main import app
 
 FILE_ID = "1H2scESNQPO-A8k05CcDj2mhLy3uoeEs7CiIKL1_mzHQ"
 
-# Cabeçalho no formato da planilha real: as 4 da lista branca espalhadas entre as sensíveis.
+# Cabeçalho no formato da planilha real: as 4 EXIGIDAS da lista branca espalhadas entre as
+# sensíveis, e as 4 OPCIONAIS no fim. As opcionais ficam no fim de propósito: há testes que recortam
+# o cabeçalho por índice (o do 422, que remove `Status`), e mexer nas 10 primeiras posições os
+# quebraria por motivo que não é o da frente.
 CABECALHO = [
     "Data",
     "Consultor",
@@ -25,6 +28,17 @@ CABECALHO = [
     "Candidato aprovado",
     "Status",
     "Observação",
+    "Tipo de Vaga",
+    "Célula de Atendimento",
+    "Data de Abertura / Alinhamento",
+    "SLA acordado para entrega",
+]
+
+OPCIONAIS = [
+    "Tipo de Vaga",
+    "Célula de Atendimento",
+    "Data de Abertura / Alinhamento",
+    "SLA acordado para entrega",
 ]
 
 LINHAS = [
@@ -39,6 +53,10 @@ LINHAS = [
         "Jose da Silva",
         "Fechada",
         "nada",
+        "Reposição",
+        " Célula Norte",
+        "15/09/2026",
+        "30 dias",
     ],
     [
         "02/10/2026",
@@ -51,10 +69,23 @@ LINHAS = [
         "Maria de Souza",
         "Em andamento",
         "",
+        "Aumento de quadro",
+        "Célula Sul",
+        "01/10/2026",
+        "",
     ],
-    ["", "", "", "", "", "", "", "", "", ""],
-    ["03/10/2026", "Caio", "", "", "SL0012", "", "Dani", "", "", ""],
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+    ["03/10/2026", "Caio", "", "", "SL0012", "", "Dani", "", "", "", "", "", "", ""],
 ]
+
+
+def sem_colunas(rotulos: list[str]) -> tuple[list[str], list[list[str]]]:
+    """Mesmo cabeçalho e mesmas linhas, sem os rótulos pedidos. Recorte por NOME, não por índice."""
+    manter = [i for i, c in enumerate(CABECALHO) if c not in rotulos]
+    return (
+        [CABECALHO[i] for i in manter],
+        [[linha[i] for i in manter] for linha in LINHAS],
+    )
 
 
 def montar_csv(cabecalho: list[str], linhas: list[list[str]], *, bom: bool = True) -> bytes:
@@ -117,7 +148,7 @@ def test_rota_exige_token_interno(client, sessao):
     assert sessao.chamadas == []
 
 
-def test_rota_devolve_so_as_quatro_colunas(client, sessao, auth_headers):
+def test_rota_devolve_so_as_colunas_da_lista_branca(client, sessao, auth_headers):
     r = client.post("/planilha-viva/ler", json={"fileId": FILE_ID}, headers=auth_headers)
     assert r.status_code == 200, r.text
     corpo = r.json()
@@ -129,9 +160,23 @@ def test_rota_devolve_so_as_quatro_colunas(client, sessao, auth_headers):
         "codigoVaga": "Código da vaga",
         "cargo": "Vaga",
         "status": "Status",
+        "tipoVaga": "Tipo de Vaga",
+        "celulaAtendimento": "Célula de Atendimento",
+        "dataAbertura": "Data de Abertura / Alinhamento",
+        "slaEntrega": "SLA acordado para entrega",
     }
     for linha in corpo["linhas"]:
-        assert set(linha) == {"linha", "cliente", "codigoVaga", "cargo", "status"}
+        assert set(linha) == {
+            "linha",
+            "cliente",
+            "codigoVaga",
+            "cargo",
+            "status",
+            "tipoVaga",
+            "celulaAtendimento",
+            "dataAbertura",
+            "slaEntrega",
+        }
 
 
 def test_nenhum_dado_sensivel_atravessa_a_rede(client, sessao, auth_headers):
@@ -255,6 +300,151 @@ def test_cabecalho_ausente_devolve_422_sem_conteudo_de_celula(client, monkeypatc
     assert "Status" in r.json()["detail"]
     for proibido in ["4500,00", "Jose da Silva", "GERDAU"]:
         assert proibido not in r.text
+
+
+# ── As colunas OPCIONAIS ──────────────────────────────────────────────────────────────────────
+
+
+def test_opcionais_presentes_saem_projetadas_com_strip():
+    leitura = pv.projetar(montar_csv(CABECALHO, LINHAS).decode("utf-8-sig"))
+    primeira = leitura.linhas[0]
+    assert primeira.tipo_vaga == "Reposição"
+    # ' Célula Norte' perde o espaço e nada mais: o ai-service não normaliza nem julga.
+    assert primeira.celula_atendimento == "Célula Norte"
+    assert primeira.data_abertura == "15/09/2026"
+    assert primeira.sla_entrega == "30 dias"
+    # Célula VAZIA com cabeçalho presente é "", nunca None: a distinção é o contrato.
+    assert leitura.linhas[1].sla_entrega == ""
+
+
+@pytest.mark.parametrize(
+    ("rotulo", "campo"),
+    [
+        ("Tipo de Vaga", "tipo_vaga"),
+        ("Célula de Atendimento", "celula_atendimento"),
+        ("Data de Abertura / Alinhamento", "data_abertura"),
+        ("SLA acordado para entrega", "sla_entrega"),
+    ],
+)
+def test_opcional_ausente_nao_falha_devolve_none_e_nao_e_declarada(rotulo, campo):
+    """O motivo de serem opcionais: renomear uma destas na planilha NAO pode derrubar a leitura.
+
+    Se derrubasse, o espelho congelaria e vaga real sairia da tela.
+    """
+    cabecalho, linhas = sem_colunas([rotulo])
+    leitura = pv.projetar(montar_csv(cabecalho, linhas).decode("utf-8-sig"))
+    assert leitura.linhas_uteis == 3
+    # `colunas` declara SÓ o que foi achado.
+    alias = next(k for k, v in pv.COLUNAS_OPCIONAIS.items() if v == rotulo)
+    assert alias not in leitura.colunas
+    # E o campo vem None em TODA linha, não "".
+    assert [getattr(item, campo) for item in leitura.linhas] == [None, None, None]
+
+
+def test_todas_as_opcionais_ausentes_a_leitura_segue_inteira():
+    """O caso que protege a fila: planilha sem nenhuma das novas colunas continua lida."""
+    cabecalho, linhas = sem_colunas(OPCIONAIS)
+    leitura = pv.projetar(montar_csv(cabecalho, linhas).decode("utf-8-sig"))
+    assert leitura.linhas_uteis == 3
+    assert set(leitura.colunas) == {"cliente", "codigoVaga", "cargo", "status"}
+    assert leitura.linhas[0].cliente == "GERDAU AÇOS"
+    assert leitura.linhas[0].codigo_vaga == "1587726"
+    assert leitura.linhas[0].status == "Fechada"
+    for item in leitura.linhas:
+        assert item.tipo_vaga is None
+        assert item.celula_atendimento is None
+        assert item.data_abertura is None
+        assert item.sla_entrega is None
+
+
+def test_opcional_repetida_e_tratada_como_ausente_e_nao_falha():
+    """Rótulo repetido não "escolhe a primeira": escolher poderia devolver outra das 65 colunas."""
+    cabecalho = [*CABECALHO, "Tipo de Vaga"]
+    linhas = [[*linha, "LIXO SENSIVEL"] for linha in LINHAS]
+    leitura = pv.projetar(montar_csv(cabecalho, linhas).decode("utf-8-sig"))
+    assert leitura.linhas_uteis == 3
+    assert "tipoVaga" not in leitura.colunas
+    assert all(item.tipo_vaga is None for item in leitura.linhas)
+    assert "LIXO SENSIVEL" not in leitura.model_dump_json()
+    # As demais opcionais seguem resolvendo.
+    assert leitura.colunas["celulaAtendimento"] == "Célula de Atendimento"
+
+
+def test_opcional_nao_decide_qual_linha_e_cabecalho():
+    """A âncora do cabeçalho segue sendo SÓ as exigidas. Linha de título com opcional não ganha."""
+    csv_texto = montar_csv(["Tipo de Vaga", "Célula de Atendimento"], [CABECALHO, *LINHAS]).decode(
+        "utf-8-sig"
+    )
+    leitura = pv.projetar(csv_texto)
+    assert leitura.linhas[0].linha == 3
+    assert leitura.linhas[0].tipo_vaga == "Reposição"
+
+
+def test_opcional_nao_ressuscita_linha_descartada():
+    """Linha com os 4 exigidos vazios continua fora, mesmo com opcional preenchido."""
+    linha = ["", "", "", "", "", "", "", "", "", "", "Reposição", "Célula Norte", "x", "y"]
+    leitura = pv.projetar(montar_csv(CABECALHO, [linha]).decode("utf-8-sig"))
+    assert leitura.linhas_uteis == 0
+
+
+def test_opcional_em_linha_curta_vem_vazia_e_nao_estoura():
+    leitura = pv.projetar(
+        montar_csv(CABECALHO, [["01/10/2026", "Ana", "ACME"]]).decode("utf-8-sig")
+    )
+    # Cabeçalho existe, a linha é que acabou antes: "" e não None.
+    assert leitura.linhas[0].tipo_vaga == ""
+    assert leitura.linhas[0].sla_entrega == ""
+
+
+def test_opcional_tolera_caixa_e_espaco_sobrando():
+    cabecalho = [
+        "  CELULA   DE ATENDIMENTO " if c == "Célula de Atendimento" else c for c in CABECALHO
+    ]
+    leitura = pv.projetar(montar_csv(cabecalho, LINHAS).decode("utf-8-sig"))
+    assert leitura.colunas["celulaAtendimento"] == "CELULA   DE ATENDIMENTO"
+    assert leitura.linhas[0].celula_atendimento == "Célula Norte"
+
+
+@pytest.mark.parametrize(
+    "intrusa", ["Salário na Abertura", "Nome da Pessoa Candidata Aprovada", "Telefone"]
+)
+def test_canario_a6_coluna_fora_das_duas_listas_nao_atravessa(intrusa):
+    """§A.6: o que não está em NENHUMA das duas listas brancas não aparece em campo nenhum."""
+    cabecalho = [*CABECALHO, intrusa]
+    linhas = [[*linha, "VALOR QUE NAO PODE SAIR"] for linha in LINHAS]
+    leitura = pv.projetar(montar_csv(cabecalho, linhas).decode("utf-8-sig"))
+    bruto = leitura.model_dump_json()
+    assert "VALOR QUE NAO PODE SAIR" not in bruto
+    assert intrusa not in bruto
+    assert intrusa not in leitura.colunas.values()
+
+
+def test_as_duas_listas_brancas_tem_exatamente_os_rotulos_acordados():
+    """Cardinalidade é a superfície de auditoria: coluna a mais aqui é coluna a mais na rede."""
+    assert pv.COLUNAS_EXIGIDAS == {
+        "cliente": "Cliente",
+        "codigoVaga": "Código da vaga",
+        "cargo": "Vaga",
+        "status": "Status",
+    }
+    assert pv.COLUNAS_OPCIONAIS == {
+        "tipoVaga": "Tipo de Vaga",
+        "celulaAtendimento": "Célula de Atendimento",
+        "dataAbertura": "Data de Abertura / Alinhamento",
+        "slaEntrega": "SLA acordado para entrega",
+    }
+    assert set(pv.COLUNAS_EXIGIDAS).isdisjoint(pv.COLUNAS_OPCIONAIS)
+    assert set(pv.LinhaPlanilhaViva.model_fields) == {
+        "linha",
+        "cliente",
+        "codigo_vaga",
+        "cargo",
+        "status",
+        "tipo_vaga",
+        "celula_atendimento",
+        "data_abertura",
+        "sla_entrega",
+    }
 
 
 def test_planilha_vazia_falha():

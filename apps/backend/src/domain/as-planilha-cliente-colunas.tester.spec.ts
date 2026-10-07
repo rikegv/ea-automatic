@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CAMPOS_DA_PLANILHA_DE_CLIENTE,
+  CAMPOS_EXIGIDOS_DA_PLANILHA_DE_CLIENTE,
+  CAMPOS_OPCIONAIS_DA_PLANILHA_DE_CLIENTE,
   CABECALHOS_DA_PLANILHA_DE_CLIENTE,
   conferirCabecalhoDaPlanilha,
   lerLinhaProjetadaDoAiService,
@@ -53,19 +55,29 @@ const tudoQueSaiu = (v: unknown) => JSON.stringify(v);
 // 1. A LISTA É FECHADA, E É ELA A SUPERFÍCIE DE AUDITORIA
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 
-describe("a lista branca tem QUATRO campos, e são estes quatro", () => {
-  it("quatro, nem cinco", () => {
+describe("a lista branca tem OITO campos: QUATRO exigidos e QUATRO opcionais", () => {
+  it("quatro exigidos, quatro opcionais, oito permitidos, e são estes", () => {
     /*
-     * DEFEITO QUE PEGA: a quinta coluna entrando "porque é útil" (o consultor responsável é o pedido
+     * DEFEITO QUE PEGA: a coluna a mais entrando "porque é útil" (o consultor responsável é o pedido
      * mais natural do mundo numa tela de revisão). Esta asserção é o ponto em que alguém tem de
      * mudar um número e explicar por quê, o que é exatamente o que a §A.31 pede: propor, não entregar
      * em silêncio.
      *
      * MUTANTE QUE ISTO MATA: acrescentar um campo à lista sem tocar em nada mais.
+     *
+     * AS QUATRO OPCIONAIS ENTRARAM EM 07/10/2026, pelo pré-preenchimento da vaga em revisão, e são
+     * OPCIONAIS no cabeçalho de propósito: a leitura é fail-closed, e o espelho que ela alimenta é o
+     * gate da varredura e o filtro da fila. Exigir coluna acessória faria rótulo renomeado derrubar
+     * a leitura inteira e VAGA REAL parar de aparecer. Ser opcional não as tira da lista branca:
+     * elas estão nela, e o que não está continua não atravessando.
      */
-    expect([...CAMPOS_DA_PLANILHA_DE_CLIENTE].sort()).toEqual(
+    expect([...CAMPOS_EXIGIDOS_DA_PLANILHA_DE_CLIENTE].sort()).toEqual(
       ["cargo", "cliente", "codigo", "status"].sort(),
     );
+    expect([...CAMPOS_OPCIONAIS_DA_PLANILHA_DE_CLIENTE].sort()).toEqual(
+      ["celulaAtendimento", "dataAbertura", "slaEntrega", "tipoVaga"].sort(),
+    );
+    expect(CAMPOS_DA_PLANILHA_DE_CLIENTE).toHaveLength(8);
     expect(Object.keys(CABECALHOS_DA_PLANILHA_DE_CLIENTE).sort()).toEqual(
       [...CAMPOS_DA_PLANILHA_DE_CLIENTE].sort(),
     );
@@ -334,7 +346,7 @@ describe("conferirCabecalhoDaPlanilha: a planilha é editada por gente, e coluna
      *
      * MUTANTE QUE ISTO MATA: `return linhas.map(projetar)` sem conferir o cabeçalho.
      */
-    for (const campo of CAMPOS_DA_PLANILHA_DE_CLIENTE) {
+    for (const campo of CAMPOS_EXIGIDOS_DA_PLANILHA_DE_CLIENTE) {
       const faltando = cabecalhoCompleto().filter(
         (c) => c !== CABECALHOS_DA_PLANILHA_DE_CLIENTE[campo],
       );
@@ -343,6 +355,60 @@ describe("conferirCabecalhoDaPlanilha: a planilha é editada por gente, e coluna
         `a leitura seguiu sem a coluna ${campo}`,
       ).toThrow();
     }
+  });
+
+  it("CABEÇALHO OPCIONAL AUSENTE: a leitura SEGUE, e o campo vira nulo", () => {
+    /*
+     * ┌─ A OUTRA METADE DA RÉGUA, E ELA É REQUISITO, NÃO FROUXIDÃO ───────────────────────────────┐
+     * │ Se um dos quatro OPCIONAIS fosse cobrado, uma renomeação na planilha que o time edita à    │
+     * │ mão derrubaria a leitura INTEIRA. E a leitura alimenta o espelho `status_planilha`, que é o │
+     * │ GATE DE ESCRITA da varredura do Pandapé e o FILTRO da fila de revisão: o espelho congelaria │
+     * │ e VAGA REAL sairia da tela. Pré-preenchimento é enriquecimento, e enriquecimento não pode   │
+     * │ ter poder de derrubar a leitura que sustenta a fila.                                        │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * MUTANTE QUE ISTO MATA: trocar `CAMPOS_EXIGIDOS_...` por `CAMPOS_DA_PLANILHA_...` dentro do
+     * `conferirCabecalhoDaPlanilha`, que é a "arrumação" mais natural do mundo e passaria em todos
+     * os outros testes deste arquivo.
+     */
+    const h = CABECALHOS_DA_PLANILHA_DE_CLIENTE;
+    /* As quatro exigidas, e NENHUMA das opcionais: é o cabeçalho que a planilha tinha ontem. */
+    const soAsExigidas = CAMPOS_EXIGIDOS_DA_PLANILHA_DE_CLIENTE.map((c) => h[c]);
+
+    expect(() => conferirCabecalhoDaPlanilha(soAsExigidas)).not.toThrow();
+
+    const projetada = projetarLinhaDaPlanilha(linhaCrua());
+    for (const campo of CAMPOS_OPCIONAIS_DA_PLANILHA_DE_CLIENTE) {
+      expect(projetada[campo], `o campo opcional ${campo} não virou nulo`).toBeNull();
+    }
+    /* E as quatro exigidas continuam chegando: ausência de opcional não degrada o resto. */
+    expect(projetada).toMatchObject({ codigo: "900001", status: "ABERTA" });
+  });
+
+  it("as quatro colunas OPCIONAIS atravessam quando existem, e só elas", () => {
+    /*
+     * O par do teste acima: provar que "opcional" não quer dizer "ignorado". Sem esta asserção, a
+     * forma mais fácil de ficar verde ali seria nunca ler as quatro, e o pré-preenchimento nasceria
+     * vazio em silêncio, que é o defeito que mais custa descobrir nesta frente.
+     */
+    const h = CABECALHOS_DA_PLANILHA_DE_CLIENTE;
+    const projetada = projetarLinhaDaPlanilha(
+      linhaCrua({
+        [h.tipoVaga]: "Efetiva",
+        [h.celulaAtendimento]: "PONTUAIS",
+        [h.dataAbertura]: "01/02/2026",
+        [h.slaEntrega]: "15/03/2026",
+        "COLUNA QUE O TIME CRIOU DEPOIS": CANARIO,
+      }),
+    );
+
+    expect(projetada).toMatchObject({
+      tipoVaga: "Efetiva",
+      celulaAtendimento: "PONTUAIS",
+      dataAbertura: "01/02/2026",
+      slaEntrega: "15/03/2026",
+    });
+    expect(tudoQueSaiu(projetada)).not.toContain(CANARIO);
   });
 
   it("a FALHA diz qual coluna falta e NÃO carrega conteúdo de linha", () => {

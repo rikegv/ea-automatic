@@ -266,6 +266,11 @@ export const vagaNaturezaEnum = pgEnum("vaga_natureza", [
   // 07/09 (item 6 do mapa do time). Entra no FIM porque `ALTER TYPE ... ADD VALUE` acrescenta e
   // nunca reordena: a ordem aqui é a do BANCO, e a de exibição mora em `VAGA_NATUREZA`.
   "REPOSICAO",
+  // 07/10/2026, pelo MESMO motivo de ordem: a planilha "Geral 2026" escreve "Reposição Temporária"
+  // (2 ocorrências medidas) e o diretor decidiu criar o par em vez de achatar no `REPOSICAO`. O
+  // `ALTER TYPE` vive SOZINHO na migration 0145: o Postgres recusa USAR na mesma transação um valor
+  // acrescentado nela, e o drizzle roda o arquivo em transação.
+  "REPOSICAO_TEMPORARIA",
 ]);
 
 /**

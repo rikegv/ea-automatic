@@ -144,8 +144,18 @@ describe("o catálogo de linhas de serviço é uma tabela, no molde das etapas",
    * `linha_de_servico_id` e a construção escreveu `linha_servico_id`. O requisito é "a vaga aponta
    * para a linha", e não a preposição no meio do identificador.
    */
+  /**
+   * O PADRÃO TERMINA EM `id`, E A PRECISÃO PASSOU A SER NECESSÁRIA EM 07/10/2026.
+   *
+   * O pré-preenchimento da vaga em revisão acrescentou `vagas.linha_servico_origem` (a procedência
+   * do campo: veio da planilha ou foi digitado), e `/linha.*servico/i` passou a casar DUAS colunas,
+   * derrubando a descoberta. A ancoragem em `id` mantém o espírito do bloco acima (a coluna é
+   * descoberta por PADRÃO, não pelo nome que eu teria escolhido: `linha_de_servico_id` continuaria
+   * casando) e volta a identificar exatamente a que o requisito nomeia, o APONTAMENTO da vaga para
+   * a linha. O que se afirma segue o mesmo: nulável, e numérica.
+   */
   it("a vaga guarda a linha de serviço, e a coluna aceita nulo", () => {
-    const c = colunaDaVagaPorPadrao(/linha.*servico/i);
+    const c = colunaDaVagaPorPadrao(/linha.*servico.*id$/i);
     expect(c.notNull).toBe(false);
     expect(c.dataType).toBe("number");
   });

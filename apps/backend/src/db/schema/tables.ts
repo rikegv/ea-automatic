@@ -2951,6 +2951,47 @@ export const vagas = pgTable(
      * revisão. §A.6: é código de vaga, não dado de pessoa.
      */
     idVacancyPandape: varchar("id_vacancy_pandape", { length: 40 }),
+    /**
+     * ─ A PROCEDÊNCIA DE CADA CAMPO PRÉ-PREENCHIDO PELA PLANILHA (migration 0146, 07/10/2026) ────
+     *
+     * ┌─ O QUE AS CINCO COLUNAS RESPONDEM, E É UMA PERGUNTA SÓ ──────────────────────────────────┐
+     * │ "Este valor foi DIGITADO por alguém ou foi COPIADO da planilha viva do time?" Valor único  │
+     * │ `PLANILHA` (`PROCEDENCIA_DA_PLANILHA`), vocabulário FECHADO por CHECK, nulo quando aquele  │
+     * │ campo não veio da planilha. É o mesmo molde do `cliente_proposto_estado`, e pelo mesmo     │
+     * │ motivo: no dia em que uma linha da planilha estiver errada, o que importa é QUANTAS vagas  │
+     * │ herdaram o mesmo erro, e isso é uma CONTAGEM, não a leitura de um texto de observação.     │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ UMA COLUNA POR CAMPO, E CINCO CHECKS SEPARADOS: A ABSTENÇÃO É POR CAMPO ────────────────┐
+     * │ O mesmo código de vaga aparece em várias linhas da planilha (código reusado no passado), e │
+     * │ ela se contradiz: 37 códigos dão dois tipos de vaga, 29 duas células, 49 dois cargos.     │
+     * │ Quando um campo é ambíguo, AQUELE campo se abstém e os outros seguem valendo. Um CHECK de  │
+     * │ coerência entre as cinco (o molde do `ck_vagas_cliente_proposto_coerente`) faria a         │
+     * │ procedência de um campo EXIGIR a do outro, e a vaga que recebeu só a célula ficaria        │
+     * │ inválida por não ter recebido o tipo.                                                     │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ QUEM ESCREVE: UM ESCRITOR SÓ, e ele não alcança nada que mova a vaga ───────────────────┐
+     * │ `as/ingestao-pandape/ingestao-depara-cliente.service.ts`, no mesmo `update` condicional da │
+     * │ proposta de cliente, e NUNCA de `atualizado_em` (relógio do expurgo de quem está dentro da │
+     * │ vaga), `status`, `status_manual_em` ou `encerrada_em`. O valor só é escrito onde a coluna  │
+     * │ está NULA, com o `is null` na própria instrução: o que uma pessoa preencheu não é           │
+     * │ reescrito (medido: 9 vagas já têm natureza, 7 linha de serviço, 94 cargo). PRÉ-PREENCHER   │
+     * │ NÃO É LIBERAR: a vaga continua em REVISÃO, e quem libera é gente, por rota própria.        │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * LIMITAÇÃO CONHECIDA, REGISTRADA PARA NÃO SER DESCOBERTA COMO BUG: ao contrário das colunas da
+     * proposta de cliente, os VALORES pré-preenchidos (`natureza`, `linha_servico_id`, `cargo_id` e
+     * as duas datas) ESTÃO em `camposDaTrilha`, porque são campos do formulário. Uma pessoa que
+     * mude o valor na tela NÃO limpa a procedência, então o carimbo pode ficar DEFASADO ("veio da
+     * planilha" sobre um valor que alguém corrigiu depois). Limpar o carimbo na edição humana é
+     * frente própria, do coordenador. A procedência é informativa; ela não governa nada.
+     */
+    naturezaOrigem: varchar("natureza_origem", { length: 20 }),
+    linhaServicoOrigem: varchar("linha_servico_origem", { length: 20 }),
+    cargoOrigem: varchar("cargo_origem", { length: 20 }),
+    dataAberturaOrigem: varchar("data_abertura_origem", { length: 20 }),
+    dataLimiteOrigem: varchar("data_limite_origem", { length: 20 }),
     /** Nulável no rascunho; obrigatória para publicar, pela régua do domínio. */
     natureza: vagaNaturezaEnum("natureza"),
     /** Nasce VAZIO: a coluna não existe na base e preencher seria adivinhar. */
@@ -3532,6 +3573,37 @@ export const vagas = pgTable(
       "ck_vagas_cliente_proposto_coerente",
       sql`(${t.clientePropostoNome} is null and ${t.clienteProposto} is null and ${t.clientePropostoOrigem} is null and ${t.clientePropostoEstado} is null)
           or (${t.clientePropostoNome} is not null and ${t.clientePropostoOrigem} is not null and ${t.clientePropostoEstado} is not null)`,
+    ),
+    /**
+     * A PROCEDÊNCIA DOS CINCO CAMPOS PRÉ-PREENCHIDOS (0146). CINCO CHECKS, UM POR CAMPO.
+     *
+     * ELES NÃO SE ENCOSTAM, E NÃO ENCOSTAM NO `ck_vagas_cliente_proposto_coerente`: a abstenção do
+     * pré-preenchimento é POR CAMPO (ver a prosa das colunas), então um check que amarrasse dois
+     * campos faria a procedência de um exigir a do outro, e a vaga que recebeu só a célula da
+     * planilha ficaria inválida por não ter recebido o tipo.
+     *
+     * O VOCABULÁRIO É FECHADO E TEM UM VALOR SÓ, hoje. O check existe exatamente para o segundo
+     * valor ("veio do ATS", "veio da carga") ter de passar por aqui, onde alguém o escreve e explica.
+     */
+    ckNaturezaOrigem: check(
+      "ck_vagas_natureza_origem",
+      sql`${t.naturezaOrigem} is null or ${t.naturezaOrigem} in ('PLANILHA')`,
+    ),
+    ckLinhaServicoOrigem: check(
+      "ck_vagas_linha_servico_origem",
+      sql`${t.linhaServicoOrigem} is null or ${t.linhaServicoOrigem} in ('PLANILHA')`,
+    ),
+    ckCargoOrigem: check(
+      "ck_vagas_cargo_origem",
+      sql`${t.cargoOrigem} is null or ${t.cargoOrigem} in ('PLANILHA')`,
+    ),
+    ckDataAberturaOrigem: check(
+      "ck_vagas_data_abertura_origem",
+      sql`${t.dataAberturaOrigem} is null or ${t.dataAberturaOrigem} in ('PLANILHA')`,
+    ),
+    ckDataLimiteOrigem: check(
+      "ck_vagas_data_limite_origem",
+      sql`${t.dataLimiteOrigem} is null or ${t.dataLimiteOrigem} in ('PLANILHA')`,
     ),
     // O BANCO ACEITA ZERO, e é a diferença que importa entre os dois checks: zero banco é o estado
     // normal da maioria das vagas, não uma linha defeituosa.
@@ -4808,6 +4880,52 @@ export const asCandidaturaEtapas = pgTable(
      */
     aceiteNumero: integer("aceite_numero"),
     /**
+     * ─ O RETRATO DA PROCEDÊNCIA DA VAGA NO INSTANTE DO ENVIO PARA A ADMISSÃO (0147) ────────────
+     *
+     * QUAIS CAMPOS DAQUELA VAGA ESTAVAM com procedência `PLANILHA` quando alguém enviou a pessoa
+     * para a esteira. Vocabulário FECHADO (`CAMPOS_DO_PRE_PREENCHIMENTO`: `natureza`,
+     * `linhaServico`, `cargo`, `dataAbertura`, `dataLimite`), e NOME DE CAMPO apenas.
+     *
+     * ┌─ POR QUE ELA EXISTE: 69% DOS ENVIOS NÃO PASSAM PELA LIBERAÇÃO ───────────────────────────┐
+     * │ Medido pelo `seguranca`: 273 de 394 envios para a admissão saem de vaga ainda em          │
+     * │ PENDENTE_REVISAO, pela PONTE do funil (`registrarSaida`), sem nunca passar pelo "Liberar   │
+     * │ Vaga". Como a trilha de procedência só era escrita na liberação, no caminho DOMINANTE não  │
+     * │ ficava registrado quem agiu sobre valores vindos da planilha.                               │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ POR QUE AQUI, E NÃO EM TABELA NOVA NEM EM `as_vaga_status_eventos` ─────────────────────┐
+     * │ É O ARGUMENTO JÁ ESCRITO PARA `aceite`/`aceite_numero`, duas colunas acima: o EVENTO já é │
+     * │ gravado nesta tabela, na MESMA transação da mudança de situação, e já carrega QUEM        │
+     * │ (`por_id`, da sessão), QUANDO (`ocorrido_em`) e O QUE (`situacao`). O que faltava era o    │
+     * │ QUALIFICADOR da decisão, não o registro dela. Tabela separada admitiria o estado           │
+     * │ impossível de existir o retrato sem o envio (ou o inverso).                                │
+     * │                                                                                            │
+     * │ `as_vaga_status_eventos` ESTÁ FORA pela razão que ela mesma documenta duas vezes: ela      │
+     * │ modela `de -> para` de STATUS, e enviar para a admissão NÃO move o status da vaga. A linha │
+     * │ teria de ser inventada como "X para X", e `vaga-status.service.remover` CONTA eventos por  │
+     * │ `de`/`para` para escolher entre APAGAR e INATIVAR um status do catálogo: o registro        │
+     * │ inventado passaria a mentir naquela decisão também.                                        │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ O VAZIO É GRAVADO, E É ELE QUE DÁ O DENOMINADOR ────────────────────────────────────────┐
+     * │ NULA  = este evento não é um envio para a admissão (ou é anterior a esta frente).         │
+     * │ `{}`  = envio MEDIDO, e nenhum campo daquela vaga veio da planilha.                        │
+     * │ `{..}`= envio MEDIDO, e estes campos vieram.                                               │
+     * │ Deixar de gravar o vazio achataria "não medimos" com "medimos e deu zero", e a contagem    │
+     * │ ("quantos envios saíram sobre vaga pré-preenchida, de quantos?") perderia o denominador.   │
+     * │ É a mesma distinção que `AUSENTE` x `NAO_CASOU` faz no domínio do pré-preenchimento.        │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ELE É GRAVADO, E NÃO DERIVADO DEPOIS, porque a partir da 0147 a gravação humana LIMPA a
+     * procedência na vaga: perguntar à vaga meses depois responde sobre HOJE, nunca sobre o
+     * instante do envio.
+     *
+     * §A.6: cinco rótulos de vocabulário fechado. Nenhum nome de candidato, nenhum CPF, nenhum
+     * valor de campo, nenhum texto de célula da planilha. Quem agiu sai do `por_id`, que é usuário
+     * INTERNO, exatamente o mesmo recorte do `aceite`.
+     */
+    procedenciaPlanilha: text("procedencia_planilha").array(),
+    /**
      * ─ O MARCADOR ESTRUTURAL DA SAÍDA POR CANCELAMENTO DE VAGA (reabertura) ────────────────────
      *
      * QUAL MOVIMENTO DA VAGA CAUSOU ESTA SAÍDA. Preenchida SÓ quando o cancelamento da vaga
@@ -5435,6 +5553,48 @@ export const asDeparaClienteVaga = pgTable(
      * CRU seria desnecessário e abriria a porta para variação; o token canônico é o que a régua usa.
      */
     statusPlanilha: varchar("status_planilha", { length: 20 }),
+    /**
+     * ─ O PRÉ-PREENCHIMENTO DA VAGA, AGREGADO POR CÓDIGO (migration 0146, 07/10/2026) ──────────
+     *
+     * ┌─ O QUE AS CINCO COLUNAS GUARDAM, E POR QUE AQUI ─────────────────────────────────────────┐
+     * │ Os valores que a planilha viva diz sobre AQUELE CÓDIGO DE VAGA, já resolvidos contra os   │
+     * │ catálogos do EA: a natureza (coluna "Tipo de Vaga"), a linha de serviço (coluna "Célula   │
+     * │ de Atendimento"), o cargo (coluna "Vaga") e as duas datas. Elas moram aqui pelo mesmo     │
+     * │ motivo de `status_planilha`: esta tabela é o ESPELHO por CÓDIGO, e a varredura da vaga    │
+     * │ (que roda de 30 em 30 minutos, por vaga) não pode reler 3.532 linhas de planilha a cada   │
+     * │ volta. A sincronização materializa; a ingestão copia.                                     │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ NULO É ABSTENÇÃO, SEMPRE, E ELA É POR CAMPO ────────────────────────────────────────────┐
+     * │ Medido na planilha real: 37 códigos dão DOIS tipos de vaga, 29 duas células, 49 dois      │
+     * │ cargos, porque a operação reaproveitava código de vaga. Campo contraditório se abstém, e  │
+     * │ os OUTROS campos do mesmo código seguem valendo. Escolher "a primeira linha" é PROIBIDO:  │
+     * │ é a ordem da consulta, e decisão que depende dela muda sozinha quando alguém edita a       │
+     * │ planilha (o sintoma medido está escrito em `domain/as-depara-cliente-nome.ts`).           │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ SEM FK, E O MOTIVO É O MESMO DE `cod_cliente` NESTA TABELA (bloqueio 5 da auditoria) ───┐
+     * │ `cargo_id_planilha` e `linha_servico_id_planilha` apontam para catálogos que podem perder │
+     * │ a linha. Com FK, um cargo renomeado/apagado derrubaria o insert da sincronização volta    │
+     * │ após volta, e uma frente de PREENCHIMENTO viraria perda de ESPELHO. O fail-closed aqui é  │
+     * │ o mesmo: o valor que não resolve não é gravado, e o que não resolve mais simplesmente não  │
+     * │ chega à vaga (a FK de `vagas.cargo_id` é a fechadura final).                               │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `natureza_planilha` É VARCHAR, NÃO O ENUM `vaga_natureza`, e isso é deliberado: o espelho
+     * guarda o TOKEN já decidido pelo domínio puro, e o enum mora em `vagas.natureza`, que é onde
+     * ele vale. Além disso o valor `REPOSICAO_TEMPORARIA` nasceu na migration 0145, e o Postgres
+     * recusa USAR na mesma transação um valor acrescentado nela: o varchar deixa a 0146 inofensiva.
+     *
+     * §A.6: NENHUMA das cinco é dado pessoal, e nenhuma guarda TEXTO LIVRE da planilha. O cargo
+     * entra como UUID do catálogo do EA, nunca como a célula digitada: é a mesma minimização que
+     * fez `status_planilha` guardar o token canônico em vez do texto cru.
+     */
+    naturezaPlanilha: varchar("natureza_planilha", { length: 40 }),
+    linhaServicoIdPlanilha: integer("linha_servico_id_planilha"),
+    cargoIdPlanilha: uuid("cargo_id_planilha"),
+    dataAberturaPlanilha: date("data_abertura_planilha"),
+    dataLimitePlanilha: date("data_limite_planilha"),
     /**
      * ┌─ PROPOSTA NÃO CONFIRMADA NÃO RESOLVE NADA, e por isso a confirmação tem AUTOR E DATA ─────┐
      * │ Um booleano responderia "foi confirmado?" e não responderia "por quem", que é a única      │

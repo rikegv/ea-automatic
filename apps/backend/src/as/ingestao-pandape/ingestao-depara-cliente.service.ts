@@ -8,16 +8,66 @@ import {
   normalizarCodigoDeVaga,
   type LinhaDoDeParaDeCliente,
 } from "../../domain/as-depara-cliente-vaga";
+import {
+  PROCEDENCIA_DA_PLANILHA,
+  temAlgoAPrePreencher,
+  type ValoresDoPrePreenchimento,
+} from "../../domain/as-planilha-prepreenchimento";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import type { PortaPropostaDeClienteDaVaga, ResumoDoCiclo } from "./ingestao-portas";
+
+/** Uma linha do espelho, com a tradução de cliente e o pré-preenchimento daquele código. */
+interface LinhaLidaDoEspelho {
+  linha: LinhaDoDeParaDeCliente;
+  codigoNoCatalogo: string | null;
+  prePreenchimento: ValoresDoPrePreenchimento;
+}
+
+/**
+ * A `date` DO DRIVER EM `AAAA-MM-DD`.
+ *
+ * O driver devolve `date` como string ou como `Date` dependendo da configuração, e os dois chegam
+ * aqui. `date` NÃO TEM HORA, então `toISOString` não desloca nada e não há fuso a considerar: o
+ * valor é o literal da planilha, que é o que o diretor decidiu gravar, inclusive vencido.
+ */
+function emIso(valor: string | Date | null | undefined): string | null {
+  if (valor === null || valor === undefined) return null;
+  if (valor instanceof Date) return valor.toISOString().slice(0, 10);
+  const texto = String(valor).trim();
+  return texto === "" ? null : texto.slice(0, 10);
+}
 
 /**
  * ─ O ÚNICO ESCRITOR DA PROPOSTA DE CLIENTE DA VAGA, E ELE NÃO ALCANÇA `cod_cliente` ────────────
  *
- * ┌─ O QUE ESTE ARQUIVO ESCREVE, EM LISTA FECHADA ───────────────────────────────────────────────┐
- * │ `vagas.cliente_proposto`, `vagas.cliente_proposto_nome`, `vagas.cliente_proposto_origem` e    │
- * │ `vagas.cliente_proposto_estado`. MAIS NADA. Nem `cod_cliente`, nem `cargo_id`, nem `status`,   │
- * │ nem `atualizado_em`.                                                                           │
+ * ┌─ O QUE ESTE ARQUIVO ESCREVE, EM LISTA FECHADA (atualizada em 07/10/2026) ────────────────────┐
+ * │ 1. A PROPOSTA DE CLIENTE: `vagas.cliente_proposto`, `cliente_proposto_nome`,                  │
+ * │    `cliente_proposto_origem` e `cliente_proposto_estado`.                                     │
+ * │ 2. O PRÉ-PREENCHIMENTO DA VAGA EM REVISÃO: `natureza`, `linha_servico_id`, `cargo_id`,        │
+ * │    `data_abertura`, `data_limite` e as cinco procedências correspondentes                     │
+ * │    (`natureza_origem`, `linha_servico_origem`, `cargo_origem`, `data_abertura_origem`,        │
+ * │    `data_limite_origem`).                                                                     │
+ * │                                                                                               │
+ * │ MAIS NADA. Em particular NÃO: `cod_cliente`, `status`, `status_manual_em`, `encerrada_em`,     │
+ * │ `recusada_em` e `atualizado_em`.                                                               │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ PRÉ-PREENCHER NÃO É LIBERAR, E ESTA É A LINHA QUE NÃO SE CRUZA ────────────────────────────┐
+ * │ A vaga continua em REVISÃO. Este arquivo não toca `status`, não toca `status_manual_em`, não  │
+ * │ chama nada que mova PAPEL e não conhece `liberarPendenteRevisao`. Ele preenche campo que uma  │
+ * │ pessoa teria de digitar, e quem libera continua sendo gente, por rota própria, com autor,     │
+ * │ data e trilha. Encher os obrigatórios NÃO avança a vaga: a derivação de status lê o FUNIL      │
+ * │ (presença de candidato) e o carimbo manual, nunca a completude do formulário.                 │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O PRÉ-PREENCHIMENTO SÓ ESCREVE ONDE A COLUNA ESTÁ NULA, E A TRAVA MORA NA INSTRUÇÃO ───────┐
+ * │ Medido: 9 vagas já têm natureza, 7 já têm linha de serviço e 94 já têm cargo. O que uma       │
+ * │ PESSOA preencheu não é reescrito, e a garantia é `coalesce(coluna, valor)` no `set` mais o     │
+ * │ `coluna is null` no `where`, as duas EM SQL. Um `if` em TypeScript dependeria de uma leitura   │
+ * │ anterior, e entre a leitura e a escrita cabe o salvamento de outra pessoa; além disso um `if`  │
+ * │ se perde numa refatoração (é o argumento da §A.33 sobre o fallback removido) e a instrução     │
+ * │ não. A PROCEDÊNCIA é carimbada no MESMO `case`, então ela só aparece no campo que de fato      │
+ * │ veio da planilha, nunca no que a pessoa já havia digitado.                                     │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ `atualizado_em` FICA DE FORA, E ISSO NÃO É DETALHE: É O RELÓGIO DO EXPURGO ─────────────────┐
@@ -63,6 +113,28 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
      * apaga: devolver `null` aqui faz a volta seguir sem tocar na proposta que já está gravada.
      */
     if (linhas === null) return;
+
+    /*
+     * ─ O PRÉ-PREENCHIMENTO VEM ANTES, E É INDEPENDENTE DA PROPOSTA DE CLIENTE ────────────────────
+     *
+     * ┌─ POR QUE ELE NÃO ENTRA NO `update` DA PROPOSTA, e isso é CORREÇÃO, não preferência ──────┐
+     * │ Duas razões, as duas medidas no próprio desenho:                                          │
+     * │                                                                                           │
+     * │ 1. O `update` DA PROPOSTA É CONDICIONAL AO CLIENTE TER MUDADO (`is distinct from` nas três │
+     * │    colunas), e em regime estável ele NÃO RODA. Pendurar o pré-preenchimento nele faria o   │
+     * │    pré-preenchimento nunca acontecer em nenhuma vaga cuja proposta já estivesse gravada,   │
+     * │    que são todas elas a partir da segunda volta. A frente nasceria inerte.                 │
+     * │                                                                                           │
+     * │ 2. A PROPOSTA DE CLIENTE TEM CAMINHOS DE SAÍDA PRÓPRIOS (`NENHUMA` por ambiguidade de      │
+     * │    cliente, por não casar, por falta de chave), e todos eles RETORNAM antes da escrita. A  │
+     * │    ambiguidade do NOME DO CLIENTE não pode esconder a célula de atendimento do mesmo       │
+     * │    código: a abstenção desta frente é POR CAMPO, e acoplar as duas escritas a transformaria │
+     * │    em abstenção por linha, que é exatamente o que a régua proíbe.                           │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * É UMA INSTRUÇÃO SÓ, CONDICIONAL, e ela não roda quando não há o que preencher.
+     */
+    await this.prePreencher(vagaId, this.prePreenchimentoDaChave(linhas, chaves));
 
     /*
      * O CATÁLOGO VEM DA PRÓPRIA CONSULTA (`left join clientes`), e não de uma segunda ida ao banco:
@@ -123,10 +195,7 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
    * diferença é o que separa "a planilha não tem esta vaga" (que limpa a proposta) de "o banco não
    * respondeu" (que não toca em nada).
    */
-  private async lerDePara(procurar: readonly string[]): Promise<
-    | { linha: LinhaDoDeParaDeCliente; codigoNoCatalogo: string | null }[]
-    | null
-  > {
+  private async lerDePara(procurar: readonly string[]): Promise<LinhaLidaDoEspelho[] | null> {
     const lista = sql.join(
       procurar.map((c) => sql`${c}`),
       sql`, `,
@@ -137,6 +206,11 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
                d.nome_cliente,
                d.cod_cliente,
                (d.confirmado_em is not null) as confirmado,
+               d.natureza_planilha,
+               d.linha_servico_id_planilha,
+               d.cargo_id_planilha,
+               d.data_abertura_planilha,
+               d.data_limite_planilha,
                c.cod_cliente as codigo_no_catalogo
           from as_depara_cliente_vaga d
           left join clientes c on c.cod_cliente = d.cod_cliente
@@ -148,6 +222,11 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
         nome_cliente: string | null;
         cod_cliente: string | null;
         confirmado: boolean;
+        natureza_planilha: string | null;
+        linha_servico_id_planilha: number | string | null;
+        cargo_id_planilha: string | null;
+        data_abertura_planilha: string | Date | null;
+        data_limite_planilha: string | Date | null;
         codigo_no_catalogo: string | null;
       }[];
       return linhas.map((l) => ({
@@ -158,6 +237,16 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
           confirmado: l.confirmado === true,
         },
         codigoNoCatalogo: l.codigo_no_catalogo,
+        prePreenchimento: {
+          natureza: (l.natureza_planilha ?? null) as ValoresDoPrePreenchimento["natureza"],
+          linhaServicoId:
+            l.linha_servico_id_planilha === null || l.linha_servico_id_planilha === undefined
+              ? null
+              : Number(l.linha_servico_id_planilha),
+          cargoId: l.cargo_id_planilha ?? null,
+          dataAbertura: emIso(l.data_abertura_planilha),
+          dataLimite: emIso(l.data_limite_planilha),
+        },
       }));
     } catch {
       /*
@@ -194,6 +283,96 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
       `);
     } catch {
       /* Ver `lerDePara`: dado de planilha não derruba a ingestão da vaga, e não se loga payload. */
+    }
+  }
+
+  /**
+   * O PRÉ-PREENCHIMENTO DA CHAVE QUE VALE, com a MESMA precedência da proposta de cliente.
+   *
+   * `IdVacancy` GANHA DA `reference`, e não é arbitrário: a `reference` casa por CADEIA DE
+   * REABERTURA, que é inferência mais fraca. A régua precisa ser a MESMA da proposta de cliente,
+   * senão a vaga receberia o cliente de um código e o cargo de outro, e a linha ficaria montada de
+   * pedaços de duas vagas diferentes.
+   *
+   * NÃO SE EMPRESTA CAMPO DE UMA CHAVE PARA A OUTRA. Quando a chave que venceu tem o campo nulo, o
+   * campo fica nulo, mesmo que a outra chave tenha valor: completar com a chave mais fraca seria
+   * escolher por conveniência, e a abstenção é o comportamento seguro.
+   */
+  private prePreenchimentoDaChave(
+    linhas: readonly LinhaLidaDoEspelho[],
+    chaves: { idVacancy: number; reference: string | null },
+  ): ValoresDoPrePreenchimento | null {
+    const chaveId = normalizarCodigoDeVaga(chaves.idVacancy);
+    const chaveRef = normalizarCodigoDeVaga(chaves.reference);
+    const achar = (chave: string | null) =>
+      chave === null ? undefined : linhas.find((l) => l.linha.codigo === chave);
+    const escolhida = achar(chaveId) ?? achar(chaveRef);
+    return escolhida?.prePreenchimento ?? null;
+  }
+
+  /**
+   * O PRÉ-PREENCHIMENTO GRAVADO NA VAGA: UMA instrução, condicional, e SÓ onde a coluna está NULA.
+   *
+   * ┌─ AS DUAS TRAVAS, E AS DUAS VIVEM NA INSTRUÇÃO, NUNCA EM `if` DE TYPESCRIPT ───────────────┐
+   * │ 1. `coalesce(coluna, valor)` no `set`: a coluna preenchida recebe ela mesma, então o que uma │
+   * │    PESSOA digitou nunca é reescrito (9 vagas já têm natureza, 7 linha de serviço, 94 cargo). │
+   * │ 2. O `where` exige que ALGUMA das cinco esteja nula E tenha valor a oferecer: em regime      │
+   * │    estável, a volta de 30 em 30 minutos sobre 470 vagas manda ZERO escrita.                   │
+   * │                                                                                              │
+   * │ A PROCEDÊNCIA É CARIMBADA NO MESMO `case` DA CONDIÇÃO, então ela marca exatamente o campo que │
+   * │ ACABOU de ser preenchido pela planilha, e preserva o carimbo anterior nos outros. Carimbar    │
+   * │ fora dessa condição faria a procedência afirmar "veio da planilha" sobre um valor digitado.    │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NÃO TOCA `atualizado_em`, e isso é a mesma trava do `gravar` (ver o cabeçalho do arquivo): o
+   * carimbo é o relógio do expurgo de quem está DENTRO da vaga, e empurrá-lo 48 vezes por dia
+   * renovaria a retenção de todo mundo sem nada ficar vermelho (§A.6).
+   *
+   * NÃO TOCA `status` NEM NADA QUE MOVA PAPEL: pré-preencher não é liberar.
+   */
+  private async prePreencher(
+    vagaId: string,
+    valores: ValoresDoPrePreenchimento | null,
+  ): Promise<void> {
+    if (valores === null || !temAlgoAPrePreencher(valores)) return;
+    const procedencia = PROCEDENCIA_DA_PLANILHA;
+    try {
+      await this.db.execute(sql`
+        update vagas
+           set natureza = coalesce(natureza, ${valores.natureza}::vaga_natureza),
+               natureza_origem = case
+                 when natureza is null and ${valores.natureza}::vaga_natureza is not null
+                 then ${procedencia} else natureza_origem end,
+               linha_servico_id = coalesce(linha_servico_id, ${valores.linhaServicoId}::int),
+               linha_servico_origem = case
+                 when linha_servico_id is null and ${valores.linhaServicoId}::int is not null
+                 then ${procedencia} else linha_servico_origem end,
+               cargo_id = coalesce(cargo_id, ${valores.cargoId}::uuid),
+               cargo_origem = case
+                 when cargo_id is null and ${valores.cargoId}::uuid is not null
+                 then ${procedencia} else cargo_origem end,
+               data_abertura = coalesce(data_abertura, ${valores.dataAbertura}::date),
+               data_abertura_origem = case
+                 when data_abertura is null and ${valores.dataAbertura}::date is not null
+                 then ${procedencia} else data_abertura_origem end,
+               data_limite = coalesce(data_limite, ${valores.dataLimite}::date),
+               data_limite_origem = case
+                 when data_limite is null and ${valores.dataLimite}::date is not null
+                 then ${procedencia} else data_limite_origem end
+         where id = ${vagaId}::uuid
+           and ((natureza is null and ${valores.natureza}::vaga_natureza is not null)
+             or (linha_servico_id is null and ${valores.linhaServicoId}::int is not null)
+             or (cargo_id is null and ${valores.cargoId}::uuid is not null)
+             or (data_abertura is null and ${valores.dataAbertura}::date is not null)
+             or (data_limite is null and ${valores.dataLimite}::date is not null))
+      `);
+    } catch {
+      /*
+       * Ver `lerDePara`: dado de planilha NÃO derruba a ingestão da vaga, e não se loga payload. O
+       * caso concreto aqui é a FK de `cargo_id` recusando um cargo que o catálogo perdeu entre a
+       * sincronização e esta volta: a vaga continua entrando, sem cargo, e a volta seguinte tenta
+       * de novo. Fail-closed é NULO, nunca perda de ingestão.
+       */
     }
   }
 
