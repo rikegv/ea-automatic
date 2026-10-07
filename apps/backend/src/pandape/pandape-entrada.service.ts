@@ -148,7 +148,7 @@ export class PandapeEntradaService {
           tentativas: sql`${pandapeEntrada.tentativas} + 1`,
           ultimaTentativaEm: agora,
           resolvidoEm: encerra
-            ? sql`coalesce(${pandapeEntrada.resolvidoEm}, ${agora})`
+            ? sql`coalesce(${pandapeEntrada.resolvidoEm}, now())`
             : pandapeEntrada.resolvidoEm,
           atualizadoEm: agora,
         },
