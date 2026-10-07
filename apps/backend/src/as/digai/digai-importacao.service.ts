@@ -5,7 +5,9 @@ import { lerLinhaDePara } from "../../domain/as-etapa-externa";
 import {
   ETAPAS_DIGAI,
   chaveDoRegistroDigai,
+  classificarDedupDigai,
   desembrulharRespostaDigai,
+  emailParaDesempateDigai,
   erroDoRegistro,
   espelhoDaVagaDigai,
   etapaDoResultadoDigai,
@@ -398,11 +400,18 @@ export class DigaiImportacaoService {
     });
   }
 
-  /** Devolve o id da pessoa, ou `null` quando a ingestao NAO PODE DECIDIR (conflito para revisao). */
+  /**
+   * ─ RESOLVER A PESSOA: CLASSIFICA PELA REGUA PURA, DEPOIS APLICA OS EFEITOS ─────────────────────
+   *
+   * Devolve o id da pessoa, ou `null` quando a ingestao NAO PODE DECIDIR (conflito para revisao).
+   *
+   * A DECISAO E `classificarDedupDigai` (`domain/digai.ts`), PURA E SEM EFEITO. Este metodo so a
+   * alimenta com o resultado das consultas e depois escreve o que o desfecho manda. A mesma funcao
+   * e consumida pelo harness de medicao (dry-run somente-leitura), e e ela que garante que o que a
+   * medicao conta e EXATAMENTE o que a ingestao faria. A ordem dos degraus (identidade, CPF, e-mail,
+   * ficha nova) e a razao de cada ramo vivem la, junto da decisao; aqui ficam so os EFEITOS.
+   */
   private async resolverPessoa(registro: ResultadoDigai): Promise<string | null> {
-    const porIdentidade = await this.repo.candidatoPorIdentidade(registro.userId);
-    const porDocumento =
-      registro.cpf === null ? null : await this.repo.candidatoPorDocumento(registro.cpf);
     const dados = {
       nome: registro.name ?? "",
       cpf: registro.cpf,
@@ -410,50 +419,164 @@ export class DigaiImportacaoService {
       telefone: registro.phoneNumber,
     };
 
-    if (porIdentidade !== null) {
-      if (porDocumento !== null && porDocumento.id !== porIdentidade.id) {
+    const porIdentidade = await this.repo.candidatoPorIdentidade(registro.userId);
+    const porDocumento =
+      registro.cpf === null ? null : await this.repo.candidatoPorDocumento(registro.cpf);
+
+    /*
+     * ─ O E-MAIL E CONSULTADO SO QUANDO A IDENTIDADE NAO RESOLVEU, E ISSO E A LAZINESS DOS DEGRAUS ─
+     *
+     * O degrau de cima SEMPRE vence o de baixo: quando a identidade externa ja decidiu, o e-mail
+     * NEM E PERGUNTADO (o teste "o e-mail nem e consultado" trava isso). A guarda `porIdentidade
+     * === null` e o que preserva esse comportamento depois de a decisao virar funcao pura.
+     *
+     * A REGUA DO E-MAIL E APLICADA AQUI (`emailParaDesempateDigai`), e nao no banco: quem decide
+     * "este endereco serve?" e o DOMINIO, e nao a sorte de a consulta nao achar nada. O CPF do
+     * registro VAI JUNTO, e o parametro e OBRIGATORIO: a guarda do CPF divergente (emenda E-4) e
+     * avaliada no banco, onde o documento da outra pessoa nao precisa ser trazido para a memoria da
+     * aplicacao, e parametro opcional faria o chamador que o esquecesse APAGAR a guarda sem erro.
+     */
+    let porEmail: Awaited<ReturnType<DigaiRepositorio["candidatoPorEmail"]>> = null;
+    if (porIdentidade === null) {
+      const correio = emailParaDesempateDigai(registro.email);
+      porEmail =
+        correio === null ? null : await this.repo.candidatoPorEmail(correio, registro.cpf);
+    }
+
+    const desfecho = classificarDedupDigai({ porIdentidade, porDocumento, porEmail });
+
+    switch (desfecho.tipo) {
+      case "COLISAO_IDENTIDADE_DOCUMENTO":
+      case "COLISAO_CPF_EMAIL":
         /*
-         * A IDENTIDADE APONTA PARA UMA PESSOA E O DOCUMENTO PARA OUTRA. A ingestao NAO ESCOLHE e
-         * NAO FUNDE: fusao de fichas e irreversivel, e o que se junta por engano nao se separa
-         * depois porque ninguem sabe mais qual candidatura era de quem. Vira linha de revisao.
+         * DUAS CHAVES APONTAM PARA DUAS PESSOAS DIFERENTES E IDENTIFICADAS. A ingestao NAO ESCOLHE e
+         * NAO FUNDE: fusao de fichas e irreversivel, e o que se junta por engano nao se separa mais
+         * porque ninguem sabe qual candidatura era de quem. Vira linha de revisao, ancorada na ponta
+         * da chave mais forte (a identidade, ou o CPF). §A.6: so o `userId` viaja no conflito.
+         * MEDIDO em 02/10/2026: 121 colisoes CPF-contra-e-mail reais entre os 3.723 em que as duas
+         * chaves casam. Nao e hipotese.
          */
-        await this.repo.registrarConflito(porIdentidade.id, registro.userId);
+        await this.repo.registrarConflito(desfecho.ancora, registro.userId);
         return null;
-      }
-      /*
-       * A ATUALIZACAO E CHAMADA SEMPRE, INCLUSIVE SEM NOME, E ISSO E A RESSALVA D2 (29/09).
-       *
-       * Ela nao existe so para gravar: e ela que carrega a GUARDA DE ANONIMIZACAO, e o `if` de
-       * antes ("so chama quando ha nome") fazia a guarda nao rodar justamente no caso do registro
-       * pobre. O fluxo seguia e pendurava candidatura VIVA numa ficha expurgada, o que protege a
-       * pessoa do expurgo por tempo indefinido, desfazendo o apagamento pelo lado.
-       *
-       * Nome vazio nao apaga nome: o repositorio trata o vazio como "nada a dizer" (`nullif`), e a
-       * escrita continua condicional, entao a reentrega identica segue sem empurrar o relogio.
-       * Ficha anonimizada faz o repositorio LANCAR, e a candidatura nao chega a ser criada.
-       */
-      await this.repo.atualizarCandidato(porIdentidade.id, dados);
-      return porIdentidade.id;
-    }
 
-    if (porDocumento !== null) {
-      // O DOCUMENTO E O DESEMPATE SECUNDARIO: a identidade nova e ANEXADA a quem ja existe, em vez
-      // de partir a mesma pessoa em duas fichas, cada uma com o seu historico e o seu relogio.
-      // SEMPRE, pelo mesmo motivo do ramo acima: a chamada e tambem a guarda de anonimizacao.
-      await this.repo.atualizarCandidato(porDocumento.id, dados);
-      await this.repo.anexarIdentidade(porDocumento.id, registro.userId, new Date());
-      return porDocumento.id;
-    }
+      case "CASOU_IDENTIDADE":
+        /*
+         * A ATUALIZACAO E CHAMADA SEMPRE, INCLUSIVE SEM NOME (ressalva D2, 29/09): ela carrega a
+         * GUARDA DE ANONIMIZACAO, e pular a chamada quando o nome e vazio pendurava candidatura VIVA
+         * numa ficha expurgada, desfazendo o expurgo pelo lado. Nome vazio nao apaga nome (o
+         * repositorio trata o vazio com `nullif`), e a reentrega identica nao empurra o relogio.
+         */
+        await this.repo.atualizarCandidato(desfecho.pessoaId, dados);
+        return desfecho.pessoaId;
 
-    if (dados.nome.trim() === "") {
-      // Sem nome nao ha pessoa a acompanhar (o schema diz que ele e o unico obrigatorio), e inventar
-      // um rotulo encheria a base de linhas que ninguem reconhece.
-      this.logger.warn(erroDoRegistro(registro, "registro sem identificacao minima"));
-      return null;
+      case "CASOU_CPF":
+        /*
+         * O CPF E O DESEMPATE PRIMARIO: a identidade nova e ANEXADA a quem ja existe, em vez de
+         * partir a mesma pessoa em duas fichas. `atualizarCandidato` tambem aqui pelo motivo do ramo
+         * de identidade: a chamada e tambem a guarda de anonimizacao.
+         */
+        await this.repo.atualizarCandidato(desfecho.pessoaId, dados);
+        await this.repo.anexarIdentidade(desfecho.pessoaId, registro.userId, new Date());
+        return desfecho.pessoaId;
+
+      case "CASOU_CPF_COM_EMAIL_AMBIGUO":
+        /*
+         * ─ O CPF RESOLVEU, MAS O E-MAIL CASOU DUAS FICHAS: O CPF DECIDE, E O ENDERECO NAO SE PROPAGA ─
+         *
+         * O CPF e unico no banco, logo casar por ele e EXATO, e a ambiguidade do e-mail e RUIDO, nao
+         * evidencia de que sejam duas pessoas (por isso aqui NAO se abstem; a abstencao prenderia o
+         * registro em todo ciclo por duas linhas que nem sao dele).
+         *
+         * O ENDERECO NAO E PROPAGADO POR ESTE CAMINHO (`email: null`), e isso e cavalete da auditoria
+         * (veto V-3): sabe-se que aquele endereco JA esta em duas fichas, e grava-lo numa terceira
+         * (via `coalesce(email, novo)`) pioraria a ambiguidade que acabou de ser detectada. O resto
+         * dos dados segue, porque quem casou foi o CPF. A ambiguidade vira conflito ancorado na ficha
+         * do CPF (`candidato_id` e NOT NULL, e so aqui ha ficha legitima para ancorar).
+         *
+         * §A.6: so o `userId`. A palavra e "a chave forte" e nao "o documento" porque a varredura de
+         * PII procura a pista "documento" por substring, e a frase em prosa a reprovaria mesmo sem
+         * logar documento nenhum (mesmo precedente do `job.name` em `digai-fila.service.ts`).
+         */
+        this.logger.warn(
+          `Ingestao do Digai: mais de um cadastro carrega o contato do usuario ${registro.userId}. ` +
+            `A chave forte resolveu a pessoa, o contato NAO e propagado por este caminho, e o caso ` +
+            `fica registrado para revisao humana.`,
+        );
+        await this.repo.registrarConflito(desfecho.pessoaId, registro.userId);
+        await this.repo.atualizarCandidato(desfecho.pessoaId, { ...dados, email: null });
+        await this.repo.anexarIdentidade(desfecho.pessoaId, registro.userId, new Date());
+        return desfecho.pessoaId;
+
+      case "CASOU_EMAIL_LIMPO":
+        /*
+         * ─ O DEGRAU 3: O E-MAIL DESEMPATOU, E ELE SO ANEXA A IDENTIDADE. NAO ESCREVE DADO ──────────
+         *
+         * Sem este degrau, 82% da populacao do Digai (ja na plataforma, e em 84% dos casos sem CPF)
+         * ganharia uma SEGUNDA ficha. Com ele, a ficha que ja existe e reusada.
+         *
+         * POR QUE AQUI NAO SE CHAMA `atualizarCandidato` (veto da auditoria, V-2): `atualizarCandidato`
+         * grava `cpf = coalesce(cpf, novo)` e o nome. No degrau 2 isso e legitimo (quem casou foi o
+         * CPF, unico e exato); AQUI quem casou foi a chave MAIS FRACA, e escrever identidade de
+         * terceiro por decisao dela envenena `uq_as_candidatos_cpf` em cascata: o CPF do registro
+         * viraria dado da ficha de OUTRA pessoa, a ficha verdadeira daquele CPF nunca mais nasceria
+         * (23505 capturado, registro pulado em silencio), e `candidatoPorDocumento` passaria a mentir.
+         *
+         * ┌─ A DECISAO 5b (diretor, 07/10/2026) E O QUE O CODIGO DE FATO FAZ: NAO SAO A MESMA COISA ─┐
+         * │ A decisao: o e-mail LIMPO PODE preencher o CPF vazio (caminho seguro, uma ficha), e o     │
+         * │ AMBIGUO nunca. A premissa de como isso aconteceria (MAPA-VERDE E-4): "no ciclo seguinte a │
+         * │ identidade anexada faz o registro casar pelo DEGRAU 1, e `cpf = coalesce(cpf, novo)`      │
+         * │ preenche o nulo". ESSA PREMISSA ESTA ERRADA, e foi MEDIDA em teste (07/10): o registro    │
+         * │ de `userId` ja conhecido e IGNORADO em `chavesConhecidas`/`planoDaImportacao` ANTES de    │
+         * │ `gravar`, entao o degrau 1 (e o `coalesce` dele) NAO roda no ciclo seguinte. O teste      │
+         * │ existente `digai-dedup-ordem-das-chaves` ja afirma "identidade conhecida: o registro e    │
+         * │ IGNORADO". Logo, HOJE, o e-mail LIMPO anexa a identidade e o CPF vazio da ficha           │
+         * │ permanece vazio: a ingestao do Digai NAO o preenche em ciclo nenhum (o degrau 1 so e      │
+         * │ alcancado na CORRIDA entre as duas leituras, nao na reentrega normal).                    │
+         * │                                                                                            │
+         * │ DECISAO DO DIRETOR (07/10/2026): NAO PREENCHE, por decisao de SEGURANCA. O CPF vazio      │
+         * │ PERMANECE vazio, o e-mail NUNCA escreve CPF de ninguem, e o veto V-2 FICA de pe.           │
+         * │ Fundamento: e-mail nao e identidade confiavel (6 e-mails ja medidos com 12 CPFs) e        │
+         * │ escrever CPF a partir de e-mail e irreversivel. Os 117 casos (so o e-mail casa, sem CPF   │
+         * │ na base) ficam com CPF vazio e entram pelo acesso por e-mail do Portal quando precisarem.  │
+         * │ O COMPORTAMENTO DE HOJE E O DECIDIDO: nada muda, a auditoria anterior segue valida, e      │
+         * │ esta linha existe para a proxima sessao NAO reabrir por achar que foi descuido.            │
+         * └─────────────────────────────────────────────────────────────────────────────────────────┘
+         *
+         * O e-mail AMBIGUO continua NUNCA preenchendo, e isso o codigo faz certo: ele nem anexa
+         * identidade (ver `EMAIL_AMBIGUO_SEM_ANCORA`), entao nao casa por identidade em ciclo nenhum.
+         * A guarda de anonimizacao nao fica descoberta: `anexarIdentidade` tem o
+         * `where exists (... anonimizado_em is null)` atomico, e `candidatoPorEmail` ja recusa ficha
+         * anonimizada.
+         */
+        await this.repo.anexarIdentidade(desfecho.pessoaId, registro.userId, new Date());
+        return desfecho.pessoaId;
+
+      case "EMAIL_AMBIGUO_SEM_ANCORA":
+        /*
+         * O e-mail casou DUAS fichas e nenhuma chave forte resolveu. A ingestao NAO ESCOLHE e NAO
+         * FUNDE, e tambem NAO registra conflito: `as_ingestao_conflitos.candidato_id` e NOT NULL, e
+         * carimbar a linha com uma das fichas ambiguas seria a escolha arbitraria que a guarda
+         * recusa. Fica o aviso, com o `userId` e mais nada (§A.6). Decisao mantida pelo coordenador.
+         */
+        this.logger.warn(
+          `Ingestao do Digai: mais de um cadastro carrega o contato do usuario ${registro.userId}, ` +
+            `e nenhuma chave forte resolveu. A ingestao NAO escolhe e NAO funde: fica para revisao.`,
+        );
+        return null;
+
+      case "NOVA":
+        if (dados.nome.trim() === "") {
+          // Sem nome nao ha pessoa a acompanhar (o schema diz que ele e o unico obrigatorio), e
+          // inventar um rotulo encheria a base de linhas que ninguem reconhece.
+          this.logger.warn(erroDoRegistro(registro, "registro sem identificacao minima"));
+          return null;
+        }
+        {
+          const nova = await this.repo.criarCandidato(dados);
+          await this.repo.anexarIdentidade(nova.id, registro.userId, new Date());
+          return nova.id;
+        }
     }
-    const nova = await this.repo.criarCandidato(dados);
-    await this.repo.anexarIdentidade(nova.id, registro.userId, new Date());
-    return nova.id;
   }
 
   /*

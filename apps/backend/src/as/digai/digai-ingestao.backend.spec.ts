@@ -55,6 +55,8 @@ function repositorioFingido() {
     deParaEtapa: vi.fn(async () => ({ etapaCodigo: "CAPTACAO", situacao: null, ativo: true })),
     candidatoPorIdentidade: vi.fn(async () => null),
     candidatoPorDocumento: vi.fn(async () => null),
+    // O DEGRAU 3 DO DEDUP (e-mail): o duble nao casa ninguem, que e o que estes casos pressupoem.
+    candidatoPorEmail: vi.fn(async () => null),
     criarCandidato: vi.fn(async () => {
       escritas.push("criarCandidato");
       return { id: "11111111-1111-4111-8111-111111111111" };

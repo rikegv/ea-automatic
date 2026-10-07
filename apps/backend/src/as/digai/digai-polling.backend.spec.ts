@@ -461,9 +461,23 @@ describe("a paginacao e de verdade: nao se presume que uma pagina basta", () => 
   });
 
   it("O CORTE REGISTRA: parar pelo teto NAO pode ser indistinguivel de 'acabou'", async () => {
-    // 2 lidos de 500 declarados, na pagina do teto: ha MUITO mais, e a passada para aqui.
+    /*
+     * O TOTAL FOI DE 500 PARA 5.000 EM 01/10/2026, e a mudanca e de CENARIO e nao de intencao.
+     *
+     * O acumulado era calculado como `pagina x itens_desta_pagina`, e com 2 itens na pagina 20 isso
+     * dava 40: menor que 500, entao a passada "ainda tinha o que ler" e batia no teto. Com a conta
+     * certa (as paginas anteriores sao CHEIAS, so a atual e parcial), 19 x 100 + 2 = 1.902, que e
+     * MAIOR que 500: a leitura ja teria acabado na pagina 5, e nao haveria corte nenhum a avisar.
+     *
+     * Ou seja, o cenario antigo so era alcancavel POR CAUSA DO DEFEITO. Com 5.000 declarados, as 20
+     * paginas do teto realmente nao bastam, o corte e REAL, e o teste volta a medir o que ele sempre
+     * quis medir: que bater no teto anti-laco nunca pode ser indistinguivel de "acabou".
+     */
     const { importacao } = importacaoComClienteDublado(() =>
-      paginaDeCandidatosComTotal([candidatoFingido("usr-1", true), candidatoFingido("usr-2", true)], 500),
+      paginaDeCandidatosComTotal(
+        [candidatoFingido("usr-1", true), candidatoFingido("usr-2", true)],
+        5_000,
+      ),
     );
     vi.spyOn(importacao, "importar").mockResolvedValue({
       escritos: 0,
@@ -494,6 +508,92 @@ describe("a paginacao e de verdade: nao se presume que uma pagina basta", () => 
     expect(avisos.join("\n"), "o motivo precisa estar no texto para nao virar adivinhacao.").toContain(
       "anti-laco",
     );
+  });
+
+  /**
+   * ─ O ALARME FALSO DE CORTADO, E ESTE BLOCO E A TRAVA DELE (02/10/2026) ───────────────────────
+   *
+   * O acumulado era `pagina x itens_desta_pagina`, e a ultima pagina e justamente a PARCIAL: a
+   * triagem de 615 tem 7 paginas (6 de 100 mais 15), e o produto dava 7 x 15 = 105. O log anunciava
+   * "105 de 615 lidos, CORTADO" para uma triagem lida POR INTEIRO.
+   *
+   * MEDIDO NOS LOGS: 75 linhas de CORTADO, 34 screenings, e em TODAS elas
+   * `acumulados == pagina x (total mod 100)` com `pagina == ceil(total / 100)`. Ou seja a pagina do
+   * fornecedor E 100 e ninguem se perdeu. O alarme falso quase virou dano: ele gerou o diagnostico
+   * de "pagina observada de 15" (que e so `total mod 100`) e um pedido de recalcular a cota contra
+   * esse numero, o que pediria 41 paginas onde 7 bastam.
+   *
+   * ESTES TESTES SAO A TRAVA: o caso completo NAO pode imprimir CORTADO, e o numero do acumulado
+   * tem de ser o do fim dos dados. Voltar a formula antiga quebra os dois.
+   */
+  it("A TRIAGEM GRANDE E LIDA INTEIRA, e o caso completo NAO imprime CORTADO", async () => {
+    // O caso real `311374f4`: total 615, cota de 7 paginas, e esta e a 7a (a parcial, com 15).
+    const quinze = Array.from({ length: 15 }, (_, i) => candidatoFingido(`usr-${i}`, true));
+    const { importacao } = importacaoComClienteDublado(() =>
+      paginaDeCandidatosComTotal(quinze, 615, 7),
+    );
+    vi.spyOn(importacao, "importar").mockResolvedValue({
+      escritos: 0,
+      adiados: 0,
+      ignorados: 0,
+      naoFinalizaram: 0,
+    });
+    const varredura = new DigaiVarreduraService(importacao, repositorioDeCursorFingido());
+    const avisos: string[] = [];
+    const aviso = vi.spyOn(Logger.prototype, "warn").mockImplementation((m: unknown) => {
+      avisos.push(String(m));
+    });
+    const log = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+
+    const r = await varredura.executarPaginaDeScreening("sc-615", 7, 7);
+    aviso.mockRestore();
+    log.mockRestore();
+
+    expect(
+      r.proximaPagina,
+      "6 x 100 + 15 = 615, que e o total: acabou, e pedir a 8a pagina gastaria requisicao por nada.",
+    ).toBeNull();
+    expect(
+      avisos.join("\n"),
+      "ESTA E A TRAVA DO ALARME FALSO: 34 screenings apareceram como CORTADOS num ciclo so, todos " +
+        "lidos por inteiro, e o alarme quase fez a fabrica recalcular a cota contra um numero que " +
+        "era `total mod 100`. Caminho feliz NAO grita.",
+    ).not.toContain("CORTADO");
+  });
+
+  it("A COTA COBRE a triagem grande, e a conta da necessidade e a que cobre", () => {
+    expect(
+      necessidadeDePaginasDigai(615),
+      "`ceil(615 x 1,1 / 100)` = 7, e 7 paginas de 100 cobrem 615 com folga de 85.",
+    ).toBe(7);
+    expect(
+      7 * DIGAI_TAMANHO_DA_PAGINA,
+      "a cota so cobre porque a pagina e de 100: calcular a necessidade contra `total mod 100` " +
+        "pediria 41 paginas para o mesmo screening, e o orcamento do ciclo nao tem isso para dar.",
+    ).toBeGreaterThanOrEqual(615);
+
+    const fim = proximaPaginaDigai({
+      total: 615,
+      lidosAcumulados: 6 * DIGAI_TAMANHO_DA_PAGINA + 15,
+      itensNaPagina: 15,
+      paginaAtual: 7,
+      paginasPermitidas: 7,
+    });
+    expect(fim.motivo, "a conta certa fecha em COMPLETA.").toBe("COMPLETA");
+    expect(fim.cortada).toBe(false);
+
+    const comAFormulaAntiga = proximaPaginaDigai({
+      total: 615,
+      lidosAcumulados: 7 * 15,
+      itensNaPagina: 15,
+      paginaAtual: 7,
+      paginasPermitidas: 7,
+    });
+    expect(
+      comAFormulaAntiga.cortada,
+      "O DEFEITO FICA DOCUMENTADO AQUI: `pagina x itens` dava 105 de 615 e a MESMA leitura saia " +
+        "como corte. Quem reintroduzir o produto reintroduz este alarme.",
+    ).toBe(true);
   });
 
   it("O CORTE POR ORCAMENTO tambem registra, e diz que foi o orcamento", async () => {

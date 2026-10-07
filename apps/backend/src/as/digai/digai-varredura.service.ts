@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
+  DIGAI_TAMANHO_DA_PAGINA,
   DIGAI_TETO_PAGINAS_POR_SCREENING,
   DIGAI_TETO_REQ_POR_CICLO,
   STATUS_DE_SCREENING_QUE_ENTRA,
@@ -333,10 +334,44 @@ export class DigaiVarreduraService {
     }
 
     const lidos = registros.length;
-    // O acumulado assume pagina cheia ate aqui, que e o que o fornecedor faz: `pagina x lidos`.
-    // Errar para MAIS pararia cedo e perderia gente, entao o produto usa o tamanho DESTA pagina,
-    // que e o maior que se pode afirmar sem medir o tamanho de pagina do fornecedor.
-    const acumulados = pagina * lidos;
+    /*
+     * ─ O ACUMULADO: AS PAGINAS ANTERIORES SAO CHEIAS, ESTA E A QUE PODE SER PARCIAL ─────────────
+     *
+     * ERA `pagina * lidos`, e ISSO MENTIA NA ULTIMA PAGINA, por muito. A conta multiplicava TODAS
+     * as paginas pelo tamanho DESTA, e a ultima e justamente a parcial: a triagem de 615 tem 7
+     * paginas (6 cheias mais 15), e o produto dava 7 x 15 = 105. O log entao anunciava
+     * "105 de 615 lidos" para uma triagem LIDA POR INTEIRO.
+     *
+     * ┌─ A PROVA, E ELA E ARITMETICA E NAO ARGUMENTO (medida em 02/10/2026 nos logs do ciclo) ────┐
+     * │ 75 linhas de CORTADO distintas, 34 screenings. Em TODAS as 75, sem excecao:               │
+     * │   `acumulados == pagina x (total mod 100)`  e  `pagina == ceil(total / 100)`.             │
+     * │ As duas igualdades juntas dizem a mesma coisa duas vezes: a pagina do fornecedor E 100, o │
+     * │ numero no log era o PRODUTO DEFEITUOSO, e os 34 screenings foram lidos POR INTEIRO.       │
+     * │ ZERO perda, e zero corte pelo teto anti-laco. Amostra:                                     │
+     * │   615 em 7 paginas -> log dizia 105   | 433 em 5 -> 165 | 264 em 3 -> 192                 │
+     * │   207 em 3 -> 21                      | 101 em 2 -> 2   | 901 em 10 -> 10                 │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * O ESTRAGO ERA DE CONFIANCA, E QUASE VIROU DANO: o alarme falso levou a um diagnostico de
+     * "pagina observada de 15" (que e so `total mod 100`) e a um pedido de recalcular a cota contra
+     * esse numero. Aquilo pediria 41 paginas onde 7 bastam, estouraria a janela de requisicoes e
+     * CORTARIA A LISTAGEM por falta de orcamento, fabricando a perda que o alarme anunciava. Log que
+     * mente nessa direcao e pior que log nenhum: ele faz quem le agir CONTRA o proprio sistema.
+     *
+     * A CONTA CERTA usa o tamanho de pagina do fornecedor para as anteriores e o tamanho REAL desta
+     * para a atual. E seguro afirmar o tamanho: medido ao vivo, a rota devolve 100 por pagina mesmo
+     * sem `limit`, e `limit` acima de 100 e recusado com 400 pelo proprio fornecedor.
+     *
+     * ┌─ O LIMITE DESTA CONTA, DECLARADO: ELA SUPOE AS ANTERIORES CHEIAS ─────────────────────────┐
+     * │ Se o fornecedor passar a paginar MENOR que 100, esta conta erra PARA CIMA e a decisao sai  │
+     * │ `COMPLETA` antes do fim, que e perda em silencio. A conta antiga errava para baixo (gritava │
+     * │ sem perder). A correcao DEFINITIVA e nao supor nada: carregar o acumulado REAL de pagina   │
+     * │ para pagina no payload do job (`JobDaPaginaDigai`), que e a unica forma de a folha saber o │
+     * │ que as anteriores leram de verdade. Isso toca `digai.queue.ts` e `digai-fila.service.ts`,  │
+     * │ FORA do recorte desta OST, e esta PROPOSTO ao coordenador em vez de feito aqui (§A.31).    │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const acumulados = (pagina - 1) * DIGAI_TAMANHO_DA_PAGINA + lidos;
     const decisao = proximaPaginaDigai({
       total,
       lidosAcumulados: acumulados,
@@ -366,7 +401,37 @@ export class DigaiVarreduraService {
      * modo de falha do `SEM_TOTAL` que saia como termino normal, voltando pela porta do TEXTO em
      * vez da do valor de retorno.
      */
-    if (decisao.cortada) {
+    /*
+     * SO AVISA QUANDO SOBROU GENTE DE VERDADE, e esta condicao e a metade que faltava do conserto
+     * acima. `decisao.cortada` fica verdadeiro sempre que a passada atinge a cota, INCLUSIVE quando
+     * a cota foi calculada certo e a ultima pagina coincidiu com o fim dos dados, que e o caso
+     * NORMAL e nao o excepcional: a cota vem de `ceil(total x 1,1 / 100)`, entao ela PARA no fim.
+     *
+     * Sem este `acumulados < total`, o caminho feliz grita. Em 01/10/2026 foram 34 gritos numa volta
+     * so, todos falsos, e o custo nao foi o log: foi a decisao errada que eles quase provocaram.
+     */
+    const sobrouGente = total === null || acumulados < total;
+    /*
+     * O TETO ANTI-LACO AVISA SEMPRE, e o ORCAMENTO so quando sobrou gente. Os dois sao `cortada`,
+     * e tratar os dois igual foi o que gerou os 34 alarmes falsos de 01/10/2026.
+     *
+     * `CORTE_ORCAMENTO` e o caso NORMAL: a cota vem de `ceil(total x 1,1 / 100)`, entao ela PARA
+     * exatamente no fim dos dados. Avisar ali e gritar no caminho feliz.
+     *
+     * `CORTE_TETO` e ANOMALO por definicao: chegar a 20 paginas significa que a paginacao do
+     * fornecedor nao terminou onde o `total` dele prometia, e nesse caso NAO SE SABE o que ficou
+     * de fora. Silenciar seria indistinguivel de 'acabou', que e justamente o que o teste trava.
+     *
+     * `total` NULO tambem avisa: sem o total nao da para PROVAR que acabou, e na duvida o alarme
+     * erra para o lado de quem le.
+     *
+     * EU TINHA ESCRITO AQUI UM `motivo === CORTE_TETO ||`, E ELE ERA CODIGO MORTO. A mutacao
+     * mostrou primeiro (tirar a clausula deixava a suite inteira verde) e o teste que eu escrevi
+     * para cobri-la provou por que: `proximaPaginaDigai` resolve ACABOU antes de olhar o teto,
+     * entao `cortada` com o acumulado acima do total nao acontece. Mantive `sobrouGente` sozinho,
+     * que e verdadeiro sempre que o teto corta de verdade.
+     */
+    if (decisao.cortada && sobrouGente) {
       const porque =
         decisao.motivo === "CORTE_TETO"
           ? `teto anti-laco de ${DIGAI_TETO_PAGINAS_POR_SCREENING} pagina(s) por screening`

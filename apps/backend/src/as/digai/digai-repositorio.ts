@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import type { LinhaDeParaEtapaExternaCrua } from "../../domain/as-etapa-externa";
+import { emailParaDesempateDigai } from "../../domain/digai";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 
@@ -119,6 +120,78 @@ export class DigaiRepositorio {
     return achada ? { id: achada.id } : null;
   }
 
+  /**
+   * ─ O DEGRAU 3, O E-MAIL, E ELE E O MAIS DESCONFIADO DOS TRES ──────────────────────────────────
+   *
+   * Depois da identidade externa e do CPF, antes de criar ficha nova. Medido em 02/10/2026
+   * (`docs/MAPA-DEDUP-DIGAI-CHAVES.md`): 82% da populacao do Digai JA ESTA na plataforma e 84% dela
+   * nao tem CPF, entao sem este degrau a ingestao abriria 18.722 fichas para gente que ja tem uma,
+   * cada uma com o seu historico e o seu relogio de retencao.
+   *
+   * SAO QUATRO FECHADURAS, e cada uma fecha um modo de falha diferente:
+   *
+   * 1. E-MAIL QUE NAO PRESTA NAO VIRA CHAVE, e a recusa acontece ANTES do banco
+   *    (`emailParaDesempateDigai`, dominio puro). Mesmo precedente do `documentoParaBanco`.
+   * 2. FICHA JA ANONIMIZADA NAO E ALVO (`anonimizado_em is null`): o expurgo nao se desfaz pelo
+   *    lado, recebendo dado novo na ficha antiga. E a mesma clausula repetida a mao em todo
+   *    escritor de `as_candidatos`, porque nao ha guarda no schema nem trigger.
+   * 3. CPF PRESENTE NOS DOIS LADOS E DIFERENTE NAO FUNDE, e esta e a guarda que o mapa original
+   *    nao tinha (emenda E-4). O caso real: registro com CPF que nao casa ficha nenhuma, e-mail
+   *    que casa a ficha B, e a ficha B tem OUTRO CPF. CPF diferente dos dois lados e a prova de
+   *    que sao pessoas DIFERENTES, e e o mesmo argumento que condenou nome + vaga (247 homonimos).
+   *    Exposicao medida: 653 registros chegam a este degrau com um CPF na mao que nao casou nada.
+   *
+   *    A COMPARACAO MORA NO SQL, e isso tambem e §A.6: assim o CPF da OUTRA pessoa nunca e lido
+   *    para dentro do processo. Pedir a coluna para comparar em TypeScript traria para a memoria
+   *    da aplicacao um documento de quem o registro nem alcanca.
+   * 4. MAIS DE UMA FICHA CASANDO O MESMO E-MAIL E ABSTENCAO, NUNCA ESCOLHA (emenda E-7). Nao ha
+   *    indice unico em `as_candidatos.email`, entao `limit 1` sem `order by` (o que o degrau do CPF
+   *    faz, e la e seguro porque o CPF E unico) escolheria ficha ARBITRARIA. Ordenar seria PIOR que
+   *    nao ordenar: ordem deterministica ESCOLHE, e aqui escolher e o risco.
+   *
+   *    ┌─ A CONTAGEM VEM ANTES DO FILTRO, E ESTE FOI UM VETO DA AUDITORIA ─────────────────────┐
+   *    │ A primeira versao filtrava por CPF no `where` e contava o que SOBRAVA, que e outra      │
+   *    │ grandeza: a guarda 5 CEGAVA a guarda 7. O caso real: ficha A com `cpf = X` e a ficha B  │
+   *    │ com `cpf` nulo, as duas com o MESMO endereco, e um registro com `cpf = Y` (valido, que  │
+   *    │ nao casa nada). A guarda 5 descartava A, sobrava UMA linha, a ambiguidade nao disparava │
+   *    │ e o registro era fundido em B.                                                          │
+   *    │                                                                                          │
+   *    │ E duas fichas com o mesmo endereco sao exatamente a prova de que, ALI, o endereco NAO   │
+   *    │ identifica uma pessoa so, que e a unica base deste degrau. A pergunta "quantas fichas   │
+   *    │ carregam este endereco?" nao pode depender do CPF de quem esta perguntando.             │
+   *    │                                                                                          │
+   *    │ `count(*) over ()` e avaliado ANTES do `limit`, entao o `limit 2` continua barato e o   │
+   *    │ total e o de verdade. A guarda 5 desce para a PROJECAO, como BOOLEANO (`passa_guarda`): │
+   *    │ a decisao segue no banco e o documento da outra pessoa continua sem ser lido para a     │
+   *    │ memoria da aplicacao (§A.6). O que sai da consulta e um `id`, um numero e um sim/nao.   │
+   *    └──────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `{ ambiguo: true }` nao e luxo de tipo: sem ele, a abstencao chegaria ao chamador como `null`
+   * e seria indistinguivel de "ninguem casou", que e o caso em que se CRIA ficha. Sao decisoes
+   * opostas, e quem decide precisa saber qual das duas chegou.
+   */
+  async candidatoPorEmail(
+    valor: string,
+    cpfDoRegistro: string | null,
+  ): Promise<{ id: string } | { ambiguo: true } | null> {
+    const limpo = emailParaDesempateDigai(valor);
+    if (limpo === null) return null;
+    const doc = documentoParaBanco(cpfDoRegistro);
+    const linhas = (await this.db.execute(sql`
+      select id,
+             count(*) over () as total,
+             (${doc}::text is null or cpf is null or cpf = ${doc}) as passa_guarda
+        from as_candidatos
+       where lower(btrim(email)) = ${limpo}
+         and anonimizado_em is null
+       limit 2
+    `)) as unknown as { id: string; total: unknown; passa_guarda: unknown }[];
+    const primeira = linhas[0];
+    if (primeira === undefined) return null;
+    if (inteiroDoBanco(primeira.total) > 1) return { ambiguo: true };
+    return booleanoDoBanco(primeira.passa_guarda) ? { id: primeira.id } : null;
+  }
+
   // ── ESCRITA ──────────────────────────────────────────────────────────────────────────────────
 
   /**
@@ -192,6 +265,27 @@ export class DigaiRepositorio {
     const fone = textoOuNulo(dados.telefone);
 
     /*
+     * ─ A ORDEM DO `coalesce` DE `cpf` E `email` E INVERTIDA DE PROPOSITO, E ELA E UMA GUARDA ─────
+     *
+     * ANTES: `cpf = coalesce(${doc}, cpf)`. `coalesce` com valor novo NAO NULO devolve o NOVO, ou
+     * seja aquilo SUBSTITUIA o documento da ficha, e nao preenchia o vazio. Enquanto o casamento
+     * era so por identidade externa estavel, o registro ERA a mesma pessoa e substituir era
+     * inofensivo (e no Pandape a escrita e ainda mais direta, sem `coalesce`, e la esta certo pelo
+     * mesmo motivo).
+     *
+     * COM O DEGRAU DO E-MAIL ISSO DEIXA DE SER VERDADE, e o estrago e auto-alimentado: uma passada
+     * poderia gravar o e-mail da pessoa B na ficha da pessoa A; na passada seguinte, DUAS fichas
+     * compartilhariam aquele endereco e o degrau 3 cairia na abstencao por ambiguidade, ou pior,
+     * escolheria. A chave envenena a si mesma.
+     *
+     * AGORA: `coalesce(cpf, ${doc})`. O valor ja gravado VENCE, e o novo so entra onde havia nulo.
+     * PREENCHER VAZIO, SIM; TROCAR IDENTIDADE, NAO. Valor igual ao que ja esta la nao e troca, e
+     * cai no mesmo caminho sem escrever nada, porque a escrita segue condicional.
+     *
+     * NOME E TELEFONE NAO MUDAM DE REGRA: nenhum dos dois e chave de fusao (telefone casa 15.786
+     * pares e 85% deles sao pessoas diferentes, e e exatamente por isso que ele NAO decide nada), e
+     * o nome e o campo que a ingestao existe para manter em dia.
+     *
      * ─ NOME VAZIO NAO APAGA O NOME, E ESSA E A RESSALVA D2 DO `seguranca` (29/09) ───────────────
      *
      * Antes, o chamador so chamava este metodo QUANDO havia nome, e por isso a guarda de
@@ -207,8 +301,8 @@ export class DigaiRepositorio {
     const linhas = (await this.db.execute(sql`
       update as_candidatos
          set nome = coalesce(nullif(${valorNome}, ''), nome),
-             cpf = coalesce(${doc}, cpf),
-             email = coalesce(${correio}, email),
+             cpf = coalesce(cpf, ${doc}),
+             email = coalesce(email, ${correio}),
              telefone = coalesce(${fone}, telefone),
              atualizado_em = now()
        where id = ${alvo}::uuid
@@ -216,8 +310,8 @@ export class DigaiRepositorio {
          and (nome, cpf, email, telefone)
              is distinct from (
                coalesce(nullif(${valorNome}, ''), nome),
-               coalesce(${doc}, cpf),
-               coalesce(${correio}, email),
+               coalesce(cpf, ${doc}),
+               coalesce(email, ${correio}),
                coalesce(${fone}, telefone)
              )
       returning id
@@ -512,6 +606,28 @@ function documentoParaBanco(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const limpo = normalizeCpf(v);
   return limpo.length === 11 && isValidCpf(limpo) ? limpo : null;
+}
+
+/**
+ * ─ A LEITURA DO QUE O DRIVER DEVOLVE E EXPLICITA, E NAO CONFIA NA FORMA ────────────────────────
+ *
+ * `count(*)` e `bigint`, e o driver devolve bigint como TEXTO para nao perder precisao, enquanto
+ * `boolean` chega como boolean. Como as duas colunas vem da MESMA consulta e com formas diferentes,
+ * nao se presume nenhuma: o `0` em caso de forma inesperada seria fail-OPEN na contagem (nao
+ * dispararia a ambiguidade), entao a contagem desconhecida vira 2, que ABSTEM.
+ */
+function inteiroDoBanco(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number.parseInt(v, 10);
+    if (Number.isFinite(n)) return n;
+  }
+  return 2;
+}
+
+/** Verdadeiro so quando o banco disse verdadeiro. Qualquer outra forma NAO desempata. */
+function booleanoDoBanco(v: unknown): boolean {
+  return v === true || v === "t" || v === "true";
 }
 
 /** Texto util, ou nulo. Vazio e ausente sao a mesma coisa para toda escrita daqui. */

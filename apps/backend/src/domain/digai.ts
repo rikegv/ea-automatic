@@ -389,6 +389,207 @@ export function separarPorFinalizacaoDigai<T>(
   return { admitidos, naoFinalizaram };
 }
 
+// ── 2-B. O DEGRAU DO E-MAIL: A REGUA DE "ESTE E-MAIL SERVE PARA DESEMPATAR?" ───────────────────
+
+/**
+ * ─ POR QUE A REGUA MORA AQUI, E NAO NUM `if` DO REPOSITORIO ────────────────────────────────────
+ *
+ * O e-mail e o TERCEIRO degrau do dedup do Digai (identidade externa, CPF, e-mail, e so entao
+ * ficha nova), e e o unico deles cuja validade depende da FORMA do valor. Quem decide a forma
+ * decide quem funde com quem, e fusao de ficha e IRREVERSIVEL: depois ninguem sabe mais qual
+ * candidatura era de quem. Logo a decisao e funcao pura, determinista por argumento e exercitavel
+ * sem Postgres, e nao uma condicao escondida dentro de uma consulta.
+ *
+ * O PRECEDENTE E `documentoParaBanco` (`as/digai/digai-repositorio.ts`), que recusa o CPF invalido
+ * ANTES do banco: um `00000000000` repetido no ATS casaria pessoas DIFERENTES entre si. O e-mail
+ * tem o mesmo modo de falha com `""`, `" "`, `"@"` e afins.
+ *
+ * ┌─ A NORMALIZACAO E `lower` MAIS APARA DE BORDA, E NADA ALEM ──────────────────────────────────┐
+ * │ Medido em 02/10/2026 (`docs/MAPA-DEDUP-DIGAI-CHAVES.md`, emenda E-3): a base nao tem          │
+ * │ maiuscula nem espaco de borda, apesar de nenhum codigo nosso normalizar, porque a             │
+ * │ normalizacao acontece NA FONTE. O Digai, porem, pode entregar sem normalizar, e               │
+ * │ `Joao@Gmail.com` nao casaria, virando a duplicata que este degrau existe para evitar.         │
+ * │                                                                                               │
+ * │ O QUE NAO SE FAZ, e e decisao tomada: equivalencia de ponto do Gmail e remocao de `+alias`.   │
+ * │ Ganhariam 26 casos e sao regra ESPECIFICA de um provedor: aplicadas a um dominio que trata o  │
+ * │ endereco literalmente, elas FUNDEM PESSOAS DIFERENTES, num provedor que ninguem mediu.        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+
+/**
+ * ─ O TETO E A COLUNA, E NAO A RFC: `as_candidatos.email` E `varchar(180)` ──────────────────────
+ *
+ * Com o teto da RFC (254) um endereco de 181 a 254 passava a regua, nao casava ficha nenhuma (a
+ * coluna nao guarda endereco tao longo, logo nao ha o que casar) e ia estourar `22001` na CRIACAO
+ * da ficha, la no fim do fluxo: o registro virava linha pulada em TODO ciclo, com log generico de
+ * erro de banco. Recusar na regua transforma um erro tardio e opaco em abstencao explicita.
+ */
+const TETO_DO_EMAIL = 180;
+
+/** Parte local, UMA arroba, dominio com ponto, e nenhum espaco em lugar nenhum. */
+const FORMA_DO_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * ─ SO ASCII IMPRIMIVEL, E A RAZAO E UMA FUSAO MEDIDA, NAO PURISMO ──────────────────────────────
+ *
+ * `toLowerCase()` nao e so troca de caixa: ele ATRAVESSA O ALFABETO. O `K` KELVIN (U+212A) vira o
+ * `k` ASCII, entao `KELVIN@x.y` escrito com aquele caractere normaliza para o endereco de OUTRA
+ * pessoa, e o degrau funde as duas. A classe nao e hipotetica (achado da auditoria), e nao se
+ * resolve caso a caso: o mesmo mapeamento existe para o sinal de Angstrom e para a familia de
+ * formas de compatibilidade.
+ *
+ * O TESTE E FEITO ANTES DO `toLowerCase`, e tem de ser: depois dele o caractere JA VIROU `k` e nao
+ * ha mais o que recusar.
+ *
+ * ISSO E RESTRINGIR, E A EMENDA E-3 AUTORIZA RESTRINGIR: o que ela proibe e normalizar de forma
+ * agressiva (ponto do Gmail, `+alias`), que ACHA mais casamentos e funde pessoas diferentes.
+ * Recusar erra na direcao da duplicata, que e a direcao que o diretor mandou escolher.
+ */
+const SO_ASCII_IMPRIMIVEL = /^[\x21-\x7e]+$/;
+
+/**
+ * O E-MAIL NORMALIZADO QUE PODE DESEMPATAR, OU NULO QUANDO ELE NAO SERVE.
+ *
+ * Nulo e FAIL-CLOSED: nao desempata, e o fluxo segue para o degrau de baixo (ficha nova). A direcao
+ * do erro e escolhida de proposito, e e a ordem do diretor: falso positivo e PIOR que duplicata.
+ * Duplicata se conserta com gente olhando; fusao de duas pessoas, nao.
+ *
+ * O dominio EXIGE PONTO. Endereco sem ponto no dominio (`alguem@localhost`) nao existe na base
+ * medida e, na duvida, a regua abstem: abster duplica, e aceitar funde.
+ */
+export function emailParaDesempateDigai(valor: unknown): string | null {
+  if (typeof valor !== "string") return null;
+  const aparado = valor.trim();
+  if (!SO_ASCII_IMPRIMIVEL.test(aparado)) return null;
+  const limpo = aparado.toLowerCase();
+  if (limpo.length > TETO_DO_EMAIL) return null;
+  return FORMA_DO_EMAIL.test(limpo) ? limpo : null;
+}
+
+// ── 2-C. O DESFECHO DO DEDUP: A DECISAO PURA, DADOS OS TRES RESULTADOS DE CONSULTA ─────────────
+
+/**
+ * ─ POR QUE A DECISAO DO DEDUP E UMA FUNCAO PURA, E NAO SO UM `switch` NO SERVICO ───────────────
+ *
+ * ┌─ DOIS CONSUMIDORES, UMA REGRA ──────────────────────────────────────────────────────────────┐
+ * │ `resolverPessoa` (`as/digai/digai-importacao.service.ts`) consome esta funcao para DECIDIR e  │
+ * │ entao aplica os efeitos (escrever, anexar, registrar conflito). O harness de medicao (o       │
+ * │ dry-run somente-leitura, fora do repositorio) consome a MESMA funcao sobre o resultado das     │
+ * │ MESMAS consultas, para contar o que a ingestao FARIA sem escrever nada. Duas copias da regra   │
+ * │ divergiriam no primeiro ajuste, e aqui divergir e fundir pessoa errada: a regra e UMA.          │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A FUNCAO NAO TEM EFEITO: dados os tres resultados de consulta (identidade externa, CPF, e-mail),
+ * ela devolve o DESFECHO. Quem escreve e `resolverPessoa`; esta funcao so classifica, e por isso e
+ * exercitavel sem Postgres e sem Nest.
+ *
+ * A CONDICAO DO DIRETOR ORDENA TUDO: falso positivo e PIOR que duplicata. Fundir duas pessoas
+ * diferentes e irreversivel, porque depois ninguem sabe mais qual candidatura era de quem. Na
+ * duvida, NAO FUNDE (abstem, ou cria ficha nova).
+ *
+ * A REGUA, nos quatro degraus, cada um so consultado quando o de cima nao decidiu:
+ *   1. identidade externa vence tudo.
+ *   2. CPF (chave unica no banco, casamento exato).
+ *   3. e-mail (desempate, com guarda de CPF divergente e de ambiguidade).
+ *   4. ninguem casa: ficha nova.
+ */
+
+/** O que uma consulta de ficha por chave devolve: a ficha, ou nada. */
+export type FichaPorChaveDigai = { id: string } | null;
+
+/**
+ * O que a consulta por e-mail devolve: a ficha limpa, a marca de ambiguidade (mais de uma ficha
+ * carrega o endereco) ou nada. O terceiro estado nao e luxo: ambiguidade e "ninguem casou" sao
+ * decisoes OPOSTAS, e quem decide precisa distinguir as duas.
+ */
+export type FichaPorEmailDigai = { id: string } | { ambiguo: true } | null;
+
+/**
+ * ─ OS OITO DESFECHOS, E CADA UM DIZ O QUE A INGESTAO FAZ ───────────────────────────────────────
+ *
+ * `CASOU_IDENTIDADE`              identidade externa conhecida: atualiza a ficha e reusa.
+ * `COLISAO_IDENTIDADE_DOCUMENTO`  identidade aponta A, CPF aponta B: ABSTEM, registra conflito.
+ * `CASOU_CPF`                     CPF e a chave forte que resolveu: atualiza, anexa identidade.
+ * `CASOU_CPF_COM_EMAIL_AMBIGUO`   CPF resolveu, mas o e-mail casou DUAS fichas: o CPF decide (e
+ *                                 exato), o e-mail NAO e propagado por este caminho, e a
+ *                                 ambiguidade vira conflito ancorado na ficha do CPF.
+ * `COLISAO_CPF_EMAIL`             CPF aponta A, e-mail limpo aponta B: ABSTEM, registra conflito.
+ * `CASOU_EMAIL_LIMPO`             so o e-mail casou, UMA ficha: anexa a identidade, e SO isso.
+ * `EMAIL_AMBIGUO_SEM_ANCORA`      e-mail casou DUAS fichas e nenhuma chave forte resolveu: ABSTEM,
+ *                                 sem conflito (nao ha ficha legitima a ancorar; `candidato_id` e
+ *                                 NOT NULL, e apontar uma das ambiguas seria a escolha que a guarda
+ *                                 recusa).
+ * `NOVA`                          nada casa: ficha nova.
+ */
+export type DesfechoDedupDigai =
+  | { tipo: "CASOU_IDENTIDADE"; pessoaId: string }
+  | { tipo: "COLISAO_IDENTIDADE_DOCUMENTO"; ancora: string }
+  | { tipo: "CASOU_CPF"; pessoaId: string }
+  | { tipo: "CASOU_CPF_COM_EMAIL_AMBIGUO"; pessoaId: string }
+  | { tipo: "COLISAO_CPF_EMAIL"; ancora: string }
+  | { tipo: "CASOU_EMAIL_LIMPO"; pessoaId: string }
+  | { tipo: "EMAIL_AMBIGUO_SEM_ANCORA" }
+  | { tipo: "NOVA" };
+
+/**
+ * ─ A DECISAO, DEGRAU A DEGRAU, E A RAZAO DE CADA RAMO ──────────────────────────────────────────
+ *
+ * O E-MAIL SO E PASSADO QUANDO A IDENTIDADE NAO RESOLVEU: a laziness da consulta vive no chamador
+ * (que nao pergunta o e-mail quando a identidade decidiu), e esta funcao respeita isso tratando um
+ * `porEmail` nulo no ramo da identidade como "nao perguntado", que e inofensivo porque a identidade
+ * ja decide ali.
+ *
+ * ┌─ AMBIGUIDADE NAO E COLISAO, E A DISTINCAO DECIDE TUDO (decisao do coordenador, 02/10/2026) ──┐
+ * │  COLISAO: duas chaves apontaram para duas pessoas DIFERENTES e IDENTIFICADAS. E EVIDENCIA     │
+ * │  POSITIVA de conflito, e diz "nao sei quem e". Abster e a unica resposta honesta.              │
+ * │                                                                                                │
+ * │  AMBIGUIDADE: o e-mail casou DUAS fichas. Isso NAO torna o casamento do CPF errado: o CPF e    │
+ * │  unico no banco (`uq_as_candidatos_cpf`), entao casar por ele e EXATO. Deixar o ruido da chave │
+ * │  fraca derrubar o acerto da chave forte seria trocar certeza por duvida alheia, e bloquearia o │
+ * │  registro em QUALQUER ciclo, para sempre e em silencio, por duas linhas que nem sao dele.      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export function classificarDedupDigai(entrada: {
+  porIdentidade: FichaPorChaveDigai;
+  porDocumento: FichaPorChaveDigai;
+  porEmail: FichaPorEmailDigai;
+}): DesfechoDedupDigai {
+  const { porIdentidade, porDocumento, porEmail } = entrada;
+
+  // DEGRAU 1: a identidade externa vence tudo, e o e-mail nem e perguntado quando ela decidiu.
+  if (porIdentidade !== null) {
+    if (porDocumento !== null && porDocumento.id !== porIdentidade.id) {
+      // A identidade aponta uma pessoa e o CPF outra: nao se funde e nao se escolhe. Vira revisao.
+      return { tipo: "COLISAO_IDENTIDADE_DOCUMENTO", ancora: porIdentidade.id };
+    }
+    return { tipo: "CASOU_IDENTIDADE", pessoaId: porIdentidade.id };
+  }
+
+  const emailAmbiguo = porEmail !== null && "ambiguo" in porEmail;
+
+  // DEGRAU 2: o CPF e a chave forte. Ele decide mesmo quando o e-mail esta ambiguo (o CPF e exato).
+  if (porDocumento !== null) {
+    if (emailAmbiguo) {
+      return { tipo: "CASOU_CPF_COM_EMAIL_AMBIGUO", pessoaId: porDocumento.id };
+    }
+    if (porEmail !== null && "id" in porEmail && porEmail.id !== porDocumento.id) {
+      return { tipo: "COLISAO_CPF_EMAIL", ancora: porDocumento.id };
+    }
+    return { tipo: "CASOU_CPF", pessoaId: porDocumento.id };
+  }
+
+  // DEGRAU 3: sem identidade e sem CPF casado. O e-mail desempata, mas ambiguo sem ancora abstem.
+  if (emailAmbiguo) {
+    return { tipo: "EMAIL_AMBIGUO_SEM_ANCORA" };
+  }
+  if (porEmail !== null && "id" in porEmail) {
+    return { tipo: "CASOU_EMAIL_LIMPO", pessoaId: porEmail.id };
+  }
+
+  // DEGRAU 4: ninguem casou. Pessoa nova de verdade.
+  return { tipo: "NOVA" };
+}
+
 // ── 3. A IDEMPOTENCIA, E ELA E EXPLICITA ───────────────────────────────────────────────────────
 
 /**
