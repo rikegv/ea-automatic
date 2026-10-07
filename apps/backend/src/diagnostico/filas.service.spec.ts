@@ -19,24 +19,41 @@ interface JobFake {
   finishedOn?: number;
 }
 
-function filaFake(contagem: Partial<Record<string, number>>, falhados: JobFake[] = []) {
+function filaFake(
+  contagem: Partial<Record<string, number>>,
+  falhados: JobFake[] = [],
+  atrasados: JobFake[] = [],
+) {
   return {
     getJobCounts: vi.fn(async () => ({
       active: contagem.active ?? 0,
       waiting: contagem.waiting ?? 0,
       failed: contagem.failed ?? falhados.length,
-      delayed: contagem.delayed ?? 0,
+      delayed: contagem.delayed ?? atrasados.length,
     })),
     getFailed: vi.fn(async () => falhados),
+    // DELAYED entra na lista junto com FAILED (job em re-tentativa com backoff). O método tem de
+    // existir aqui, senão a leitura lança; estes testes não exercitam atrasado (ver o spec dedicado).
+    getDelayed: vi.fn(async () => atrasados),
   };
 }
 
 /**
- * Fila que devolve o MESMO job em cada checagem, com o estado percorrendo um roteiro. É assim que o
- * worker se comporta de verdade: waiting, active, e então o desfecho.
+ * Fila que devolve o MESMO job em cada checagem, com o estado percorrendo um roteiro.
+ *
+ * O CONTRATO QUE ELA MODELA (depois que o reprocesso passou a olhar o estado): `reprocessarJob`
+ * chama `buscarJob` (um `getJob`), DEPOIS `getState()` UMA vez para DECIDIR (failed usa `retry()`,
+ * delayed usa `promote()`, qualquer outro só acompanha) e só então entra no laço, que a cada volta
+ * faz `getJob` e `getState`.
+ *
+ * Por isso o roteiro agora é lido assim:
+ *   · `roteiro[0]` é o estado NA DECISÃO (o que o método lê para escolher retry/promote/acompanhar);
+ *   · `roteiro[1..]` são os estados que o LAÇO observa, um por volta (null = removido pelo
+ *     `removeOnComplete`, que o método lê como CONCLUIDO).
+ * O índice é amarrado ao número de chamadas a `getJob` (o `getState` da decisão não avança o passo).
  */
 function filaComRoteiro(roteiro: (string | null)[], motivo?: string) {
-  let passo = 0;
+  let getJobChamadas = 0;
   const job = {
     id: "job-1",
     name: "sync-candidate",
@@ -45,17 +62,30 @@ function filaComRoteiro(roteiro: (string | null)[], motivo?: string) {
     retry: vi.fn(async () => {
       job.failedReason = "";
     }),
-    getState: vi.fn(async () => roteiro[Math.min(passo, roteiro.length - 1)] ?? "waiting"),
+    promote: vi.fn(async () => {
+      job.failedReason = "";
+    }),
+    getState: vi.fn(async () => {
+      // getJob#1 (buscarJob) deixou `getJobChamadas` em 1: a decisão lê roteiro[0]. Cada volta do
+      // laço faz getJob (incrementa) e então getState, lendo roteiro[1], roteiro[2], ...
+      const i = Math.min(getJobChamadas - 1, roteiro.length - 1);
+      const estado = roteiro[i];
+      if (estado === "failed" && motivo) job.failedReason = motivo;
+      return estado ?? "waiting";
+    }),
   };
   return {
     ...filaFake({}),
     getJob: vi.fn(async () => {
-      const estado = roteiro[Math.min(passo, roteiro.length - 1)];
-      passo += 1;
-      if (estado === null) return undefined;
-      if (estado === "failed" && motivo) job.failedReason = motivo;
-      return job;
+      getJobChamadas += 1;
+      // A 1ª chamada é a do `buscarJob`, antes da decisão: o job existe. Nas voltas do laço, honra o
+      // null do roteiro (removeOnComplete levou o job).
+      if (getJobChamadas === 1) return job;
+      const estado = roteiro[Math.min(getJobChamadas - 1, roteiro.length - 1)];
+      return estado === null ? undefined : job;
     }),
+    /** Só para o teste espiar qual disparo foi usado (retry x promote); o serviço não o lê. */
+    jobEspiao: job,
   };
 }
 
@@ -275,24 +305,43 @@ describe("FilasDiagnosticoService.reprocessarJob", () => {
    * de tirar o job de "falhado", a lista recarregada ficava vazia e PARECIA sucesso. Onze segundos
    * depois o job falhava de novo e ninguém via. Voltar para a fila NÃO é sucesso.
    */
-  it("PUXOU: o job completou, e o desfecho diz CONCLUIDO", async () => {
-    const r = await servico({
-      pandape: filaComRoteiro(["waiting", "active", "completed"]) as never,
-    }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
+  it("PUXOU: o job FALHADO completou, e o desfecho diz CONCLUIDO", async () => {
+    const fila = filaComRoteiro(["failed", "active", "completed"]);
+    const r = await servico({ pandape: fila as never }).reprocessarJob(
+      "pandape-sync",
+      "job-1",
+      RAPIDO,
+    );
     expect(r.desfecho).toBe("CONCLUIDO");
     expect(r.motivo).toBeUndefined();
+    // Falhado sai por RETRY, nunca por promote.
+    expect(fila.jobEspiao.retry).toHaveBeenCalledTimes(1);
+    expect(fila.jobEspiao.promote).not.toHaveBeenCalled();
+  });
+
+  it("ATRASADO (re-tentativa): PROMOVE em vez de re-tentar, e acompanha até CONCLUIDO", async () => {
+    const fila = filaComRoteiro(["delayed", "active", "completed"]);
+    const r = await servico({ pandape: fila as never }).reprocessarJob(
+      "pandape-sync",
+      "job-1",
+      RAPIDO,
+    );
+    expect(r.desfecho).toBe("CONCLUIDO");
+    // O NOVO CAMINHO: delayed não pode ir por `retry()` (lançaria "not in the failed state").
+    expect(fila.jobEspiao.promote).toHaveBeenCalledTimes(1);
+    expect(fila.jobEspiao.retry).not.toHaveBeenCalled();
   });
 
   it("PUXOU: job removido pelo removeOnComplete também é CONCLUIDO, não erro", async () => {
     const r = await servico({
-      pandape: filaComRoteiro(["waiting", null]) as never,
+      pandape: filaComRoteiro(["failed", null]) as never,
     }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
     expect(r.desfecho).toBe("CONCLUIDO");
   });
 
   it("NÃO PUXOU: falhou de novo, e o motivo REAL volta para a tela", async () => {
     const r = await servico({
-      pandape: filaComRoteiro(["waiting", "active", "failed"], "CPF inválido") as never,
+      pandape: filaComRoteiro(["failed", "active", "failed"], "CPF inválido") as never,
     }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
     expect(r.desfecho).toBe("FALHOU");
     expect(r.motivo).toBe("CPF inválido");
@@ -300,7 +349,7 @@ describe("FilasDiagnosticoService.reprocessarJob", () => {
 
   it("EM PROCESSAMENTO: estourou o teto ainda rodando, e NÃO finge sucesso", async () => {
     const r = await servico({
-      pandape: filaComRoteiro(["active"]) as never,
+      pandape: filaComRoteiro(["failed", "active"]) as never,
     }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
     expect(r.desfecho).toBe("EM_PROCESSAMENTO");
     expect(r.motivo).toBeUndefined();
@@ -308,7 +357,7 @@ describe("FilasDiagnosticoService.reprocessarJob", () => {
 
   it("NÃO lê como falha nova o eco da falha antiga (failed sem motivo segue esperando)", async () => {
     const r = await servico({
-      pandape: filaComRoteiro(["failed", "active", "completed"]) as never,
+      pandape: filaComRoteiro(["failed", "failed", "completed"]) as never,
     }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
     expect(r.desfecho).toBe("CONCLUIDO");
   });
@@ -316,12 +365,12 @@ describe("FilasDiagnosticoService.reprocessarJob", () => {
   /** §A.26: o método é UM só para as três filas. Quebrar uma quebraria as três. */
   it("vale para as TRÊS filas, porque o método é compartilhado", async () => {
     const clicksign = await servico({
-      clicksign: filaComRoteiro(["active", "failed"], "429 Too Many Requests") as never,
+      clicksign: filaComRoteiro(["failed", "failed"], "429 Too Many Requests") as never,
     }).reprocessarJob("clicksign-sync", "job-1", RAPIDO);
     expect(clicksign.desfecho).toBe("FALHOU");
 
     const vt = await servico({
-      vt: filaComRoteiro(["active", "completed"]) as never,
+      vt: filaComRoteiro(["failed", "completed"]) as never,
     }).reprocessarJob("vt-coleta-scan", "job-1", RAPIDO);
     expect(vt.desfecho).toBe("CONCLUIDO");
   });
