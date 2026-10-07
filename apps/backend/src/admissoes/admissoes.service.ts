@@ -97,6 +97,7 @@ import {
 import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
+import { PortalEnvioService } from "../portal/portal-envio.service";
 import { recomputeFarolGlobal } from "./farol";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { FAROIS_VIVOS, pendenciasObrigatorias } from "../domain/admissao";
@@ -411,6 +412,10 @@ export class AdmissoesService {
     // vez. Sem ela, a única coisa que muda é a coluna "Documentos Obrigatórios Pendentes" do
     // relatório, que sai vazia; nada mais no service a consulta.
     @Optional() private readonly reguaCompletude?: ReguaCompletudeService,
+    // OPCIONAL pelo mesmo motivo da fila e da régua: os scripts de carga (`carga-frente1`,
+    // `carga-0308`) constroem `new AdmissoesService(db)` e não enviam link nenhum. Sem ele, a
+    // liberação segue igual e o aviso ao candidato simplesmente não é disparado.
+    @Optional() private readonly portalEnvio?: PortalEnvioService,
   ) {}
 
   /**
@@ -1234,6 +1239,32 @@ export class AdmissoesService {
 
     // Pull do acervo do Pandapé: FORA da transação e sem poder derrubá-la (ver o método).
     await this.enfileirarPullDocumentos(admissaoId);
+
+    /*
+     * O AVISO AO CANDIDATO NASCE AQUI, e não na saída do funil. A admissão já commitou como
+     * EM_ADMISSAO (tem cliente+cargo e aparece na Esteira), então agora existe destinatário e faz
+     * sentido entregar o acesso ao prontuário. BEST-EFFORT, mesmo molde do pull acima e da
+     * notificação do Clicksign (§A.5): a LIBERAÇÃO é o fato, o envio é o AVISO. Falha de envio NÃO
+     * derruba a liberação (lançar aqui desfaria um fato consumado por causa de um e-mail, e a
+     * retentativa seria recusada porque a admissão já não está mais AGUARDANDO_LIBERACAO).
+     *
+     * SÓ NA LIBERAÇÃO INDIVIDUAL. A liberação em lote (Alto Volume) não dispara envio de propósito,
+     * por isso a chamada mora aqui e não no miolo `aplicarLiberacao`, que é compartilhado.
+     *
+     * §A.6: não se loga e-mail, link, token, CPF nem id de pessoa. Em recusa sai só o CÓDIGO do
+     * motivo (rótulo de catálogo fechado); no inesperado, só o nome do erro.
+     */
+    if (this.portalEnvio) {
+      try {
+        const envio = await this.portalEnvio.enviarParaAdmissao(admissaoId, user.id, "AUTOMATICO");
+        if (!envio.enviado && envio.motivo) {
+          this.logger.warn(`link do portal nao saiu na liberacao: ${envio.motivo}`);
+        }
+      } catch (erro) {
+        this.logger.error(`falha inesperada ao enviar o link do portal na liberacao: ${(erro as Error).name}`);
+      }
+    }
+
     return resultado;
   }
 

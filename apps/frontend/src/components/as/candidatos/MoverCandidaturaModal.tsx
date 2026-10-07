@@ -109,9 +109,7 @@ import { ReprovarPeloClienteModal } from "@/components/as/candidatos/ReprovarPel
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { podeAprovar, podeMoverNoFunil, podeReverterEnvio } from "@/lib/as-vaga-acoes";
-import { AvisoDoEnvioDoLink } from "@/components/portal/EnvioDoLink";
 import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
-import { fraseDaCienciaDoEnvio, usePreviaIndividual } from "@/lib/portal-envio-link";
 import { cn } from "@/lib/cn";
 
 type Saida = "DESCARTADO" | "DESISTIU" | "ENVIADO_PARA_ADMISSAO";
@@ -180,22 +178,6 @@ export function MoverCandidaturaModal({
    * certa: o consultor escreveria a explicação da reprovação no campo que o desvínculo grava.
    */
   const [reprovacaoAberta, setReprovacaoAberta] = useState(false);
-
-  /**
-   * ─ PARA ONDE O LINK DO PORTAL VAI, CONFERIDO ANTES DE O CONSULTOR CONFIRMAR ─────────────────
-   *
-   * Enviar para a admissão passou a disparar, por e-mail, uma CREDENCIAL DE ACESSO ao prontuário
-   * do candidato. A pergunta só é feita quando o card do envio está aberto (`ativo`): buscar o
-   * destino de quem vai ser desvinculado seria consulta inútil sobre dado pessoal.
-   *
-   * A FALHA DA CONFERÊNCIA NÃO TRAVA O GESTO: mandar a pessoa para a admissão é a operação, o
-   * e-mail é o efeito colateral, e o aviso diz honestamente quando não conseguiu conferir.
-   */
-  const { destinatario, carregando: conferindoDestino } = usePreviaIndividual(
-    candidatura.id,
-    token,
-    saidaAberta === "ENVIADO_PARA_ADMISSAO",
-  );
 
   /** A etapa clicada enquanto a requisição não volta: só ela mostra o estado de espera, não a grade toda. */
   const [movendoPara, setMovendoPara] = useState<CandidaturaEtapa | null>(null);
@@ -333,11 +315,6 @@ export function MoverCandidaturaModal({
     const pedePretensao = motivoEscolhido?.pedePretensao === true;
     return (
       <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
-        {sa === "ENVIADO_PARA_ADMISSAO" && (
-          <div className="mb-3">
-            <AvisoDoEnvioDoLink destinatario={destinatario} carregando={conferindoDestino} />
-          </div>
-        )}
         {/* O CAMPO SE DECIDE SOZINHO ENTRE SELETOR E CAIXA DE TEXTO, pela régua compartilhada
             (`motivoVemDoCatalogo`), e não por uma comparação escrita aqui. Ver o cabeçalho de
             `CampoMotivoDaSaida`: o descarte passou a ser CLASSIFICAÇÃO conferida pelo backend, e
@@ -391,12 +368,7 @@ export function MoverCandidaturaModal({
             onClick={() =>
               pedirConfirmacao({
                 titulo: `${SAIDA_TITULO[sa]}?`,
-                // A CIÊNCIA DO LINK ENTRA NA CONFIRMAÇÃO QUE JÁ EXISTE, e só no envio: é ali que
-                // o consultor para para ler, e é o último lugar antes de a credencial sair.
-                mensagem:
-                  sa === "ENVIADO_PARA_ADMISSAO"
-                    ? `${SAIDA_FRASE(sa, candidatura.candidatoNome)} ${fraseDaCienciaDoEnvio(destinatario)}`
-                    : SAIDA_FRASE(sa, candidatura.candidatoNome),
+                mensagem: SAIDA_FRASE(sa, candidatura.candidatoNome),
                 rotulo: SAIDA_ACAO[sa],
                 // OS DESFECHOS SÃO "danger" e o movimento de etapa não é: desvincular e enviar para
                 // a admissão não se desfazem clicando em outro lugar, mover se desfaz.

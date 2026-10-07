@@ -2359,41 +2359,12 @@ export class CandidatosService {
       }
 
       /*
-       * ┌─ O GANCHO DO CAMINHO 1: A SAÍDA ACONTECEU, AGORA O CANDIDATO É AVISADO ─────────────────┐
-       * │ ELE MORA AQUI, E NÃO DENTRO DE `mudarSituacaoOcupandoPosicao`, e a diferença é tudo:   │
-       * │ aquele método também é chamado por `aprovar` e por `alocar`. Pendurado lá, o e-mail com │
-       * │ a credencial de acesso ao prontuário sairia na APROVAÇÃO e na ALOCAÇÃO, que são gestos │
-       * │ internos do funil em que ninguém decidiu chamar a pessoa para nada.                     │
-       * │                                                                                        │
-       * │ FALHA DE ENVIO NÃO DERRUBA A SAÍDA, e esta é a mesma lição da notificação do Clicksign │
-       * │ (§A.5): a SAÍDA é o fato (a pessoa avançou, a posição foi consumida, a trilha foi       │
-       * │ gravada), o envio é o AVISO. Lançar aqui desfaria um fato consumado por causa de um     │
-       * │ e-mail, e na retentativa a saída seria recusada (a candidatura já não está mais viva),  │
-       * │ deixando a operação presa sem caminho de volta.                                         │
-       * │                                                                                        │
-       * │ O SERVIÇO DE ENVIO JÁ NÃO LANÇA por recusa (e-mail vazio, canal apagado, falha do       │
-       * │ correio): tudo isso volta como `enviado: false` com código. O `catch` é para o          │
-       * │ inesperado, e a razão de ele existir é que o custo de errar é assimétrico.              │
-       * │                                                                                        │
-       * │ HOJE ISTO NÃO DISPARA NADA: sem `admissao_id` na candidatura, o envio devolve           │
-       * │ `SEM_ADMISSAO` sem emitir link nenhum.                                                  │
-       * └────────────────────────────────────────────────────────────────────────────────────────┘
-       *
-       * §A.6: o desfecho NÃO é logado com nome, e-mail nem id de pessoa. O que se registra é o
-       * código do motivo, que é rótulo de catálogo fechado, e nada mais. A rota devolve a
-       * candidatura como sempre devolveu.
+       * O LINK DO PORTAL NÃO SAI AQUI. Nesta hora a admissão é pré-admissão em AGUARDANDO_LIBERACAO,
+       * farol que a emissão recusa (fica fora do recorte, SEM_ADMISSAO), então ninguém libera acesso
+       * ao prontuário de quem ainda não foi liberado. O aviso ao candidato nasce na LIBERAÇÃO
+       * (`AdmissoesService.liberar`), quando a admissão já virou EM_ADMISSAO. A escrita de
+       * `as_candidaturas.admissao_id` acima é o único elo gravado nesta etapa (§A.6: só o id técnico).
        */
-      try {
-        const [desfecho] = await this.envioDoPortal
-          .enviarParaCandidaturas([candidaturaId], porId)
-          .then((r) => r.recusados);
-        if (desfecho?.motivo) {
-          this.log.warn(`envio do link do portal nao saiu na saida para admissao: ${desfecho.motivo}`);
-        }
-      } catch (erro) {
-        this.log.error(`falha inesperada ao enviar o link do portal: ${(erro as Error).name}`);
-      }
-
       return this.candidatura(candidaturaId);
     }
 
