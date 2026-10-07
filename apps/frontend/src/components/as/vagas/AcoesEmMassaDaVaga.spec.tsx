@@ -30,6 +30,23 @@ const { finalizarPosicaoEmLote, registrarSaidaEmLote, moverEtapaEmLote } = vi.ho
 }));
 
 /**
+ * AS ROTAS POR FILTRO (modo "todos do filtro", sem teto). Elas devolvem CONTAGEM (`{afetados,
+ * falharam}`), não a lista de falhas: num conjunto de milhares a lista seria dado pessoal (§A.6).
+ */
+const { finalizarPosicaoPorFiltro, moverEtapaPorFiltro, registrarSaidaPorFiltro } = vi.hoisted(
+  () => ({
+    finalizarPosicaoPorFiltro: vi.fn(async () => ({ afetados: 2509, falharam: 0 })),
+    moverEtapaPorFiltro: vi.fn(async () => ({ afetados: 2509, falharam: 0 })),
+    registrarSaidaPorFiltro: vi.fn(async () => ({ afetados: 2509, falharam: 0 })),
+  }),
+);
+
+vi.mock("@/lib/as-candidatos", async () => {
+  const real = await vi.importActual<typeof import("@/lib/as-candidatos")>("@/lib/as-candidatos");
+  return { ...real, finalizarPosicaoPorFiltro, moverEtapaPorFiltro, registrarSaidaPorFiltro };
+});
+
+/**
  * O CATÁLOGO DE ETAPAS VEM DA REDE AGORA, e por isso ele é dublado aqui.
  *
  * A lista do funil deixou de ser constante importada e virou dado do diretor (`as_etapas_funil`),
@@ -386,5 +403,130 @@ describe("o resultado do lote", () => {
     expect(screen.getByText(/1 linha aplicada/)).toBeTruthy();
     expect(screen.getByText("Beltrana De Tal")).toBeTruthy();
     expect(screen.getByText(/já está em Triagem/)).toBeTruthy();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// O MODO "TODOS DO FILTRO", SEM TETO (decisão do diretor, 07/10/2026)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Aqui a ação manda o FILTRO ao servidor (rotas por-filtro), não a lista de ids, e as credenciais
+ * ficam de fora. O número grande (2.509) é de propósito: é o caso que a frente existe para servir.
+ */
+const FILTRO = { vagaId: "vaga-1", aba: "candidatos" } as const;
+
+function montarFiltro(quantidade = 2509, aba: "candidatos" | "alocados" = "candidatos") {
+  const onFeito = vi.fn();
+  const onLimpar = vi.fn();
+  render(
+    <AcoesEmMassaDaVaga
+      vaga={VAGA}
+      aba={aba}
+      selecionadas={[]}
+      todosDoFiltro
+      quantidade={quantidade}
+      filtro={{ ...FILTRO, aba }}
+      token="t"
+      onLimpar={onLimpar}
+      onFeito={onFeito}
+    />,
+  );
+  return { onFeito, onLimpar };
+}
+
+describe("o modo todos do filtro", () => {
+  /**
+   * A RÉGUA DO DIRETOR: enviar credencial (link do Portal, nome ao cliente) exige seleção nominal,
+   * então no modo "todos do filtro" os dois botões de credencial ficam DESABILITADOS.
+   */
+  it("Enviar Para Admissão e Enviar Shortlist ficam desabilitados", () => {
+    montarFiltro();
+    expect((screen.getByRole("button", { name: /enviar para admissão/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /enviar shortlist/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("a contagem da barra é a quantidade do filtro inteiro, não a seleção manual", () => {
+    montarFiltro(2509);
+    expect(screen.getByText(/selecionadas:/i).parentElement?.textContent ?? "").toContain("2509");
+  });
+
+  /** As ações de STATUS mandam o FILTRO (não ids) e recebem contagem. Mover é a prova da rota. */
+  it("mover no funil chama a rota POR FILTRO, mandando o filtro", async () => {
+    montarFiltro(2509);
+    fireEvent.click(screen.getByRole("button", { name: /mover no funil \(2509\)/i }));
+
+    // O aviso do tempo pelo volume, em title case (§A.24), com o milhar pt-BR (§A.11 sem travessão).
+    expect(
+      screen.getByText(/A Movimentação De 2\.509 Candidatos Pode Levar Alguns Instantes/i),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /etapa de destino/i }));
+    fireEvent.click(screen.getByText("Triagem"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Mover no funil" }).at(-1) as HTMLElement);
+
+    await waitFor(() => expect(moverEtapaPorFiltro).toHaveBeenCalledTimes(1));
+    const [filtro, etapa] = moverEtapaPorFiltro.mock.calls[0] as unknown as [
+      { vagaId: string; aba: string },
+      string,
+    ];
+    expect(filtro.vagaId).toBe("vaga-1");
+    expect(etapa).toBe("TRIAGEM");
+    // O lote por ids NÃO é tocado no modo filtro: é o filtro que vai, não a lista de ids.
+    expect(moverEtapaEmLote).not.toHaveBeenCalled();
+  });
+
+  /** A confirmação ao fim diz quantos foram, em title case: "N Candidatos Movidos". */
+  it("confirma ao fim quantos foram movidos", async () => {
+    montarFiltro(2509);
+    fireEvent.click(screen.getByRole("button", { name: /mover no funil \(2509\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /etapa de destino/i }));
+    fireEvent.click(screen.getByText("Triagem"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Mover no funil" }).at(-1) as HTMLElement);
+
+    await waitFor(() => expect(screen.getByText(/2\.509 Candidatos Movidos/i)).toBeTruthy());
+  });
+
+  /** Com `falharam > 0`, a confirmação diz o que não foi, sem nomear (§A.6). */
+  it("quando parte falha, a confirmação diz quantas não foram movidas", async () => {
+    moverEtapaPorFiltro.mockResolvedValueOnce({ afetados: 2000, falharam: 509 });
+    montarFiltro(2509);
+    fireEvent.click(screen.getByRole("button", { name: /mover no funil \(2509\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /etapa de destino/i }));
+    fireEvent.click(screen.getByText("Triagem"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Mover no funil" }).at(-1) as HTMLElement);
+
+    await waitFor(() => expect(screen.getByText(/2\.000 Candidatos Movidos/i)).toBeTruthy());
+    expect(screen.getByText(/509 candidaturas não foram/i)).toBeTruthy();
+  });
+
+  /** Na aba de alocados, finalizar não aparece (todo mundo já entregou posição). */
+  it("esconde finalizar posição na aba de alocados", () => {
+    montarFiltro(10, "alocados");
+    expect(screen.queryByRole("button", { name: /finalizar posição/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /desvincular da vaga/i })).toBeTruthy();
+  });
+
+  /** Desvincular por filtro manda o filtro e o motivo aparado, só DESCARTADO/DESISTIU. */
+  it("desvincular por filtro manda o filtro, o desfecho e o motivo", async () => {
+    montarFiltro(2509);
+    fireEvent.click(screen.getByRole("button", { name: /desvincular da vaga \(2509\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Desistiu Do Processo/i }));
+    fireEvent.change(screen.getByLabelText(/motivo da saída/i), {
+      target: { value: "  encerramento em massa  " },
+    });
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Desvincular da vaga" }).at(-1) as HTMLElement,
+    );
+
+    await waitFor(() => expect(registrarSaidaPorFiltro).toHaveBeenCalledTimes(1));
+    const [filtro, situacao, motivo] = registrarSaidaPorFiltro.mock.calls[0] as unknown as [
+      { vagaId: string },
+      string,
+      string,
+    ];
+    expect(filtro.vagaId).toBe("vaga-1");
+    expect(situacao).toBe("DESISTIU");
+    expect(motivo).toBe("encerramento em massa");
   });
 });

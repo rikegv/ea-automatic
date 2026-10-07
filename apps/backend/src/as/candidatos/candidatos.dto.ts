@@ -1,4 +1,9 @@
-import { Transform } from "class-transformer";
+// `reflect-metadata` PRIMEIRO, antes de qualquer decorador: o `Type()` do class-transformer chama
+// `Reflect.getMetadata` em tempo de import, entao quem importa este DTO ISOLADO (um spec de fonte que
+// nao sobe o Nest, que carrega o metadata no main.ts) explodia no import. Carregar aqui conserta para
+// todo importador, atual e futuro, sem o spec precisar saber do detalhe. (reflect-metadata e idempotente.)
+import "reflect-metadata";
+import { Transform, Type } from "class-transformer";
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -15,6 +20,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from "class-validator";
 /*
  * O NORMALIZADOR DE VALOR MONETÁRIO É O DA CASA, e não um segundo escrito aqui: ele já aceita as
@@ -28,8 +34,11 @@ import {
   AS_CONTATO_TIPO,
   AS_MAXIMO_POR_LOTE,
   UFS,
+  type AsCandidatoOrdenarPor,
   type AsCandidatoOrigem,
+  type AsCandidaturaDaVagaOrdenarPor,
   type AsContatoTipo,
+  type AsDirecaoOrdenacao,
   type CandidaturaEtapa,
 } from "@ea/shared-types";
 import {
@@ -210,6 +219,52 @@ export class EditarCandidatoDto {
 export const BUSCA_LIMITE_PADRAO = 200;
 export const BUSCA_LIMITE_MAXIMO = 500;
 
+/*
+ * ─ O VOCABULARIO FECHADO DA ORDENACAO (paginacao no servidor, 07/10/2026) ──────────────────────
+ *
+ * ┌─ POR QUE `@IsIn` AQUI E LEGITIMO, AO CONTRARIO DO `MoverEtapaDto` ──────────────────────────┐
+ * │ O `MoverEtapaDto` tirou o `@IsIn` porque a etapa e DADO DO DIRETOR (`as_etapas_funil`), que  │
+ * │ muda sem deploy. Aqui o valor e uma CHAVE DE COLUNA do contrato (`AsCandidatoOrdenarPor`): e │
+ * │ vocabulario do sistema, nao catalogo editavel, entao congelar a lista e o comportamento      │
+ * │ correto. Valor fora da lista e tela desatualizada ou chamada forjada, e recusar e o certo.   │
+ * │                                                                                             │
+ * │ O ARRAY VIVE AQUI, e nao no `@ea/shared-types`, porque o tipo de la e uma UNIAO de literais  │
+ * │ (sem forma de valor em runtime). Derivar o array do tipo nao da; redigita-lo com o tipo       │
+ * │ anotado e o que mantem os dois em sincronia (o compilador recusa um membro a mais ou a menos).│
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const ORDENAR_CANDIDATOS: AsCandidatoOrdenarPor[] = [
+  "candidato",
+  "vaga",
+  "cliente",
+  "cargo",
+  "etapa",
+  "situacao",
+  "ultimoContato",
+  "criadoEm",
+];
+const DIRECOES_ORDENACAO: AsDirecaoOrdenacao[] = ["asc", "desc"];
+
+/*
+ * ─ O ESCOPO DA VISAO E VOCABULARIO FECHADO, COMO A ORDENACAO (paginacao no servidor, 07/10/2026) ─
+ *
+ * `andamento` e a frente de trabalho; `historico` e quem ja recebeu desfecho. Era um recorte
+ * client-side em `linhasSemCard` (`as/candidatos/page.tsx`), e nunca houve como aplica-lo no
+ * navegador sobre 83 mil linhas que ele deixou de segurar. Vira predicado SERVER-SIDE, na BASE dos
+ * filtros, para recortar a lista E a conta dos cards pela MESMA regua (senao o card discorda da
+ * tabela). As duas chaves sao do SISTEMA, nao catalogo editavel, entao o `@IsIn` congelado e o certo
+ * (mesmo argumento do `ORDENAR_CANDIDATOS`). O tipo NAO vem do `@ea/shared-types`: ele e inline aqui
+ * porque o vocabulario e privado deste DTO e a frente nao toca o pacote compartilhado.
+ */
+const ESCOPOS_DA_BUSCA = ["andamento", "historico"] as const;
+type EscopoDaBusca = (typeof ESCOPOS_DA_BUSCA)[number];
+const ORDENAR_CANDIDATURAS_DA_VAGA: AsCandidaturaDaVagaOrdenarPor[] = [
+  "candidato",
+  "etapa",
+  "situacao",
+  "ultimoContato",
+];
+
 export class BuscarCandidatosDto {
   /** Trecho do nome. Busca sem acento e sem caixa é resolvida no service. */
   @IsOptional()
@@ -317,6 +372,207 @@ export class BuscarCandidatosDto {
   @IsString()
   @MaxLength(40)
   filtroCardSituacao?: string;
+
+  /**
+   * ─ A ORDENACAO VIAJA AO SERVIDOR (paginacao no servidor, 07/10/2026) ──────────────────────────
+   *
+   * Ela deixou de ser client-side: nunca houve como ordenar no navegador 83 mil linhas que ele nao
+   * segura mais. A chave e FECHADA (`@IsIn` sobre `ORDENAR_CANDIDATOS`), e a direcao idem. AUSENTE
+   * vale `criadoEm desc`, que e exatamente a ordem que a lista ja tinha: nenhum chamador antigo muda.
+   * etapa e situacao ordenam pelo CATALOGO (ordem do funil, `array_position` da situacao), nunca pelo
+   * texto, e o desempate por `id` e sempre anexado no service (sem ele a paginacao duplica ou perde
+   * linha). §A.6: sao chaves de coluna, nenhum dado pessoal.
+   */
+  @IsOptional()
+  @IsIn(ORDENAR_CANDIDATOS)
+  ordenarPor?: AsCandidatoOrdenarPor;
+
+  @IsOptional()
+  @IsIn(DIRECOES_ORDENACAO)
+  direcao?: AsDirecaoOrdenacao;
+
+  /*
+   * ─ OS TRES FILTROS QUE SAIRAM DO NAVEGADOR PARA A BASE (paginacao no servidor, 07/10/2026) ──────
+   *
+   * ┌─ POR QUE ELES ENTRAM NA BASE, E NAO NO FILTRO DE CARD ──────────────────────────────────────┐
+   * │ O `filtroCardEtapa`/`filtroCardSituacao` entram so na LISTA (`filtrosLista`), nunca no KPI,   │
+   * │ porque clicar num card NAO pode zerar os outros cards. Estes tres sao o OPOSTO: eles recortam │
+   * │ o CONJUNTO sobre o qual os cards sao contados, entao entram na BASE (`filtros`) e valem para  │
+   * │ a lista E para os KPIs por construcao. Trocar a aba Em Andamento/Historico, o cliente ou a    │
+   * │ etapa muda os cards e a tabela JUNTOS, que e o que impede o card de discordar do que a lista  │
+   * │ mostra. A regua de casamento e a MESMA que o client-side ja fazia em `linhasSemCard`.         │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: escopo e uma chave de vocabulario; cliente e o NOME de exibicao (nao identifica pessoa);
+   * etapa e um codigo de catalogo. Nenhum dado pessoal, e tudo no corpo do POST.
+   */
+
+  /**
+   * A VISAO: `andamento` (frente de trabalho) ou `historico` (ja recebeu desfecho). Ausente NAO
+   * recorta: a chamada ve a base inteira, como antes desta frente, e nenhum chamador antigo muda.
+   */
+  @IsOptional()
+  @IsIn(ESCOPOS_DA_BUSCA)
+  escopo?: EscopoDaBusca;
+
+  /**
+   * CLIENTE pelo NOME DE EXIBICAO (`coalesce(nome_operacao, razao_social)`), e nao pelo codigo: e
+   * exatamente o que o filtro client-side `fCliente` casava, contra o `clienteNome` da projecao do
+   * funil, e a opcao do seletor vem do mesmo nome (`/as/candidatos/opcoes`). VALOR UNICO por ora,
+   * porque o client-side de hoje e valor unico; §A.28 (multiselect) fica anotado para quando a tela
+   * oferecer varios. SEM `@IsIn`: o nome e dado (clientes), quem casa e a clausula no banco, o DTO
+   * defende so a FORMA.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(200)
+  cliente?: string;
+
+  /**
+   * ETAPA pelo CODIGO, e o alcance e SO-VIVOS, exatamente como o `fEtapa` client-side: ele recortava
+   * `candidaturaViva(situacao)` E `etapa = <valor>`, entao filtrar "Triagem" traz tambem quem foi
+   * APROVADO ou ALOCADO estando na Triagem, e nunca quem foi descartado la. VALOR UNICO por ora
+   * (§A.28 anotado). SEM `@IsIn`: a lista de etapas e dado do diretor (`as_etapas_funil`), um `@IsIn`
+   * congelado recusaria a etapa nova e aceitaria a inativada; quem casa e a clausula no banco.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(40)
+  etapa?: string;
+}
+
+/*
+ * ─ O RECORTE DA ABA VER CANDIDATOS, PAGINADO NO SERVIDOR (07/10/2026) ──────────────────────────
+ *
+ * O painel da vaga baixava TODAS as candidaturas de uma vez (ate 2.509 medidas) e janelava no
+ * cliente. A aba Ver Candidatos passa a paginar no servidor, pelo endpoint IRMAO de `painelVaga`
+ * (`POST /as/candidatos/vaga/:vagaId/candidaturas`), e estes corpos carregam o MESMO recorte que a
+ * tela ja fazia client-side (`as-painel-recorte.ts`): aba, busca por nome, situacao e etapa.
+ *
+ * §A.6: busca por NOME, nunca CPF, e tudo no CORPO (POST), nunca em query string. As candidaturas
+ * sao de UMA vaga autorizada, onde `AsCandidaturaItem` ja e permitido.
+ *
+ * §A.28: situacao e etapa sao MULTISELECT (array), pela regua de que todo filtro aceita varios
+ * valores. Lista vazia quer dizer "todos", a convencao do sistema.
+ */
+const ABAS_VER_CANDIDATOS = ["candidatos", "alocados"] as const;
+type AbaVerCandidatos = (typeof ABAS_VER_CANDIDATOS)[number];
+
+/** Os campos comuns do recorte da vaga, herdados pelos corpos da pagina e do ids-only. */
+export class RecorteDaVagaDto {
+  /**
+   * `candidatos` e a lista inteira da vaga; `alocados` e o recorte de quem ENTREGOU posicao
+   * (`finalizaPosicao`), a MESMA regua que define a aba na tela. Ausente vale `candidatos`.
+   */
+  @IsOptional()
+  @IsIn(ABAS_VER_CANDIDATOS)
+  aba?: AbaVerCandidatos;
+
+  /** Trecho do NOME. Sem acento e sem caixa e resolvido no service, como na busca da Central. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(200)
+  busca?: string;
+
+  /**
+   * SITUACOES a casar (multiselect, §A.28). Vocabulario fechado, mas quem casa e a clausula no banco,
+   * nao um decorator: valor desconhecido simplesmente nao encontra linha. O DTO defende so a FORMA.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  filtroSituacao?: string[];
+
+  /**
+   * ETAPAS a casar (multiselect, §A.28). Pode conter o valor especial "fora do funil", resolvido no
+   * service pela MESMA regua de `etapaVisivel`: quem saiu do funil nao tem etapa de posicao atual.
+   * Codigo de etapa e `varchar(40)`; os 60 aqui deixam o valor especial caber na FORMA.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  filtroEtapa?: string[];
+}
+
+/** O corpo da PAGINA da aba Ver Candidatos: recorte + ordenacao + fatia. */
+export class CandidaturasDaVagaDto extends RecorteDaVagaDto {
+  /** Chave FECHADA de coluna (`AsCandidaturaDaVagaOrdenarPor`). Ausente vale `alocadoEm desc`. */
+  @IsOptional()
+  @IsIn(ORDENAR_CANDIDATURAS_DA_VAGA)
+  ordenarPor?: AsCandidaturaDaVagaOrdenarPor;
+
+  @IsOptional()
+  @IsIn(DIRECOES_ORDENACAO)
+  direcao?: AsDirecaoOrdenacao;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? Number(value) : value))
+  @IsInt()
+  @Min(1)
+  @Max(BUSCA_LIMITE_MAXIMO)
+  limite?: number;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? Number(value) : value))
+  @IsInt()
+  @Min(0)
+  offset?: number;
+}
+
+/**
+ * O corpo do endpoint IDS-ONLY (`POST .../candidaturas/ids`): o MESMO recorte, sem pagina nem ordem.
+ * Devolve so os UUIDs das candidaturas que casam o filtro, para a selecao manual de um subconjunto
+ * grande sem baixar PII (§A.6). So o recorte importa aqui: a ordem dos ids e irrelevante para selecao.
+ */
+export class IdsDasCandidaturasDaVagaDto extends RecorteDaVagaDto {}
+
+/**
+ * ─ O ALVO POR FILTRO DAS ACOES EM MASSA SEM TETO (decisao do diretor, 07/10/2026) ─────────────
+ *
+ * ┌─ O QUE ELE E, E POR QUE NAO TEM TETO ──────────────────────────────────────────────────────┐
+ * │ O diretor quer AGIR SOBRE TODOS OS CANDIDATOS DO FILTRO de uma vez, sem o teto de 200. Entao  │
+ * │ em vez da LISTA de ids (o modo que continua existindo, com o teto de `AS_MAXIMO_POR_LOTE` por │
+ * │ protecao de payload), a tela manda o FILTRO, e o servidor resolve o conjunto inteiro. So UM   │
+ * │ dos dois modos por chamada, conferido no service.                                            │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `vagaId` e a vaga DO RECORTE (de onde as candidaturas saem), e nao o destino: na troca de vaga em
+ * massa, o destino continua vindo no `vagaId` do corpo da acao, e este `vagaId` e a vaga de ORIGEM.
+ * `aba` aceita tambem `disponiveis`, que e a fonte da adicao em massa (gente ainda fora da vaga).
+ */
+const ABAS_ALVO_FILTRO = ["candidatos", "alocados", "disponiveis"] as const;
+type AbaAlvoFiltro = (typeof ABAS_ALVO_FILTRO)[number];
+
+export class AlvoPorFiltroDaVagaDto {
+  @IsUUID()
+  vagaId!: string;
+
+  @IsOptional()
+  @IsIn(ABAS_ALVO_FILTRO)
+  aba?: AbaAlvoFiltro;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(200)
+  busca?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  filtroSituacao?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  filtroEtapa?: string[];
 }
 
 /** Alocar a pessoa numa vaga: nasce em CAPTACAO e ATIVO, e ATIVO não consome posição. */
@@ -672,6 +928,15 @@ const ListaEmMassa = (): PropertyDecorator => (alvo, chave) => {
 };
 
 /**
+ * O FILTRO ANINHADO dos corpos POR FILTRO (modo sem teto). `@ValidateNested` + `@Type` para o
+ * validador descer ao objeto. Obrigatorio: sem o alvo, a acao por filtro nao sabe sobre QUEM agir.
+ */
+const FiltroAninhado = (): PropertyDecorator => (alvo, chave) => {
+  ValidateNested()(alvo, chave);
+  Type(() => AlvoPorFiltroDaVagaDto)(alvo, chave);
+};
+
+/**
  * ADICIONAR CANDIDATOS À VAGA EM MASSA. É a `alocar`, N vezes, e NÃO consome posição: quem entra no
  * funil nasce `ATIVO`, e `ATIVO` não ocupa nada. Uma vaga de 10 recebe 40 currículos, que é o normal.
  *
@@ -850,4 +1115,93 @@ export class TrocarVagaEmLoteDto {
   @IsString()
   @MaxLength(500)
   motivo?: string;
+}
+
+/**
+ * ─ OS CORPOS DAS ACOES EM MASSA POR FILTRO, SEM TETO (decisao do diretor, 07/10/2026) ──────────
+ *
+ * ┌─ O MODO FILTRO E O IRMAO SEM TETO DO MODO LISTA ───────────────────────────────────────────┐
+ * │ No modo LISTA (os corpos `*EmLote` acima) a tela manda os ids marcados, com o teto de 200    │
+ * │ por protecao de PAYLOAD. No modo FILTRO a tela manda o ALVO (`filtro`), e o servidor resolve │
+ * │ o conjunto INTEIRO e age sobre ele, SEM teto: o corpo nao carrega lista nenhuma, entao nao    │
+ * │ ha payload a limitar. A acao aplicada e a MESMA da unitaria, linha a linha, com a MESMA trava │
+ * │ e a MESMA autorizacao. Por isso cada corpo carrega o `filtro` e os MESMOS parametros da acao. │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O retorno destes caminhos e `AsResultadoAcaoEmMassa` (`{ afetados, falharam }`): contagens, nunca
+ * a lista de falhas com motivo, que num conjunto de milhares seria relatorio de dado pessoal (§A.6).
+ */
+
+/** DESVINCULAR (e ENVIAR PARA ADMISSAO) por filtro: a `registrarSaida`, sobre todo o conjunto. */
+export class RegistrarSaidaPorFiltroDto {
+  @FiltroAninhado()
+  filtro!: AlvoPorFiltroDaVagaDto;
+
+  /** A MESMA lista do dominio do corpo individual. `ALOCADO` fica de fora: alocar nao e sair. */
+  @IsIn(SITUACOES_DE_SAIDA as unknown as string[])
+  situacao!: SituacaoDeSaida;
+
+  /** Obrigatorio e aparado ANTES de validado, como no lote: desfecho sem motivo e o buraco do ajuste 7. */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(2)
+  @MaxLength(500)
+  motivo!: string;
+}
+
+/** MOVER NO FUNIL por filtro: a `moverEtapa`, sobre todo o conjunto. */
+export class MoverEtapaPorFiltroDto {
+  @FiltroAninhado()
+  filtro!: AlvoPorFiltroDaVagaDto;
+
+  /** Só a etapa de DESTINO. A validacao contra o catalogo vive no service, como no `MoverEtapaDto`. */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  etapa!: CandidaturaEtapa;
+}
+
+/** TROCAR A VAGA por filtro: a `trocarVaga`, sobre todo o conjunto da vaga de ORIGEM. */
+export class TrocarVagaPorFiltroDto {
+  /** A vaga de ORIGEM e o `filtro.vagaId`: de onde a selecao inteira sai. */
+  @FiltroAninhado()
+  filtro!: AlvoPorFiltroDaVagaDto;
+
+  /** A vaga de DESTINO, como no corpo individual. As travas dela sao conferidas por linha. */
+  @IsUUID()
+  vagaId!: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  motivo?: string;
+}
+
+/** FINALIZAR POSICAO por filtro: a `finalizarPosicao`, sobre todo o conjunto. */
+export class FinalizarPosicaoPorFiltroDto {
+  @FiltroAninhado()
+  filtro!: AlvoPorFiltroDaVagaDto;
+
+  @IsOptional()
+  @IsIn(POSICAO_LADOS as unknown as string[])
+  lado?: PosicaoLado;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  cienteBancoComOficiaisAbertas?: boolean;
+}
+
+/** ADICIONAR A VAGA por filtro: a `alocar`, sobre todos os DISPONIVEIS (gente fora da vaga). */
+export class AdicionarPorFiltroDto {
+  /** `filtro.vagaId` e a vaga de DESTINO; os disponiveis sao quem ainda nao tem viva nela. */
+  @FiltroAninhado()
+  filtro!: AlvoPorFiltroDaVagaDto;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  cienteReentrada?: boolean;
 }

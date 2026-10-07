@@ -27,12 +27,17 @@ import { apiFetch, ApiError } from "@/lib/api";
 import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
   type AsCandidatoFicha,
+  type AsCandidatoOrdenarPor,
   type AsCandidatoOrigem,
   type AsCandidatosOpcoes,
   type AsCandidatosPagina,
+  type AsCandidaturaDaVagaOrdenarPor,
   type AsCandidaturaItem,
+  type AsCandidaturasDaVagaPagina,
   type AsContatoItem,
+  type AsDirecaoOrdenacao,
   type AsReentradaPrecisaCiencia,
+  type AsResultadoAcaoEmMassa,
   type CandidaturaEtapa,
   type CandidaturaSituacao,
 } from "@ea/shared-types";
@@ -54,6 +59,18 @@ export interface BuscaCandidatos {
    */
   origem?: AsCandidatoOrigem;
   vagaId?: string;
+  /**
+   * ─ OS TRES FILTROS QUE SAIRAM DO NAVEGADOR PARA A BASE (paginacao no servidor, 07/10/2026) ─────
+   *
+   * `escopo`, `cliente` e `etapa` recortavam a tela no cliente (`linhasSemCard`), sobre a lista que a
+   * carga de fundo acumulava. Sem a carga de fundo, o navegador segura so a pagina atual, entao estes
+   * tres viajam ao servidor, que ja os aceita: entram na BASE da busca (valem para a lista E para os
+   * KPIs), nunca no filtro de card. §A.6: escopo e chave fechada, cliente e um NOME de exibicao de
+   * catalogo, etapa e um codigo de catalogo. Nenhum e dado pessoal e todos viajam no CORPO do POST.
+   */
+  escopo?: "andamento" | "historico";
+  cliente?: string;
+  etapa?: string;
   /**
    * SÓ QUEM NÃO ESTÁ EM VAGA NENHUMA. É o filtro que abre a alocação SEM CPF: a lista devolve nome,
    * cidade/UF, origem e `temCpf`, e a alocação segue pelo `id`, que sempre foi a chave da tabela.
@@ -77,6 +94,16 @@ export interface BuscaCandidatos {
    */
   filtroCardEtapa?: string;
   filtroCardSituacao?: string;
+  /**
+   * ─ A ORDENACAO VIAJA AO SERVIDOR (paginacao no servidor, 07/10/2026) ──────────────────────────
+   *
+   * Ela deixou de ser client-side: nunca houve como ordenar no navegador as 83 mil linhas que ele
+   * nao segura mais. A chave e FECHADA (`AsCandidatoOrdenarPor`, espelho do `@IsIn` do DTO), e a
+   * direcao idem. AUSENTE vale `criadoEm desc` no servidor, que e exatamente a ordem que a lista ja
+   * tinha, entao nenhum chamador antigo muda. §A.6: sao chaves de coluna, nenhum dado pessoal.
+   */
+  ordenarPor?: AsCandidatoOrdenarPor;
+  direcao?: AsDirecaoOrdenacao;
 }
 
 /**
@@ -102,6 +129,11 @@ export function buscarCandidatos(
   if (filtros.cpf?.trim()) body.cpf = filtros.cpf.trim();
   if (filtros.origem) body.origem = filtros.origem;
   if (filtros.vagaId) body.vagaId = filtros.vagaId;
+  // ESCOPO/CLIENTE/ETAPA viajam ao servidor (paginacao no servidor): entram na base da busca. Campo
+  // vazio nao e enviado, para o backend nao receber filtro em branco e devolver lista vazia.
+  if (filtros.escopo) body.escopo = filtros.escopo;
+  if (filtros.cliente?.trim()) body.cliente = filtros.cliente.trim();
+  if (filtros.etapa?.trim()) body.etapa = filtros.etapa.trim();
   // Booleano só é enviado quando VERDADEIRO: `semCandidatura: false` no corpo diria ao backend algo
   // que ele não precisa ouvir, e a busca padrão é justamente "todo mundo".
   if (filtros.semCandidatura) body.semCandidatura = true;
@@ -109,6 +141,12 @@ export function buscarCandidatos(
   if (filtros.offset) body.offset = filtros.offset;
   if (filtros.filtroCardEtapa) body.filtroCardEtapa = filtros.filtroCardEtapa;
   if (filtros.filtroCardSituacao) body.filtroCardSituacao = filtros.filtroCardSituacao;
+  // A ORDENACAO so entra quando a tela escolheu uma coluna: ausente, o backend aplica `criadoEm
+  // desc`, que e a ordem de sempre. Mandar os dois ou nenhum; direcao sem coluna o DTO ignora.
+  if (filtros.ordenarPor) {
+    body.ordenarPor = filtros.ordenarPor;
+    if (filtros.direcao) body.direcao = filtros.direcao;
+  }
   return apiFetch<AsCandidatosPagina>("/as/candidatos/buscar", {
     method: "POST",
     token,
@@ -206,6 +244,191 @@ export function painelDaVaga(
 ): Promise<{ candidaturas: AsCandidaturaItem[] }> {
   return apiFetch<{ candidaturas: AsCandidaturaItem[] }>(`/as/candidatos/vaga/${vagaId}`, {
     token,
+  });
+}
+
+// ── A ABA VER CANDIDATOS, PAGINADA NO SERVIDOR ──────────────────────────────
+//
+// O `painelDaVaga` acima baixa TODAS as candidaturas de uma vez (ate 2.509 medidas) e deixa o
+// navegador janelar no cliente. Estas funcoes sao as IRMAS paginadas: o servidor devolve so a
+// pagina pedida (`POST .../candidaturas`), so os ids do recorte (`POST .../candidaturas/ids`, para
+// o "selecionar todos" sem baixar PII) e age sobre o CONJUNTO INTEIRO do filtro, sem teto, nas cinco
+// acoes por-filtro. O `painelDaVaga` CONTINUA, servindo o modal de visualizacao simples e a
+// `abrirAcao` da Central de Candidatos (§A.26: outros leitores dependem dele; nao foi tocado).
+//
+// §A.6: a busca e por NOME, nunca CPF, e tudo viaja no CORPO do POST, nunca em query string. As
+// candidaturas sao de UMA vaga autorizada, onde `AsCandidaturaItem` ja e permitido. Os ids do
+// endpoint ids-only sao UUID, sem nada pessoal.
+
+/** As abas da tabela de candidaturas da vaga. `candidatos` e a lista inteira; `alocados` o recorte. */
+export type AbaDaVaga = "candidatos" | "alocados";
+
+/**
+ * O RECORTE SERVER-SIDE da aba Ver Candidatos, o que antes era client-side (`as-painel-recorte`):
+ * aba, busca por nome, situacao e etapa (§A.28, multiselect; lista vazia quer dizer "todos").
+ */
+export interface RecorteDaVaga {
+  aba?: AbaDaVaga;
+  busca?: string;
+  filtroSituacao?: string[];
+  filtroEtapa?: string[];
+}
+
+/** Monta o corpo do recorte, incluindo so o que foi preenchido (array vazio = "todos", omitido). */
+function corpoDoRecorte(recorte: RecorteDaVaga): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (recorte.aba) body.aba = recorte.aba;
+  if (recorte.busca?.trim()) body.busca = recorte.busca.trim();
+  if (recorte.filtroSituacao?.length) body.filtroSituacao = recorte.filtroSituacao;
+  if (recorte.filtroEtapa?.length) body.filtroEtapa = recorte.filtroEtapa;
+  return body;
+}
+
+/** UMA PAGINA das candidaturas da vaga. `resumo` (ocupacao da vaga INTEIRA) vem so no offset 0. */
+export function buscarCandidaturasDaVaga(
+  vagaId: string,
+  params: RecorteDaVaga & {
+    ordenarPor?: AsCandidaturaDaVagaOrdenarPor;
+    direcao?: AsDirecaoOrdenacao;
+    limite?: number;
+    offset?: number;
+  },
+  token: string | null,
+): Promise<AsCandidaturasDaVagaPagina> {
+  const body = corpoDoRecorte(params);
+  if (params.ordenarPor) {
+    body.ordenarPor = params.ordenarPor;
+    if (params.direcao) body.direcao = params.direcao;
+  }
+  if (params.limite) body.limite = params.limite;
+  if (params.offset) body.offset = params.offset;
+  return apiFetch<AsCandidaturasDaVagaPagina>(`/as/candidatos/vaga/${vagaId}/candidaturas`, {
+    method: "POST",
+    token,
+    body,
+  });
+}
+
+/**
+ * SO OS IDS (UUID) das candidaturas que casam o recorte, sem baixar nenhuma linha nem PII. E o que o
+ * "selecionar todos do filtro" usa para materializar a selecao quando a acao escolhida nao tem rota
+ * por-filtro propria. §A.6: a resposta e um array de UUID, nada pessoal.
+ */
+export function idsDasCandidaturasDaVaga(
+  vagaId: string,
+  recorte: RecorteDaVaga,
+  token: string | null,
+): Promise<string[]> {
+  return apiFetch<string[]>(`/as/candidatos/vaga/${vagaId}/candidaturas/ids`, {
+    method: "POST",
+    token,
+    body: corpoDoRecorte(recorte),
+  });
+}
+
+// ── AS CINCO ACOES EM MASSA POR FILTRO, SEM TETO ────────────────────────────
+//
+// A tela manda o ALVO (`filtro`) e o servidor resolve o conjunto INTEIRO e age sobre ele, em lotes
+// internos, sem o teto de 200 que protege o modo ids (payload). A acao aplicada e a MESMA da unitaria,
+// linha a linha, com a MESMA trava e a MESMA autorizacao. O retorno e sempre contagem
+// (`AsResultadoAcaoEmMassa` = { afetados, falharam }), nunca a lista de falhas com motivo, que num
+// conjunto de milhares seria relatorio de dado pessoal (§A.6).
+//
+// IMPORTANTE, as rotas sao `candidaturas/por-filtro/...`, NAO `vaga/:id/...`: o `vagaId` (a vaga de
+// ORIGEM do recorte) viaja DENTRO do `filtro`. Confirmado no controller.
+
+/**
+ * O ALVO das acoes por filtro: o recorte da vaga, com o `vagaId` obrigatorio (a vaga de ORIGEM). A aba
+ * aqui aceita tambem `disponiveis`, que e a fonte da adicao em massa (gente ainda fora da vaga).
+ */
+export interface AlvoPorFiltroDaVaga {
+  vagaId: string;
+  aba?: AbaDaVaga | "disponiveis";
+  busca?: string;
+  filtroSituacao?: string[];
+  filtroEtapa?: string[];
+}
+
+/** Monta o `{ filtro }` aninhado, incluindo so o que foi preenchido. `vagaId` e sempre enviado. */
+function corpoDoFiltro(filtro: AlvoPorFiltroDaVaga): Record<string, unknown> {
+  const f: Record<string, unknown> = { vagaId: filtro.vagaId };
+  if (filtro.aba) f.aba = filtro.aba;
+  if (filtro.busca?.trim()) f.busca = filtro.busca.trim();
+  if (filtro.filtroSituacao?.length) f.filtroSituacao = filtro.filtroSituacao;
+  if (filtro.filtroEtapa?.length) f.filtroEtapa = filtro.filtroEtapa;
+  return f;
+}
+
+/** DESVINCULAR (ou ENVIAR PARA ADMISSAO) por filtro: a `registrarSaida`, sobre todo o conjunto. */
+export function registrarSaidaPorFiltro(
+  filtro: AlvoPorFiltroDaVaga,
+  situacao: "DESCARTADO" | "DESISTIU" | "ENVIADO_PARA_ADMISSAO",
+  motivo: string,
+  token: string | null,
+): Promise<AsResultadoAcaoEmMassa> {
+  return apiFetch<AsResultadoAcaoEmMassa>("/as/candidatos/candidaturas/por-filtro/saida", {
+    method: "POST",
+    token,
+    body: { filtro: corpoDoFiltro(filtro), situacao, motivo },
+  });
+}
+
+/** MOVER NO FUNIL por filtro: a `moverEtapa`, sobre todo o conjunto. So a etapa de DESTINO. */
+export function moverEtapaPorFiltro(
+  filtro: AlvoPorFiltroDaVaga,
+  etapa: CandidaturaEtapa,
+  token: string | null,
+): Promise<AsResultadoAcaoEmMassa> {
+  return apiFetch<AsResultadoAcaoEmMassa>("/as/candidatos/candidaturas/por-filtro/etapa", {
+    method: "PATCH",
+    token,
+    body: { filtro: corpoDoFiltro(filtro), etapa },
+  });
+}
+
+/** TROCAR A VAGA por filtro: a `trocarVaga`, sobre todo o conjunto da vaga de ORIGEM. */
+export function trocarVagaPorFiltro(
+  filtro: AlvoPorFiltroDaVaga,
+  vagaId: string,
+  motivo: string | undefined,
+  token: string | null,
+): Promise<AsResultadoAcaoEmMassa> {
+  const body: Record<string, unknown> = { filtro: corpoDoFiltro(filtro), vagaId };
+  if (motivo) body.motivo = motivo;
+  return apiFetch<AsResultadoAcaoEmMassa>("/as/candidatos/candidaturas/por-filtro/vaga", {
+    method: "PATCH",
+    token,
+    body,
+  });
+}
+
+/** FINALIZAR POSICAO por filtro: a `finalizarPosicao`, sobre todo o conjunto. */
+export function finalizarPosicaoPorFiltro(
+  filtro: AlvoPorFiltroDaVaga,
+  token: string | null,
+  opts: { lado?: PosicaoLado; cienteBancoComOficiaisAbertas?: boolean } = {},
+): Promise<AsResultadoAcaoEmMassa> {
+  const body: Record<string, unknown> = { filtro: corpoDoFiltro(filtro) };
+  if (opts.lado) body.lado = opts.lado;
+  if (opts.cienteBancoComOficiaisAbertas) body.cienteBancoComOficiaisAbertas = true;
+  return apiFetch<AsResultadoAcaoEmMassa>(
+    "/as/candidatos/candidaturas/por-filtro/finalizar-posicao",
+    { method: "POST", token, body },
+  );
+}
+
+/** ADICIONAR A VAGA por filtro: a `alocar`, sobre todos os DISPONIVEIS (gente fora da vaga). */
+export function adicionarPorFiltro(
+  filtro: AlvoPorFiltroDaVaga,
+  token: string | null,
+  opts: { cienteReentrada?: boolean } = {},
+): Promise<AsResultadoAcaoEmMassa> {
+  const body: Record<string, unknown> = { filtro: corpoDoFiltro(filtro) };
+  if (opts.cienteReentrada) body.cienteReentrada = true;
+  return apiFetch<AsResultadoAcaoEmMassa>("/as/candidatos/candidaturas/por-filtro/adicionar", {
+    method: "POST",
+    token,
+    body,
   });
 }
 

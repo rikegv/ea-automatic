@@ -1,38 +1,42 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AsCandidaturaItem, VagaListItem } from "@ea/shared-types";
+import type {
+  AsCandidaturaItem,
+  AsCandidaturasDaVagaPagina,
+  AsOcupacaoVaga,
+  VagaListItem,
+} from "@ea/shared-types";
 
 /**
- * ─ A JANELA DE RENDER NÃO PODE QUEBRAR O "SELECIONAR TODOS" (cobertura independente, §A.38) ─────
+ * ─ A PÁGINA NO SERVIDOR DESENHA SÓ A PÁGINA, E "TODOS DO FILTRO" COBRE O TOTAL (§A.38) ──────────
  *
- * ESCRITA POR OUTRA CABEÇA, SEM LER A SUPOSIÇÃO DO AUTOR. O spec de recorte-e-seleção do painel usa
- * NOVE linhas, ABAIXO do limiar `JANELA_INICIAL = 80`, então nunca exercita o fatiamento: naquele
- * arquivo `ord.itens.slice(0, janela)` desenha a lista inteira, e um "selecionar todos" que, por
- * engano, operasse sobre as linhas DESENHADAS passaria verde ali.
+ * ESCRITA POR OUTRA CABEÇA. Antes esta cobertura travava o render em janela (desenhar 80 de 150 no
+ * cliente). A aba agora PAGINA NO SERVIDOR: o backend devolve só a página, e a invariante que o
+ * diretor pinou (ec2ea83) é que "selecionar todos" e as contagens operam sobre o CONJUNTO INTEIRO do
+ * filtro, nunca sobre a página.
  *
- * O REQUISITO QUE ESTE ARQUIVO TRAVA, com MAIS de 80 candidaturas:
- *   (a) "selecionar todos" marca TODAS (150), e não só as 80 pintadas no primeiro frame;
- *   (b) a barra da seleção conta o conjunto INTEIRO (150), não a janela;
- *   (c) a tabela NÃO desenha as 150 de uma vez: o `<tbody>` tem só `JANELA_INICIAL` linhas enquanto a
- *       revelação de segundo plano não andou (o fatiamento vale de verdade).
- *
- * POR QUE FAKE TIMERS: a revelação de segundo plano (cadeia de setTimeout) salta de 80 para 150 no
- * PRIMEIRO disparo (`JANELA_PASSO = 200`, capado em 150). Deixar o relógio real correr tornaria "(c)"
- * uma corrida: ou mede 80, ou mede 150, conforme a máquina. Congelando o tempo, a janela fica em 80
- * até eu mandar avançar, e o salto para 150 vira uma asserção A MAIS, em vez de um risco de flake.
+ * O REQUISITO QUE ESTE ARQUIVO TRAVA, com um total MUITO maior que a página:
+ *   (a) o `<tbody>` desenha SÓ a página do servidor (`limite`), não as 2.509 de uma vez;
+ *   (b) "selecionar todos do recorte" liga o modo "todos do filtro" e a barra conta o TOTAL (2.509),
+ *       sem baixar as 2.509 linhas (o navegador nunca segura o conjunto inteiro).
  *
  * §A.6: dado sintético (nomes de catálogo, sem CPF). §A.11: sem travessão.
  */
 
-const { painelDaVaga } = vi.hoisted(() => ({ painelDaVaga: vi.fn() }));
+const { buscarCandidaturasDaVaga } = vi.hoisted(() => ({ buscarCandidaturasDaVaga: vi.fn() }));
 
 vi.mock("@/lib/as-candidatos", async () => {
   const real = await vi.importActual<typeof import("@/lib/as-candidatos")>("@/lib/as-candidatos");
-  return { ...real, painelDaVaga };
+  return { ...real, buscarCandidaturasDaVaga };
 });
 
-/** O catálogo de etapas vem da rede: dublado com a SEMENTE do vocabulário compartilhado. */
+// A paginação lê o token da sessão pelo `useAuth`; sem provider ele lançaria. Dublado com um token.
+vi.mock("@/lib/auth-context", async () => {
+  const real = await vi.importActual<typeof import("@/lib/auth-context")>("@/lib/auth-context");
+  return { ...real, useAuth: () => ({ token: "t" }) };
+});
+
 vi.mock("@/lib/as-etapas", async () => {
   const real = await vi.importActual<typeof import("@/lib/as-etapas")>("@/lib/as-etapas");
   const { ETAPAS_FUNIL_SEMENTE } = await vi.importActual<typeof import("@ea/shared-types")>(
@@ -60,8 +64,7 @@ vi.mock("@/lib/as-etapas", async () => {
 });
 
 vi.mock("@/lib/as-status-vaga", async () => {
-  const real =
-    await vi.importActual<typeof import("@/lib/as-status-vaga")>("@/lib/as-status-vaga");
+  const real = await vi.importActual<typeof import("@/lib/as-status-vaga")>("@/lib/as-status-vaga");
   return {
     ...real,
     useStatusVaga: () => ({
@@ -92,16 +95,27 @@ const VAGA = {
   ocupacao: { finalizadasOficial: 0, finalizadasBanco: 0, ocupadas: 0, livres: 200 },
 } as unknown as VagaListItem;
 
-/**
- * 150 CANDIDATURAS, TODAS VIVAS (`ATIVO`). Vivas de propósito: `podeDecidir` é verdadeiro para elas,
- * logo `idsVisiveis` (a base do "selecionar todos") é o conjunto inteiro, sem caixa desabilitada
- * confundindo a contagem. É o número que separa a janela (80) do conjunto (150).
- */
-const TOTAL = 150;
-const JANELA_INICIAL = 80; // espelha a constante de produção; se ela mudar, este teste acusa.
+const TOTAL = 2509;
+const PAGINA = 100; // espelha PAGINA_TAMANHO do componente; se ela mudar, este teste acusa.
 
-const LISTA: AsCandidaturaItem[] = Array.from({ length: TOTAL }, (_, i) => {
-  const n = String(i + 1).padStart(3, "0");
+/** O `resumo` é a ocupação da vaga INTEIRA (todas vivas em Triagem), não a página. */
+const RESUMO: AsOcupacaoVaga = {
+  vagaId: "vaga-1",
+  posicoesOficiais: 200,
+  ocupadas: 0,
+  finalizadas: 0,
+  finalizadasOficial: 0,
+  finalizadasBanco: 0,
+  livres: 200,
+  emSelecao: TOTAL,
+  fora: 0,
+  excedida: false,
+  porEtapa: { TRIAGEM: TOTAL },
+  porDesfecho: {},
+};
+
+function linhaFake(i: number): AsCandidaturaItem {
+  const n = String(i + 1).padStart(4, "0");
   return {
     id: `c${n}`,
     candidatoId: `p${n}`,
@@ -118,30 +132,36 @@ const LISTA: AsCandidaturaItem[] = Array.from({ length: TOTAL }, (_, i) => {
     atualizadoEm: "2026-09-02T12:00:00.000Z",
     ultimoContatoEm: null,
   } as AsCandidaturaItem;
-});
+}
 
-/**
- * Monta o painel com o tempo CONGELADO e o carregamento assíncrono já resolvido, sem deixar a cadeia
- * de revelação andar. `advanceTimersByTimeAsync(0)` flusha os microtasks (a promessa de
- * `painelDaVaga`) e roda só os timers vencidos em 0ms, nunca o de 150ms da revelação.
- */
 async function montar() {
-  vi.useFakeTimers();
-  painelDaVaga.mockResolvedValue({ candidaturas: LISTA });
+  buscarCandidaturasDaVaga.mockImplementation(
+    async (_vagaId: string, params: { offset?: number; limite?: number }): Promise<AsCandidaturasDaVagaPagina> => {
+      const offset = params.offset ?? 0;
+      const limite = params.limite ?? PAGINA;
+      const itens = Array.from({ length: Math.min(limite, TOTAL - offset) }, (_, i) =>
+        linhaFake(offset + i),
+      );
+      return {
+        itens,
+        total: TOTAL,
+        limite,
+        offset,
+        truncado: offset + itens.length < TOTAL,
+        ...(offset === 0 ? { resumo: RESUMO } : {}),
+      };
+    },
+  );
   render(
     <VagaPainelModal vaga={VAGA} token="t" onClose={() => {}} onMudou={vi.fn()} abaInicial="candidatos">
       <p>A ficha da vaga</p>
     </VagaPainelModal>,
   );
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0);
-  });
+  await waitFor(() => expect(linhasDesenhadas()).toBeGreaterThan(0));
 }
 
 afterEach(() => {
   cleanup();
-  vi.clearAllTimers();
-  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -162,68 +182,31 @@ function contadorDaBarra(): number {
   return n ? Number(n[1]) : 0;
 }
 
-describe("a janela de render e o selecionar todos (mais de 80 candidaturas)", () => {
-  it("(c) o tbody desenha só JANELA_INICIAL no primeiro frame, não as 150 de uma vez", async () => {
+describe("a página no servidor e o selecionar todos do filtro", () => {
+  it("(a) o tbody desenha SÓ a página do servidor, não as 2.509 de uma vez", async () => {
     await montar();
-    // A prova do fatiamento: 80 linhas pintadas, não 150. O texto de apoio confirma o total.
-    expect(linhasDesenhadas()).toBe(JANELA_INICIAL);
-    expect(screen.getByText(/desenhadas/i).parentElement?.textContent ?? "").toContain(
-      String(TOTAL),
-    );
+    expect(linhasDesenhadas()).toBe(PAGINA);
   });
 
-  it("(a)+(b) selecionar todos marca AS 150 e a barra conta 150, com só 80 desenhadas", async () => {
+  it("(b) selecionar todos do recorte liga o modo e a barra conta o TOTAL, sem baixar as 2.509", async () => {
     await montar();
-    expect(linhasDesenhadas()).toBe(JANELA_INICIAL);
     expect(contadorDaBarra()).toBe(0);
 
-    act(() => {
-      caixaDeTodos().click();
-    });
+    fireEvent.click(caixaDeTodos());
 
-    // A régua central: "todos" opera sobre `ord.itens` INTEIRO, não sobre a janela de 80.
+    // A régua do diretor: a seleção é sobre o CONJUNTO INTEIRO do filtro, não sobre a página.
     expect(contadorDaBarra()).toBe(TOTAL);
-    // E a tabela continua desenhando só 80: a seleção não force o render do conjunto inteiro.
-    expect(linhasDesenhadas()).toBe(JANELA_INICIAL);
-    // Toda linha DESENHADA está marcada (as 80 à vista refletem a seleção de 150).
-    const marcadas = Array.from(
-      document.querySelectorAll<HTMLInputElement>('tbody tr input[type="checkbox"]'),
-    ).filter((c) => c.checked).length;
-    expect(marcadas).toBe(JANELA_INICIAL);
+    // E a tabela continua desenhando só a página: ligar "todos" não força o render do conjunto.
+    expect(linhasDesenhadas()).toBe(PAGINA);
   });
 
-  it("o cabeçalho fica marcado porque TODO o conjunto (150) está selecionado, não só as 80 à vista", async () => {
+  it("a caixa do cabeçalho fica marcada quando o modo todos do filtro está ligado", async () => {
     await montar();
-
-    act(() => {
-      caixaDeTodos().click();
-    });
-
-    // `todosVisiveisMarcados` compara contra `idsVisiveis` (as 150), então só fica marcado se o
-    // conjunto inteiro entrou na seleção. Marcar só as 80 desenhadas deixaria esta caixa VAZIA.
+    fireEvent.click(caixaDeTodos());
     expect(caixaDeTodos().checked).toBe(true);
-    expect(contadorDaBarra()).toBe(TOTAL);
-  });
-
-  it("deixar a revelação andar completa a janela até 150 sem mexer na seleção de 150", async () => {
-    await montar();
-    act(() => {
-      caixaDeTodos().click();
-    });
-    expect(contadorDaBarra()).toBe(TOTAL);
-    expect(linhasDesenhadas()).toBe(JANELA_INICIAL);
-
-    // Avança o relógio: a cadeia de revelação salta de 80 para 150 (JANELA_PASSO cobre o resto).
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-
-    expect(linhasDesenhadas()).toBe(TOTAL);
-    // A seleção não foi tocada pela revelação, e agora as 150 desenhadas aparecem marcadas.
-    expect(contadorDaBarra()).toBe(TOTAL);
-    const marcadas = Array.from(
-      document.querySelectorAll<HTMLInputElement>('tbody tr input[type="checkbox"]'),
-    ).filter((c) => c.checked).length;
-    expect(marcadas).toBe(TOTAL);
+    // Clicar de novo limpa.
+    fireEvent.click(caixaDeTodos());
+    expect(contadorDaBarra()).toBe(0);
+    expect(caixaDeTodos().checked).toBe(false);
   });
 });

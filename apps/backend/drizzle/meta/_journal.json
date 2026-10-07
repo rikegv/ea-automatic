@@ -1037,6 +1037,20 @@
       "when": 1790646014719,
       "tag": "0147_envio_admissao_retrato_da_procedencia",
       "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1790646015719,
+      "tag": "0148_idx_as_candidaturas_situacao_etapa",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1790646016719,
+      "tag": "0149_grupo_cliente_meta",
+      "breakpoints": true
     }
   ]
 }

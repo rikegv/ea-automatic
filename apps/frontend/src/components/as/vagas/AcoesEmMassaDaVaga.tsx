@@ -44,6 +44,7 @@ import {
   CANDIDATURA_SITUACAO_LABEL,
   motivoVemDoCatalogo,
   type AsCandidaturaItem,
+  type AsResultadoAcaoEmMassa,
   type AsResultadoEmMassa,
   type CandidaturaEtapa,
   type VagaListItem,
@@ -53,7 +54,14 @@ import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { StatusPill } from "@/components/ui/StatusPill";
-import { mensagemDoErro } from "@/lib/as-candidatos";
+import {
+  finalizarPosicaoPorFiltro,
+  mensagemDoErro,
+  moverEtapaPorFiltro,
+  registrarSaidaPorFiltro,
+  type AbaDaVaga,
+  type AlvoPorFiltroDaVaga,
+} from "@/lib/as-candidatos";
 import { rotuloDaEtapa, useEtapas } from "@/lib/as-etapas";
 import {
   finalizarPosicaoEmLote,
@@ -105,14 +113,33 @@ const DESVINCULO: { situacao: Extract<SaidaEmLote, "DESCARTADO" | "DESISTIU">; r
 
 export function AcoesEmMassaDaVaga({
   vaga,
+  aba,
   selecionadas,
+  todosDoFiltro = false,
+  quantidade,
+  filtro,
   token,
   onLimpar,
   onFeito,
 }: {
   vaga: VagaListItem;
+  /** Em qual aba a barra está: decide se "Finalizar posição" faz sentido no modo "todos do filtro". */
+  aba?: AbaDaVaga;
   /** As candidaturas MARCADAS, inteiras: é delas que sai o nome que a lista de falhas mostra. */
   selecionadas: AsCandidaturaItem[];
+  /**
+   * ─ O MODO "APLICAR A TODOS DO FILTRO" (decisão do diretor, 07/10/2026) ──────────────────────────
+   *
+   * Quando ligado, as ações de STATUS agem sobre o CONJUNTO INTEIRO do recorte, SEM teto, mandando o
+   * FILTRO ao servidor (rotas por-filtro), e não a lista de ids. As duas ações de CREDENCIAL (Enviar
+   * Para Admissão e Enviar Shortlist) ficam DESABILITADAS aqui: enviar credencial exige seleção
+   * nominal, com a prévia de quem recebe o quê. Elas só voltam no modo de ids marcados.
+   */
+  todosDoFiltro?: boolean;
+  /** Quantas candidaturas a ação vai tocar: o `total` do filtro quando "todos", senão a seleção. */
+  quantidade?: number;
+  /** O alvo das rotas por-filtro: o recorte corrente mais a vaga de origem. Usado só no modo "todos". */
+  filtro?: AlvoPorFiltroDaVaga;
   token: string | null;
   onLimpar: () => void;
   /** Relê a lista da vaga, avisa a Central de Vagas e limpa a seleção. */
@@ -175,6 +202,24 @@ export function AcoesEmMassaDaVaga({
     } finally {
       setProcessando(false);
     }
+  }
+
+  // ─ O MODO "TODOS DO FILTRO" É OUTRA BARRA ──────────────────────────────────────────────────────
+  // Todos os hooks acima já rodaram, então este desvio no corpo do render é seguro (a quantidade de
+  // hooks não muda). Ele troca a barra inteira: no modo "todos", a ação manda o FILTRO ao servidor,
+  // sem teto, e as credenciais ficam de fora. A barra de ids (abaixo) continua exatamente como era.
+  if (todosDoFiltro && filtro) {
+    return (
+      <AcoesPorFiltroDaVaga
+        vaga={vaga}
+        aba={aba}
+        filtro={filtro}
+        quantidade={quantidade ?? 0}
+        token={token}
+        onLimpar={onLimpar}
+        onFeito={onFeito}
+      />
+    );
   }
 
   return (
@@ -904,4 +949,578 @@ function Secao({ titulo, children }: { titulo: string; children: React.ReactNode
 /** "1 pessoa" ou "N pessoas", com o plural calculado. §A.11: nada de "(s)" nem travessão. */
 function frasePessoas(n: number): string {
   return n === 1 ? "1 pessoa" : `${n} pessoas`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// O MODO "APLICAR A TODOS DO FILTRO", SEM TETO (decisão do diretor, 07/10/2026)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ─ A BARRA QUANDO "TODOS DO FILTRO" ESTÁ LIGADO ───────────────────────────────────────────────
+ *
+ * Aqui a ação NÃO manda ids: manda o FILTRO, e o servidor resolve o conjunto inteiro e age sobre
+ * ele em blocos, sem o teto de 200 (que protege só o payload do modo de ids). O retorno é CONTAGEM
+ * (`AsResultadoAcaoEmMassa`), nunca a lista de falhas com nome, que num conjunto de milhares seria
+ * relatório de dado pessoal (§A.6).
+ *
+ * AS CREDENCIAIS FICAM DE FORA: "Enviar para admissão" dispara o link do Portal (uma credencial de
+ * acesso ao prontuário) e "Enviar shortlist" manda nome ao cliente. Os dois exigem a PRÉVIA NOMINAL
+ * de quem recebe o quê, que só existe na seleção por ids. Aqui eles aparecem desabilitados, com o
+ * motivo no `title`, e o backend ainda recusa `ENVIADO_PARA_ADMISSAO` por filtro (defesa em
+ * profundidade): a tela nem oferece.
+ */
+function AcoesPorFiltroDaVaga({
+  vaga,
+  aba,
+  filtro,
+  quantidade,
+  token,
+  onLimpar,
+  onFeito,
+}: {
+  vaga: VagaListItem;
+  aba?: AbaDaVaga;
+  filtro: AlvoPorFiltroDaVaga;
+  quantidade: number;
+  token: string | null;
+  onLimpar: () => void;
+  onFeito: () => void;
+}) {
+  type AcaoFiltro = "FINALIZAR" | "MOVER" | "DESVINCULAR";
+  const [acao, setAcao] = useState<AcaoFiltro | null>(null);
+  const [processando, setProcessando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [resultado, setResultado] = useState<{ acao: AcaoFiltro; dados: AsResultadoAcaoEmMassa } | null>(
+    null,
+  );
+
+  async function executar(tipo: AcaoFiltro, chamada: () => Promise<AsResultadoAcaoEmMassa>) {
+    setErro(null);
+    setProcessando(true);
+    try {
+      const dados = await chamada();
+      setAcao(null);
+      setResultado({ acao: tipo, dados });
+      onFeito();
+    } catch (err) {
+      setErro(mensagemDoErro(err, "Falha ao aplicar a ação em massa."));
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  // Na aba de alocados todo mundo já entregou posição, então finalizar de novo não faz sentido.
+  const mostrarFinalizar = aba !== "alocados";
+  const credencialTitulo = "Enviar credencial exige seleção nominal, pessoa a pessoa";
+
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5">
+        <span className="text-[12.5px] text-dim">
+          selecionadas:{" "}
+          <span className="font-semibold tabular-nums text-text">{quantidade}</span>
+        </span>
+        <span className="text-[11.5px] text-faint">todas as do recorte</span>
+        <button type="button" onClick={onLimpar} className="text-[12.5px] text-accent hover:underline">
+          limpar seleção
+        </button>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {mostrarFinalizar && (
+            <Button
+              variant="secondary"
+              className="shrink-0 px-3 py-2"
+              disabled={processando}
+              title="Entrega a posição da vaga e consome a meta"
+              onClick={() => {
+                setErro(null);
+                setAcao("FINALIZAR");
+              }}
+            >
+              <Icon name="check" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+              {`Finalizar posição (${quantidade})`}
+            </Button>
+          )}
+          {/* AS DUAS CREDENCIAIS, DESABILITADAS NO MODO FILTRO (a régua do diretor). */}
+          <Button
+            variant="secondary"
+            className="shrink-0 px-3 py-2"
+            disabled
+            title={credencialTitulo}
+          >
+            <Icon name="doc" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+            Enviar shortlist
+          </Button>
+          <Button
+            variant="secondary"
+            className="shrink-0 px-3 py-2"
+            disabled={processando}
+            onClick={() => {
+              setErro(null);
+              setAcao("MOVER");
+            }}
+          >
+            <Icon name="arr" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+            {`Mover no funil (${quantidade})`}
+          </Button>
+          <Button
+            variant="secondary"
+            className="shrink-0 px-3 py-2"
+            disabled
+            title={credencialTitulo}
+          >
+            <Icon name="right" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+            Enviar para admissão
+          </Button>
+          <Button
+            variant="secondary"
+            className="shrink-0 px-3 py-2 text-danger"
+            disabled={processando}
+            onClick={() => {
+              setErro(null);
+              setAcao("DESVINCULAR");
+            }}
+          >
+            <Icon name="x" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+            {`Desvincular da vaga (${quantidade})`}
+          </Button>
+        </div>
+
+        <p className="basis-full text-[12px] text-faint">
+          Enviar credencial exige seleção nominal, então a shortlist e o envio para admissão ficam de
+          fora enquanto o recorte inteiro está selecionado.
+        </p>
+
+        {erro && acao === null && (
+          <p className="basis-full text-[12px] text-danger" role="alert">
+            {erro}
+          </p>
+        )}
+      </div>
+
+      {acao === "FINALIZAR" && (
+        <FinalizarPorFiltroModal
+          vaga={vaga}
+          quantidade={quantidade}
+          processando={processando}
+          erro={erro}
+          onCancelar={() => setAcao(null)}
+          onConfirmar={(lado, ciente) =>
+            void executar("FINALIZAR", () =>
+              finalizarPosicaoPorFiltro(filtro, token, {
+                lado,
+                cienteBancoComOficiaisAbertas: ciente,
+              }),
+            )
+          }
+        />
+      )}
+
+      {acao === "MOVER" && (
+        <MoverPorFiltroModal
+          quantidade={quantidade}
+          processando={processando}
+          erro={erro}
+          onCancelar={() => setAcao(null)}
+          onConfirmar={(etapa) =>
+            void executar("MOVER", () => moverEtapaPorFiltro(filtro, etapa, token))
+          }
+        />
+      )}
+
+      {acao === "DESVINCULAR" && (
+        <SaidaPorFiltroModal
+          quantidade={quantidade}
+          processando={processando}
+          erro={erro}
+          token={token}
+          onCancelar={() => setAcao(null)}
+          onConfirmar={(situacao, motivo) =>
+            void executar("DESVINCULAR", () =>
+              registrarSaidaPorFiltro(filtro, situacao, motivo, token),
+            )
+          }
+        />
+      )}
+
+      {resultado && (
+        <ResultadoPorFiltroModal
+          acao={resultado.acao}
+          dados={resultado.dados}
+          onClose={() => setResultado(null)}
+        />
+      )}
+    </>
+  );
+}
+
+/** Milhar no padrão pt-BR, para "2.509" ler de longe em vez de "2509". */
+function fmtNum(n: number): string {
+  return new Intl.NumberFormat("pt-BR").format(n);
+}
+
+/**
+ * ─ O AVISO DO TEMPO PELO VOLUME, E A ANIMAÇÃO ENQUANTO PROCESSA (§3.4 do mapa de alcance) ──────
+ *
+ * §A.11 (sem travessão) e §A.24 (o TÍTULO em title case, a frase de apoio em escrita normal). O
+ * título é a tag que avisa do volume ("A Movimentação De 2.509 Candidatos Pode Levar Alguns
+ * Instantes"); a animação enquanto `processando` diz que a tela não travou.
+ */
+function AvisoDeVolume({
+  titulo,
+  processando,
+}: {
+  titulo: string;
+  processando: boolean;
+}) {
+  return (
+    <p
+      className="mb-5 flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[var(--sico-warn)] px-3.5 py-2.5 text-[12px] leading-snug text-dim"
+      aria-live="polite"
+    >
+      {processando ? (
+        <Spinner />
+      ) : (
+        <Icon name="alert" className="mt-[2px] h-3.5 w-3.5 flex-none text-warn" />
+      )}
+      <span>
+        <span className="font-semibold text-text">{titulo} </span>
+        {processando
+          ? "Processando em blocos. Não feche esta janela."
+          : "O sistema aplica em blocos e confirma quantos foram ao terminar."}
+      </span>
+    </p>
+  );
+}
+
+/** O anel que gira enquanto o lote grande roda. Decorativo, sai da árvore de acessibilidade. */
+function Spinner() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="mt-[1px] h-3.5 w-3.5 flex-none animate-spin text-accent"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
+      <path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5" />
+    </svg>
+  );
+}
+
+/** FINALIZAR POSIÇÃO POR FILTRO: a única ação daqui que CONSOME a meta da vaga. */
+function FinalizarPorFiltroModal({
+  vaga,
+  quantidade,
+  processando,
+  erro,
+  onCancelar,
+  onConfirmar,
+}: {
+  vaga: VagaListItem;
+  quantidade: number;
+  processando: boolean;
+  erro: string | null;
+  onCancelar: () => void;
+  onConfirmar: (lado: PosicaoLado, ciente: boolean) => void;
+}) {
+  const [lado, setLado] = useState<PosicaoLado>("OFICIAL");
+  const [ciente, setCiente] = useState(false);
+  const abertas = oficiaisAbertas(vaga);
+  const pedeCiencia = lado === "BANCO" && abertas !== null && abertas > 0;
+
+  return (
+    <ModalDeLote
+      titulo="Finalizar Posição Em Massa"
+      apoio="Todas as candidaturas vivas do recorte recebem uma posição desta vaga. Esta é a ação que consome a meta."
+      acao="Finalizar posição"
+      processando={processando}
+      erro={erro}
+      impedido={pedeCiencia && !ciente}
+      onCancelar={onCancelar}
+      onConfirmar={() => onConfirmar(lado, pedeCiencia && ciente)}
+    >
+      <AvisoDeVolume
+        titulo={`A Finalização De ${fmtNum(quantidade)} ${quantidade === 1 ? "Posição Pode" : "Posições Pode"} Levar Alguns Instantes`}
+        processando={processando}
+      />
+      <Secao titulo="De Qual Lado Da Meta">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {POSICAO_LADOS.map((l) => {
+            const meta = metaDoLado(vaga, l);
+            const feitas = preenchidasDoLado(vaga, l);
+            const escolhido = l === lado;
+            return (
+              <button
+                key={l}
+                type="button"
+                disabled={processando}
+                aria-pressed={escolhido}
+                onClick={() => {
+                  setLado(l);
+                  setCiente(false);
+                }}
+                className={cn(
+                  "flex flex-col gap-1 rounded-xl border px-3.5 py-3 text-left transition",
+                  escolhido
+                    ? "border-[var(--accent)] bg-[var(--surface-2)]"
+                    : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)] hover:bg-[var(--surface-2)]",
+                  processando && "opacity-60",
+                )}
+              >
+                <span className="flex items-start justify-between gap-1.5">
+                  <span className="text-[13px] font-semibold leading-tight text-text">
+                    {POSICAO_LADO_LABEL[l]}
+                  </span>
+                  {escolhido && (
+                    <Icon name="check" className="mt-0.5 h-3.5 w-3.5 flex-none text-accent" />
+                  )}
+                </span>
+                <span className="block text-[11.5px] text-faint">
+                  {meta === null
+                    ? "meta não informada"
+                    : `${feitas} de ${meta} ${meta === 1 ? "posição preenchida" : "posições preenchidas"}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {pedeCiencia && (
+          <label className="mt-2.5 flex items-start gap-2.5 rounded-xl border border-[var(--border)] bg-[rgba(214,168,69,0.12)] px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={ciente}
+              onChange={(e) => setCiente(e.target.checked)}
+              disabled={processando}
+              className="mt-[3px] h-4 w-4 flex-none accent-[var(--accent)]"
+            />
+            <span className="text-[12px] leading-snug text-dim">
+              Esta vaga ainda tem {abertas}{" "}
+              {abertas === 1 ? "posição oficial aberta" : "posições oficiais abertas"}. Estou ciente
+              de que estas pessoas vão para a reserva e de que a posição oficial continua em aberto. O
+              aceite fica registrado no histórico de cada candidatura.
+            </span>
+          </label>
+        )}
+      </Secao>
+
+      <Secao titulo="O Que Muda Para Estas Pessoas">
+        <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5 text-[12.5px] leading-snug text-dim">
+          {CANDIDATURA_SITUACAO_AJUDA.ALOCADO} Quem já entregou posição ou já saiu do processo não é
+          tocado, e entra na contagem do que não foi aplicado.
+        </p>
+      </Secao>
+    </ModalDeLote>
+  );
+}
+
+/** MOVER NO FUNIL POR FILTRO: só a etapa de destino, como no lote por ids. */
+function MoverPorFiltroModal({
+  quantidade,
+  processando,
+  erro,
+  onCancelar,
+  onConfirmar,
+}: {
+  quantidade: number;
+  processando: boolean;
+  erro: string | null;
+  onCancelar: () => void;
+  onConfirmar: (etapa: CandidaturaEtapa) => void;
+}) {
+  const { ativas } = useEtapas();
+  const [etapa, setEtapa] = useState<CandidaturaEtapa | "">("");
+
+  return (
+    <ModalDeLote
+      titulo="Mover Etapa Em Massa"
+      apoio="Todas as candidaturas vivas do recorte passam para a etapa escolhida. A situação de cada uma não muda."
+      acao="Mover no funil"
+      processando={processando}
+      erro={erro}
+      impedido={etapa === ""}
+      onCancelar={onCancelar}
+      onConfirmar={() => etapa && onConfirmar(etapa)}
+    >
+      <AvisoDeVolume
+        titulo={`A Movimentação De ${fmtNum(quantidade)} ${quantidade === 1 ? "Candidato Pode" : "Candidatos Pode"} Levar Alguns Instantes`}
+        processando={processando}
+      />
+      <Secao titulo="Etapa De Destino">
+        <Select
+          value={etapa}
+          onChange={(v) => setEtapa(v as CandidaturaEtapa)}
+          options={ativas.map((e) => ({ value: e.codigo, label: e.rotulo }))}
+          placeholder="Escolha para onde estas pessoas vão"
+          ariaLabel="Etapa de destino"
+          disabled={processando}
+        />
+        <p className="mt-2 text-[11.5px] text-faint">
+          O funil não é um trilho: de qualquer etapa se vai para qualquer outra. Quem já saiu do
+          processo ou já está na etapa escolhida não é movido, e entra na contagem do que não foi
+          aplicado.
+        </p>
+      </Secao>
+    </ModalDeLote>
+  );
+}
+
+/** DESVINCULAR POR FILTRO: Descartado ou Desistiu, com motivo obrigatório para o recorte inteiro. */
+function SaidaPorFiltroModal({
+  quantidade,
+  processando,
+  erro,
+  token,
+  onCancelar,
+  onConfirmar,
+}: {
+  quantidade: number;
+  processando: boolean;
+  erro: string | null;
+  token: string | null;
+  onCancelar: () => void;
+  onConfirmar: (situacao: Extract<SaidaEmLote, "DESCARTADO" | "DESISTIU">, motivo: string) => void;
+}) {
+  const [desvinculo, setDesvinculo] = useState<Extract<SaidaEmLote, "DESCARTADO" | "DESISTIU">>(
+    "DESCARTADO",
+  );
+  const [motivo, setMotivo] = useState("");
+  const motivoOk = motivo.trim().length >= 2;
+
+  return (
+    <ModalDeLote
+      titulo="Desvincular Em Massa"
+      apoio="Todas as candidaturas vivas do recorte saem desta vaga e voltam para o banco de candidatos. A posição volta a ficar livre."
+      acao="Desvincular da vaga"
+      processando={processando}
+      erro={erro}
+      impedido={!motivoOk}
+      perigo
+      onCancelar={onCancelar}
+      onConfirmar={() => onConfirmar(desvinculo, motivo.trim())}
+    >
+      <AvisoDeVolume
+        titulo={`O Desvínculo De ${fmtNum(quantidade)} ${quantidade === 1 ? "Candidato Pode" : "Candidatos Pode"} Levar Alguns Instantes`}
+        processando={processando}
+      />
+      <Secao titulo="Motivo Da Saída">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {DESVINCULO.map((d) => {
+            const escolhido = d.situacao === desvinculo;
+            return (
+              <button
+                key={d.situacao}
+                type="button"
+                disabled={processando}
+                aria-pressed={escolhido}
+                onClick={() => {
+                  setDesvinculo(d.situacao);
+                  setMotivo("");
+                }}
+                className={cn(
+                  "rounded-xl border px-3.5 py-2.5 text-left transition",
+                  escolhido
+                    ? "border-[var(--accent)] bg-[var(--surface-2)]"
+                    : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]",
+                  processando && "opacity-60",
+                )}
+              >
+                <span className="block text-[13px] font-semibold text-text">{d.rotulo}</span>
+                <span className="block text-[11.5px] text-faint">{d.apoio}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Secao>
+
+      <Secao
+        titulo={motivoVemDoCatalogo(desvinculo) ? "O Motivo Do Descarte" : "O Detalhe Do Motivo"}
+      >
+        <CampoMotivoDaSaida
+          situacao={desvinculo}
+          valor={motivo}
+          onChange={setMotivo}
+          token={token}
+          desabilitado={processando}
+          alturaMinima="min-h-[92px]"
+          semRotulo
+          semMotivosQuePedemPretensao
+          placeholder="Por que estas pessoas saíram do processo"
+        />
+        <p className="mt-2 text-[11.5px] text-faint">
+          O motivo é obrigatório e vale para o recorte inteiro: ele é gravado no histórico de cada
+          candidatura viva alcançada. Quem já saiu do processo não é tocado.
+        </p>
+      </Secao>
+    </ModalDeLote>
+  );
+}
+
+/**
+ * ─ O RESULTADO DE UMA AÇÃO POR FILTRO: QUANTOS FORAM, E QUANTOS NÃO ────────────────────────────
+ *
+ * Contagem, nunca a lista nominal (§A.6): num conjunto de milhares, listar nome por nome seria
+ * despejar dado pessoal na tela. É modal de LEITURA, então nasce com "Fechar" (§A.41).
+ */
+function ResultadoPorFiltroModal({
+  acao,
+  dados,
+  onClose,
+}: {
+  acao: "FINALIZAR" | "MOVER" | "DESVINCULAR";
+  dados: AsResultadoAcaoEmMassa;
+  onClose: () => void;
+}) {
+  const { afetados, falharam } = dados;
+  const participio =
+    acao === "FINALIZAR"
+      ? afetados === 1
+        ? "Posição Finalizada"
+        : "Posições Finalizadas"
+      : acao === "MOVER"
+        ? afetados === 1
+          ? "Candidato Movido"
+          : "Candidatos Movidos"
+        : afetados === 1
+          ? "Candidato Desvinculado"
+          : "Candidatos Desvinculados";
+  const verboFalha =
+    acao === "FINALIZAR" ? "finalizadas" : acao === "MOVER" ? "movidos" : "desvinculados";
+  const titulo = `${fmtNum(afetados)} ${participio}`;
+
+  return (
+    <Modal onClose={onClose} className="max-w-[520px] p-0" ariaLabel={titulo}>
+      <div className="flex max-h-[88vh] flex-col">
+        <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
+          <div className="eyebrow !mb-1">Atração e Seleção</div>
+          <h2 className="text-lg font-semibold text-text">{titulo}</h2>
+        </div>
+        <div className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
+          <p className="text-[13px] leading-snug text-dim">
+            {afetados === 0
+              ? "Nenhuma candidatura do recorte aceitou esta ação."
+              : "A ação foi aplicada ao recorte inteiro, em blocos."}
+          </p>
+          {falharam > 0 && (
+            <p className="mt-3 flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[var(--sico-warn)] px-3.5 py-2.5 text-[12.5px] leading-snug text-dim">
+              <Icon name="alert" className="mt-[2px] h-3.5 w-3.5 flex-none text-warn" />
+              <span>
+                {fmtNum(falharam)}{" "}
+                {falharam === 1 ? "candidatura não foi" : "candidaturas não foram"} {verboFalha}:
+                já estavam fora do processo ou já nesse estado, então o sistema não as tocou.
+              </span>
+            </p>
+          )}
+        </div>
+        <div className="flex flex-none justify-end gap-2 border-t border-[var(--border)] px-6 py-4">
+          <Button variant="secondary" className="px-4 py-2.5" onClick={onClose}>
+            Fechar
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
 }

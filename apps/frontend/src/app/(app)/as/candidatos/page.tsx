@@ -46,14 +46,14 @@
  * estado, KPI clicável como filtro), §A.11 (sem travessão), §A.24 (title case em título e tag).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CANDIDATO_ORIGEM_LABEL,
   CANDIDATURA_SITUACAO_LABEL,
-  CANDIDATURA_SITUACOES,
   candidaturaViva,
   type AsCandidatoListItem,
+  type AsCandidatoOrdenarPor,
   type AsCandidatoOrigem,
   type AsCandidatosKpis,
   type AsCandidatosOpcoes,
@@ -62,7 +62,7 @@ import {
   type VagaListItem,
 } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { ehDoPapelDaVaga, useStatusVaga } from "@/lib/as-status-vaga";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -72,17 +72,19 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { Combobox } from "@/components/ui/Combobox";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
-import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
+import type { Ordenacao } from "@/lib/ordenacao";
+import {
+  usePaginacaoServidor,
+  type BuscadorDePagina,
+} from "@/lib/usePaginacaoServidor";
 import { cn } from "@/lib/cn";
 import {
-  avisoDeCorte,
   buscarCandidatos,
   cardDaCandidatura,
   CARD_SEM_VAGA,
   CARD_TOTAL,
   dataHoraBr,
   filtroDeCard,
-  fraseDeProgressoDeCarga,
   funilNaoVeio,
   mensagemDoErro,
   opcoesDeCandidatos,
@@ -90,7 +92,7 @@ import {
 } from "@/lib/as-candidatos";
 import { cardsDeDesfecho, cardsDeEtapa, type CardDeFunil } from "@/lib/as-vagas-funil";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
-import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
+import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { NovoCandidatoModal } from "@/components/as/candidatos/NovoCandidatoModal";
 import { ImportarCandidatosModal } from "@/components/as/candidatos/ImportarCandidatosModal";
 import { AlocarCandidatoModal } from "@/components/as/candidatos/AlocarCandidatoModal";
@@ -100,21 +102,17 @@ import { MoverCandidaturaModal } from "@/components/as/candidatos/MoverCandidatu
 import { RegistrarContatoModal } from "@/components/as/candidatos/RegistrarContatoModal";
 
 /**
- * ─ O FREIO DA CARGA INCREMENTAL (item 4 da Central de Candidatos) ────────────────────────────────
+ * ─ A PAGINACAO NO SERVIDOR SUBSTITUIU A CARGA DE FUNDO (07/10/2026) ──────────────────────────────
  *
- * A base tem dezenas de milhares de candidatos. A página 1 (200) continua abrindo a tela na hora
- * (item 1); as páginas SEGUINTES são pré-buscadas em SEGUNDO PLANO, uma a cada 1,5s, bem abaixo do
- * teto GLOBAL de 120 req/min que a VM compartilha (Pandapé, Digai, GI, Central de Vagas). O ritmo é
- * uma CADEIA DE setTimeout (nunca setInterval), que pausa quando a aba perde foco e retoma quando
- * volta, para de vez ao cobrir o `total`, e em 429 faz backoff em vez de martelar.
+ * A tela carregava a pagina 1 e pre-buscava TODAS as paginas seguintes em segundo plano, acumulando
+ * ate ~83 mil candidatos no navegador para ordenar e filtrar no cliente. A base nunca mais cabe no
+ * navegador: a carga de fundo inteira SAIU (constantes, `vistosRef`, `cargaTimer`, `baseCarga`, os
+ * dois `useEffect` e o indicador de progresso), e o navegador segura SO a pagina atual, via
+ * `usePaginacaoServidor`. Filtro e ordenacao viajam ao servidor; os KPIs vem uma vez por filtro.
  */
-const CARGA_INTERVALO_MS = 1500;
-/** Página de fundo maior que a inicial: menos requisições para cobrir a base inteira (o backend
- *  aceita até 500). A página 1 segue em 200 e não muda. */
-const CARGA_PAGINA_FUNDO = 500;
-/** 429: espera e repete o MESMO offset, dobrando a espera até um teto. Nunca martela. */
-const CARGA_BACKOFF_INICIAL_MS = 4000;
-const CARGA_BACKOFF_MAX_MS = 60000;
+
+/** O tamanho da pagina servida ao navegador. */
+const LINHAS_POR_PAGINA = 100;
 
 /**
  * Uma linha da tabela: a pessoa mais, quando existe, a candidatura dela e a vaga correspondente.
@@ -133,6 +131,60 @@ interface Linha {
   funilIndisponivel: boolean;
 }
 
+/**
+ * O FILTRO QUE VIAJA AO SERVIDOR. Reúne os eixos que antes eram client-side (escopo, cliente, etapa)
+ * com os que já iam no corpo (nome, cpf, origem, vaga) e a régua do card (filtroCardEtapa/Situacao,
+ * mais `semCandidatura` para o card Sem Vaga). O `fCandidatos` (multi-seleção por id) NÃO entra aqui:
+ * ele continua recortando a lista no cliente, sobre a página carregada.
+ */
+interface FiltroCentral {
+  nome?: string;
+  cpf?: string;
+  origem?: AsCandidatoOrigem;
+  vagaId?: string;
+  escopo: "andamento" | "historico";
+  cliente?: string;
+  etapa?: string;
+  filtroCardEtapa?: string;
+  filtroCardSituacao?: string;
+  /** O card "Sem Vaga" vira este filtro de servidor (ausência de candidatura viva). */
+  semCandidatura?: boolean;
+}
+
+/**
+ * O FETCHER DO HOOK: traduz os parâmetros de paginação para a chamada `buscarCandidatos` e a resposta
+ * `AsCandidatosPagina` para o contrato genérico do hook (`itens`/`total`/`truncado`/`kpis`). Fica em
+ * escopo de módulo para ter identidade estável (o hook mantém o fetcher num ref, então nem precisaria,
+ * mas assim fica explícito que ele não fecha sobre nada do componente). §A.6: tudo no corpo do POST.
+ */
+const buscarPaginaDeCandidatos: BuscadorDePagina<
+  AsCandidatoListItem,
+  FiltroCentral,
+  AsCandidatosKpis
+> = async (params, token) => {
+  const f = params.filtro;
+  const resp = await buscarCandidatos(
+    {
+      nome: f.nome,
+      cpf: f.cpf,
+      origem: f.origem,
+      vagaId: f.vagaId,
+      escopo: f.escopo,
+      cliente: f.cliente,
+      etapa: f.etapa,
+      filtroCardEtapa: f.filtroCardEtapa,
+      filtroCardSituacao: f.filtroCardSituacao,
+      semCandidatura: f.semCandidatura,
+      ordenarPor: params.ordenarPor as AsCandidatoOrdenarPor | undefined,
+      direcao: params.direcao,
+      offset: params.offset,
+      limite: params.limite,
+    },
+    token,
+  );
+  return { itens: resp.itens, total: resp.total, truncado: resp.truncado, kpis: resp.kpis };
+};
+
 export default function CentralDeCandidatosPage() {
   // `isAdmin` é MASTER ou SUPER_ADMIN (`auth-context`), e governa SÓ a exibição da ação de trocar
   // vaga. A autoridade é o `@Roles` da rota: esconder aqui evita oferecer o que viraria 403.
@@ -147,73 +199,36 @@ export default function CentralDeCandidatosPage() {
   const { status: catalogoStatusVaga } = useStatusVaga(token);
 
   const [vagas, setVagas] = useState<VagaListItem[]>([]);
-  const [pessoas, setPessoas] = useState<AsCandidatoListItem[]>([]);
-  const [carregando, setCarregando] = useState(true);
+  // ERRO DE AÇÃO (abrir candidatura, etc.), separado do erro da paginação: o do carregamento vem do
+  // hook (`paginacao.erro`); este é dos gestos da tela, e os dois aparecem no mesmo lugar.
   const [erro, setErro] = useState<string | null>(null);
-  /** O aviso do corte da busca: nulo é "a lista está inteira". */
-  const [avisoCorte, setAvisoCorte] = useState<string | null>(null);
-  /**
-   * OS NÚMEROS REAIS DA BASE, e não a contagem das linhas carregadas (item 3 do diretor). `totalBase`
-   * é quantos candidatos casam com o filtro; `kpisBase` é a quebra por etapa e por situação, ambos do
-   * conjunto FILTRADO INTEIRO do servidor. O KPI deixou de mentir "só existem 200 candidatos".
-   *
-   * A TELA CONTINUA CARREGANDO SÓ A PÁGINA (200), com o aviso de corte: o teto é guarda deliberada de
-   * §A.6 contra despejar a base inteira no navegador. O que muda é só o NÚMERO do card, que passa a
-   * vir do servidor em vez de contar as linhas carregadas.
-   */
-  const [totalBase, setTotalBase] = useState(0);
-  const [kpisBase, setKpisBase] = useState<AsCandidatosKpis | null>(null);
   /** AS OPÇÕES DOS FILTROS, da base de candidatos (§A.37), não de `/as/vagas`. */
   const [opcoes, setOpcoes] = useState<AsCandidatosOpcoes | null>(null);
+  /**
+   * ─ O TOTAL DA BASE, QUE NÃO PODE MUDAR AO CLICAR NUM CARD (§A.12) ──────────────────────────────
+   *
+   * Os cards de etapa e de desfecho vêm de `paginacao.kpis`, que o backend conta SEM o filtro de card,
+   * então não zeram quando um card fica ativo. O `total` do hook, porém, É a contagem da lista COM o
+   * filtro de card, logo encolhe ao clicar num card. O card Total precisa continuar mostrando a BASE
+   * inteira: este estado guarda o `total` capturado SÓ enquanto nenhum card de etapa/situação/sem-vaga
+   * filtra o servidor (ver o efeito de captura logo abaixo). Começa na página Total, então nasce certo.
+   */
+  const [totalBaseSnapshot, setTotalBaseSnapshot] = useState(0);
+  /**
+   * ─ O "SEM VAGA", QUE A PÁGINA SOZINHA NÃO SABE CONTAR ─────────────────────────────────────────
+   *
+   * "Sem Vaga" é a pessoa na base ainda não alocada (ausência de candidatura). Antes a carga de fundo
+   * trazia todo mundo e a tela contava localmente; sem ela, a página só tem 100 linhas e não dá para
+   * contar a base inteira no cliente. O backend não devolve esse número nos KPIs, então um `useEffect`
+   * dedicado pergunta o `total` de uma busca `semCandidatura: true` (limite 1, só o contador), uma vez
+   * por filtro. É UMA requisição leve por filtro, não a varredura da base inteira que saiu.
+   */
+  const [semVagaCount, setSemVagaCount] = useState(0);
+  // Bump manual para o Total/Sem Vaga e a lista reavaliarem após uma mutação (mover, alocar, etc.).
+  const [revalidacao, setRevalidacao] = useState(0);
 
-  /**
-   * ─ O CACHE DA CARGA INCREMENTAL VIVE SÓ AQUI, NA MEMÓRIA DO COMPONENTE (R1/R2) ────────────────
-   *
-   * O acumulado exibido é o próprio estado `pessoas`: a carga de fundo ANEXA a ele. `vistosRef` é o
-   * conjunto de ids de candidato já anexados, para não duplicar linha ao emendar páginas. `cargaTimer`
-   * guarda o setTimeout pendente da cadeia, para poder cancelá-lo.
-   *
-   * NADA DISTO ENCOSTA EM localStorage, sessionStorage, IndexedDB, Cache API NEM cookie: é estado e
-   * ref de React, descartados quando a tela sai. O efeito de desmontagem logo abaixo ainda zera o
-   * `vistosRef` e mata o timer de propósito, para a sessão não deixar rastro em memória (R2).
-   */
-  const vistosRef = useRef<Set<string>>(new Set());
-  const cargaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /**
-   * O GATILHO DA CARGA DE FUNDO, escrito SÓ quando a página 1 termina (ver `carregar`). Ele carrega
-   * os filtros que produziram a página 1 e o `total` dela, e nunca os filtros VIVOS: estes mudam
-   * 300ms antes de `carregar` rodar (a busca é adiada), e iniciar a carga de fundo a partir deles
-   * emendaria páginas de um filtro novo sobre a lista do filtro antigo. `buscandoTexto` desliga a
-   * carga de fundo: com busca por nome ou CPF ativa, a tela mantém o comportamento de hoje (item 4).
-   */
-  const [baseCarga, setBaseCarga] = useState<{
-    origem?: AsCandidatoOrigem;
-    vagaId?: string;
-    /**
-     * O FILTRO DO CARD VIAJA JUNTO, para a carga de fundo varrer o MESMO subconjunto que a página 1
-     * trouxe. Sem ele aqui, o fundo emendaria a base inteira sobre uma lista que o card restringiu.
-     */
-    filtroCardEtapa?: string;
-    filtroCardSituacao?: string;
-    total: number;
-    offsetInicial: number;
-    buscandoTexto: boolean;
-  } | null>(null);
-  /**
-   * ─ O TOTAL E O "SEM VAGA" DA BASE INTEIRA, QUE NÃO PODEM MUDAR AO CLICAR NUM CARD (§A.12) ─────
-   *
-   * Os cards de etapa e de desfecho vêm de `kpisBase`, que o backend conta SEM o filtro de card, e
-   * por isso não zeram quando um card fica ativo. O Total e o "Sem Vaga" NÃO vêm do KPI: o Total era
-   * o `total` da resposta e o "Sem Vaga" é contado nas linhas carregadas. Com o filtro de card, a
-   * resposta passa a trazer só o subconjunto, então os dois encolheriam ao clicar em OUTRO card, que
-   * é exatamente o que a §A.12 proíbe. Estes dois guardam o valor da BASE INTEIRA, capturado só
-   * quando nenhum card de etapa/situação filtra o servidor (ver o efeito de captura logo abaixo).
-   */
-  const [totalSemCard, setTotalSemCard] = useState(0);
-  const [semVagaSemCard, setSemVagaSemCard] = useState(0);
-
-  // ── FILTROS. `nome`, `cpf` e `origem` vão para o backend (no CORPO do POST); `cliente` e `etapa`
-  // são resolvidos aqui, porque a busca do backend não tem esses eixos e o volume da tela é pequeno.
+  // ── FILTROS. `nome`, `cpf`, `origem`, `vagaId`, `escopo`, `cliente` e `etapa` viajam ao SERVIDOR
+  // (no CORPO do POST). O `fCandidatos` (multi-seleção por id) segue recortando a lista no cliente.
   const [busca, setBusca] = useState("");
   /**
    * ─ FILTRO POR NOME, DE MÚLTIPLA SELEÇÃO (§A.28, pedido do diretor 27/08) ─────────────────────
@@ -260,6 +275,75 @@ export default function CentralDeCandidatosPage() {
    */
   const [cardAtivo, setCardAtivo] = useState<string>(CARD_TOTAL);
 
+  /**
+   * ─ A PAGINAÇÃO NO SERVIDOR (o coração desta frente) ──────────────────────────────────────────
+   *
+   * O hook segura SÓ a página atual, nunca a base inteira. Ele é a fonte de `itens` (as pessoas da
+   * página), `total`, `kpis` (cacheado, só troca quando o filtro muda), página/navegação e ordenação.
+   * O `token` o hook lê sozinho da sessão e repassa ao fetcher.
+   */
+  const paginacao = usePaginacaoServidor<AsCandidatoListItem, FiltroCentral, AsCandidatosKpis>({
+    buscarPagina: buscarPaginaDeCandidatos,
+    filtroInicial: { escopo: "andamento" },
+    limitePadrao: LINHAS_POR_PAGINA,
+  });
+  const { setFiltro: aplicarFiltro, setOrdenacao } = paginacao;
+  // Nomes antigos preservados para o resto da tela ler sem reescrever cada ponto de uso.
+  const pessoas = paginacao.itens;
+  const carregando = paginacao.carregando;
+  const totalBase = paginacao.total;
+  const kpisBase = paginacao.kpis;
+
+  /**
+   * ─ CARD → FILTRO DE SERVIDOR, a régua `filtroDeCard` mais o caso do "Sem Vaga" ────────────────
+   *
+   * As etapas e os desfechos passam por `filtroDeCard` (igual à versão client-side). O "Sem Vaga" é
+   * o reservado que `filtroDeCard` devolve vazio: aqui ele vira `semCandidatura: true`, que DENTRO do
+   * escopo "andamento" (o único em que o card aparece) casa exatamente quem não tem candidatura viva,
+   * ou seja, a pessoa na base ainda não alocada. O Total não manda nada: é a base inteira.
+   */
+  const filtroDoCardAtivo = useMemo((): Pick<
+    FiltroCentral,
+    "filtroCardEtapa" | "filtroCardSituacao" | "semCandidatura"
+  > => {
+    if (cardAtivo === CARD_SEM_VAGA) return { semCandidatura: true };
+    return filtroDeCard(cardAtivo, codigosDeEtapa);
+  }, [cardAtivo, codigosDeEtapa]);
+
+  /**
+   * SINCRONIA UI → SERVIDOR: os filtros da tela viram o `filtro` do hook, com a MESMA espera de 300ms
+   * de antes (não dispara uma requisição por tecla). `setFiltro` reseta para a página 1 e refaz o KPI,
+   * que é exatamente o comportamento desejado quando qualquer filtro muda. A navegação de páginas não
+   * passa por aqui (ela mexe no estado interno do hook), então mudar de página não zera o filtro.
+   */
+  useEffect(() => {
+    const t = setTimeout(() => {
+      aplicarFiltro({
+        nome: busca.trim() || undefined,
+        cpf: cpfBusca.replace(/\D/g, "") || undefined,
+        origem: fOrigem || undefined,
+        vagaId: fVaga || undefined,
+        escopo,
+        cliente: fCliente || undefined,
+        etapa: fEtapa || undefined,
+        filtroCardEtapa: filtroDoCardAtivo.filtroCardEtapa,
+        filtroCardSituacao: filtroDoCardAtivo.filtroCardSituacao,
+        semCandidatura: filtroDoCardAtivo.semCandidatura,
+      });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [busca, cpfBusca, fOrigem, fVaga, escopo, fCliente, fEtapa, filtroDoCardAtivo, aplicarFiltro]);
+
+  /**
+   * RECARREGAR APÓS UMA MUTAÇÃO. O hook não expõe um "refetch" explícito; reaplicar o filtro (merge
+   * vazio) cria um novo objeto de filtro, o que refaz a busca e volta à página 1 (aceitável depois de
+   * mover/alocar). O `revalidacao++` reavalia o Total e o Sem Vaga, e recarrega as vagas dos modais.
+   */
+  const recarregar = useCallback(() => {
+    aplicarFiltro({});
+    setRevalidacao((n) => n + 1);
+  }, [aplicarFiltro]);
+
   // ── MODAIS
   const [novoAberto, setNovoAberto] = useState(false);
   const [importarAberto, setImportarAberto] = useState(false);
@@ -279,68 +363,21 @@ export default function CentralDeCandidatosPage() {
   const [contatoAlvo, setContatoAlvo] = useState<AsCandidaturaItem | null>(null);
 
   /**
-   * A CARGA. DUAS leituras, em paralelo, e nenhuma delas depende da outra:
-   *   1. as vagas (cliente, cargo, nome e status de cada uma), que alimentam os filtros e as
-   *      colunas Cliente e Cargo;
-   *   2. as pessoas da página, pela busca POST, JÁ COM AS CANDIDATURAS DE CADA UMA.
-   *
-   * ERAM TRÊS, e a terceira era um laço de uma chamada POR VAGA. Era ela que estourava o teto do
-   * throttler (120 por 60s) com 483 requisições por carregamento e derrubava a tela inteira no 429.
+   * AS VAGAS, numa leitura PRÓPRIA (não mais junto da busca de candidatos). Elas alimentam a alocação
+   * manual (`vagasAbertas`) e a ficha (`vagaPorId`), não COLUNA nem FILTRO da lista (cliente/cargo vêm
+   * da própria projeção da candidatura, e os filtros vêm de `/as/candidatos/opcoes`). Falhar aqui não
+   * derruba a tela: a lista de candidatos segue pelo hook, só a alocação fica sem opções de vaga.
    */
-  const carregar = useCallback(async () => {
-    setCarregando(true);
-    setErro(null);
-    // O CARD ATIVO VIRA FILTRO DO SERVIDOR (bug do clique): o número do card vem da base inteira, e
-    // o clique precisa trazer essas pessoas da base inteira, não só as linhas já carregadas. Total e
-    // "Sem Vaga" não mandam filtro (ver `filtroDeCard`), então a busca deles segue a base completa.
-    const cardFiltro = filtroDeCard(cardAtivo, codigosDeEtapa);
+  const carregarVagas = useCallback(async () => {
     try {
-      const [listaVagas, listaPessoas] = await Promise.all([
-        apiFetch<VagaListItem[]>("/as/vagas", { token }),
-        buscarCandidatos(
-          {
-            nome: busca,
-            cpf: cpfBusca.replace(/\D/g, ""),
-            origem: fOrigem || undefined,
-            vagaId: fVaga || undefined,
-            ...cardFiltro,
-          },
-          token,
-        ),
-      ]);
-      setVagas(listaVagas);
-      // A BUSCA VIROU PÁGINA (Frente D, ponto 15): `itens` é a lista, e `truncado` diz se sobrou
-      // gente além dela. A tela usa o aviso logo abaixo do contador de linhas.
-      setPessoas(listaPessoas.itens);
-      setAvisoCorte(avisoDeCorte(listaPessoas));
-      // OS NÚMEROS REAIS DA BASE (item 3): `total` e `kpis` vêm do conjunto FILTRADO inteiro do
-      // servidor, não da página carregada. `kpis` é opcional no contrato (o backend pode ainda não
-      // enviar): ausente, o funil cai no fallback de contar as linhas carregadas, logo abaixo.
-      setTotalBase(listaPessoas.total);
-      setKpisBase(listaPessoas.kpis ?? null);
-      // R1/R2: o acumulador de dedup é REDEFINIDO para os ids da página 1. É memória de componente,
-      // nunca storage, e nasce de novo a cada carga para não arrastar ids de um filtro anterior.
-      vistosRef.current = new Set(listaPessoas.itens.map((p) => p.id));
-      // O GATILHO DA CARGA DE FUNDO só é escrito aqui, no fim da página 1, com os filtros que a
-      // produziram. Isso evita a corrida de iniciar a carga com filtro novo sobre a lista antiga.
-      setBaseCarga({
-        origem: fOrigem || undefined,
-        vagaId: fVaga || undefined,
-        filtroCardEtapa: cardFiltro.filtroCardEtapa,
-        filtroCardSituacao: cardFiltro.filtroCardSituacao,
-        total: listaPessoas.total,
-        offsetInicial: listaPessoas.itens.length,
-        buscandoTexto: busca.trim() !== "" || cpfBusca.replace(/\D/g, "") !== "",
-      });
-    } catch (err) {
-      setErro(mensagemDoErro(err, "Falha ao carregar a Central de Candidatos."));
-    } finally {
-      setCarregando(false);
+      setVagas(await apiFetch<VagaListItem[]>("/as/vagas", { token }));
+    } catch {
+      /* a lista de candidatos não depende disto; a alocação apenas fica sem vagas para escolher. */
     }
-    // `cardAtivo` ENTRA NAS DEPENDÊNCIAS para a busca ser REFEITA ao clicar num card: antes o card só
-    // filtrava no cliente, e quem não estava na página não aparecia. `codigosDeEtapa` entra porque
-    // `filtroDeCard` precisa dele para saber se o card é de etapa ou de situação.
-  }, [token, busca, cpfBusca, fOrigem, fVaga, cardAtivo, codigosDeEtapa]);
+  }, [token]);
+  useEffect(() => {
+    void carregarVagas();
+  }, [carregarVagas, revalidacao]);
 
   /**
    * ─ OS MODAIS DE AÇÃO PEDEM A CANDIDATURA INTEIRA, E A LISTA NÃO A TEM MAIS ───────────────────
@@ -397,12 +434,6 @@ export default function CentralDeCandidatosPage() {
     }
   }
 
-  // A busca por texto é adiada, para não disparar uma requisição por tecla digitada.
-  useEffect(() => {
-    const t = setTimeout(() => void carregar(), 300);
-    return () => clearTimeout(t);
-  }, [carregar]);
-
   /**
    * AS OPÇÕES DOS FILTROS, uma vez por sessão e não a cada tecla (§A.37): é o catálogo dos clientes,
    * cargos e vagas DISTINTOS da base de candidatos, independente do filtro de busca. Falhar aqui não
@@ -424,148 +455,62 @@ export default function CentralDeCandidatosPage() {
   }, [token]);
 
   /**
-   * ─ A CARGA INCREMENTAL COM FREIO (item 4), E AS TRAVAS DE SEGURANÇA QUE ELA CARREGA ───────────
+   * ─ O TOTAL DA BASE, CONGELADO ENQUANTO UM CARD FILTRA (§A.12) ─────────────────────────────────
    *
-   * Depois da página 1, esta cadeia pré-busca as páginas seguintes em segundo plano, EMENDANDO ao
-   * cache em memória (`pessoas`), até cobrir o `total`. O efeito só começa quando `baseCarga` é
-   * escrito (fim da página 1), então ele nunca corre contra o filtro vivo.
-   *
-   *   - FONTE ÚNICA (R3): só `POST /as/candidatos/buscar`, com offset/limite no CORPO (R4). A ficha
-   *     e o painel da vaga NUNCA entram aqui, para a carga em massa não trazer CPF nenhum.
-   *   - RITMO (R7): uma página a cada 1,5s por CADEIA de setTimeout, nunca setInterval.
-   *   - PAUSA POR FOCO (R7): aba oculta (`visibilitychange`) ou janela desfocada (`blur`) param de
-   *     agendar a próxima; `visibilitychange` visível e `focus` retomam. Um ciclo em voo quando o
-   *     foco se perde confere `pausado()` antes de agendar o seguinte, então ele para sozinho.
-   *   - 429 (R7): espera e repete o MESMO offset, dobrando o atraso até o teto. Não martela.
-   *   - SILÊNCIO SEGURO (R5): nenhum nome, linha ou array vai para o log. O 429 loga só status e
-   *     offset (números). Outro erro de fundo para a cadeia sem derrubar a tela (a página 1 fica).
+   * Sem card de etapa/situação/sem-vaga ativo (só o Total), o `total` do hook JÁ é a base inteira,
+   * então ele é capturado aqui. Com um card ativo, o `total` encolhe para o subconjunto do card, e
+   * NÃO é capturado: o snapshot segue mostrando a base, e clicar num card não mexe no card Total. Na
+   * abertura o card ativo é o Total, então o snapshot nasce correto na primeira resposta.
    */
+  const semCardQueFiltra =
+    cardAtivo === CARD_TOTAL &&
+    !filtroDoCardAtivo.filtroCardEtapa &&
+    !filtroDoCardAtivo.filtroCardSituacao &&
+    !filtroDoCardAtivo.semCandidatura;
   useEffect(() => {
-    if (!baseCarga || baseCarga.buscandoTexto) return;
-    if (baseCarga.total <= baseCarga.offsetInicial) return;
-
-    const { origem, vagaId, filtroCardEtapa, filtroCardSituacao } = baseCarga;
-    let cancelado = false;
-    let desfocado = false;
-    let esperandoFoco = false;
-    let proximoOffset = baseCarga.offsetInicial;
-    let atrasoBackoff = CARGA_BACKOFF_INICIAL_MS;
-
-    const pausado = () =>
-      desfocado ||
-      (typeof document !== "undefined" && document.visibilityState === "hidden");
-
-    const agendar = (atraso: number) => {
-      if (cancelado) return;
-      if (pausado()) {
-        esperandoFoco = true;
-        return;
-      }
-      cargaTimer.current = setTimeout(() => void rodar(), atraso);
-    };
-
-    const rodar = async () => {
-      if (cancelado) return;
-      if (pausado()) {
-        esperandoFoco = true;
-        return;
-      }
-      try {
-        const pagina = await buscarCandidatos(
-          {
-            origem,
-            vagaId,
-            filtroCardEtapa,
-            filtroCardSituacao,
-            offset: proximoOffset,
-            limite: CARGA_PAGINA_FUNDO,
-          },
-          token,
-        );
-        if (cancelado) return;
-        atrasoBackoff = CARGA_BACKOFF_INICIAL_MS;
-        // DEDUP POR ID ao emendar: ordenação estável não deve sobrepor, mas a base é viva.
-        setPessoas((atual) => {
-          const resultado = atual.slice();
-          for (const p of pagina.itens) {
-            if (!vistosRef.current.has(p.id)) {
-              vistosRef.current.add(p.id);
-              resultado.push(p);
-            }
-          }
-          return resultado;
-        });
-        proximoOffset += pagina.itens.length;
-        // PARA de vez ao cobrir o total, ou quando a página vem incompleta (fim real da base).
-        if (proximoOffset >= pagina.total || pagina.itens.length < CARGA_PAGINA_FUNDO) return;
-        agendar(CARGA_INTERVALO_MS);
-      } catch (err) {
-        if (cancelado) return;
-        const status = err instanceof ApiError ? err.status : 0;
-        if (status !== 429) return; // outro erro de fundo: para em silêncio, a tela não cai.
-        // R5: só status e offset (números) no log, nunca nome, linha nem o array carregado.
-        console.warn(
-          `[central-candidatos] carga incremental: 429 no offset ${proximoOffset}, aguardando ${atrasoBackoff}ms`,
-        );
-        const espera = atrasoBackoff;
-        atrasoBackoff = Math.min(atrasoBackoff * 2, CARGA_BACKOFF_MAX_MS);
-        agendar(espera);
-      }
-    };
-
-    const retomar = () => {
-      if (cancelado || !esperandoFoco || pausado()) return;
-      esperandoFoco = false;
-      agendar(CARGA_INTERVALO_MS);
-    };
-    const aoDesfocar = () => {
-      desfocado = true;
-      esperandoFoco = true;
-      if (cargaTimer.current) {
-        clearTimeout(cargaTimer.current);
-        cargaTimer.current = null;
-      }
-    };
-    const aoFocar = () => {
-      desfocado = false;
-      retomar();
-    };
-    const aoMudarVisibilidade = () => {
-      if (pausado()) aoDesfocar();
-      else retomar();
-    };
-
-    agendar(CARGA_INTERVALO_MS);
-    document.addEventListener("visibilitychange", aoMudarVisibilidade);
-    window.addEventListener("focus", aoFocar);
-    window.addEventListener("blur", aoDesfocar);
-
-    return () => {
-      cancelado = true;
-      if (cargaTimer.current) {
-        clearTimeout(cargaTimer.current);
-        cargaTimer.current = null;
-      }
-      document.removeEventListener("visibilitychange", aoMudarVisibilidade);
-      window.removeEventListener("focus", aoFocar);
-      window.removeEventListener("blur", aoDesfocar);
-    };
-  }, [baseCarga, token]);
+    if (carregando || !semCardQueFiltra) return;
+    setTotalBaseSnapshot(totalBase);
+  }, [carregando, semCardQueFiltra, totalBase]);
 
   /**
-   * R2: NO FIM DA SESSÃO/TELA, O CACHE É DESCARTADO DE PROPÓSITO. O estado `pessoas` some com o
-   * componente, mas o acumulador de dedup e o timer de fundo são zerados aqui explicitamente, para
-   * nenhuma linha carregada sobreviver à desmontagem em memória.
+   * ─ O CONTADOR DO "SEM VAGA", UMA REQUISIÇÃO LEVE POR FILTRO ───────────────────────────────────
+   *
+   * O card só aparece em "andamento", e lá `semCandidatura: true` casa exatamente a pessoa na base
+   * sem candidatura. O backend não devolve esse número nos KPIs, então aqui ele vem de uma busca
+   * `limite: 1` (só o `total`), refeita quando a base do filtro muda ou após uma mutação. É UMA
+   * requisição pequena, nunca a varredura de fundo que saiu. Fora de "andamento", o card não existe,
+   * então o contador nem é buscado. §A.6: tudo no corpo do POST, e a resposta é só um número.
    */
   useEffect(() => {
+    if (escopo !== "andamento") {
+      setSemVagaCount(0);
+      return;
+    }
+    let vivo = true;
+    buscarCandidatos(
+      {
+        nome: busca.trim() || undefined,
+        cpf: cpfBusca.replace(/\D/g, "") || undefined,
+        origem: fOrigem || undefined,
+        vagaId: fVaga || undefined,
+        escopo: "andamento",
+        cliente: fCliente || undefined,
+        etapa: fEtapa || undefined,
+        semCandidatura: true,
+        limite: 1,
+      },
+      token,
+    )
+      .then((p) => {
+        if (vivo) setSemVagaCount(p.total);
+      })
+      .catch(() => {
+        /* o contador do card não derruba a tela; mantém o valor anterior. */
+      });
     return () => {
-      vistosRef.current = new Set();
-      if (cargaTimer.current) {
-        clearTimeout(cargaTimer.current);
-        cargaTimer.current = null;
-      }
+      vivo = false;
     };
-  }, []);
+  }, [escopo, busca, cpfBusca, fOrigem, fVaga, fCliente, fEtapa, token, revalidacao]);
 
   const vagaPorId = useMemo(() => new Map(vagas.map((v) => [v.id, v])), [vagas]);
 
@@ -585,14 +530,28 @@ export default function CentralDeCandidatosPage() {
   );
 
   /**
+   * ─ QUANDO O CARD "SEM VAGA" ESTÁ ATIVO, O FUNIL AUSENTE É ESPERADO, NÃO FALHA ─────────────────
+   *
+   * O card "Sem Vaga" filtra no servidor por `semCandidatura: true`, e nesse modo o backend OMITE o
+   * funil de propósito (quem não tem candidatura viva não tem o que mostrar). Dentro do escopo
+   * "andamento" (o único em que o card aparece), essas pessoas têm ZERO candidatura, então a linha é
+   * uma "Vaga Não Alocada" legítima, NÃO um "Funil Não Carregado". Esta flag separa os dois casos.
+   */
+  const semVagaCardAtivo = cardAtivo === CARD_SEM_VAGA;
+
+  /**
    * O FUNIL NÃO VEIO NESTA RESPOSTA? A pergunta é feita sobre a página inteira, porque o campo é da
    * projeção: ou a busca o envia para todo mundo, ou não o envia para ninguém.
    *
    * ELA EXISTE PARA A TELA NÃO MENTIR. Sem essa distinção, ausência de funil viraria "Vaga Não
    * Alocada" em todas as linhas, que foi o segundo sintoma do 429 e o motivo de a lista contradizer
-   * a ficha da mesma pessoa.
+   * a ficha da mesma pessoa. No card "Sem Vaga" o funil ausente é esperado (ver acima), então ali
+   * NÃO é falha.
    */
-  const funilIndisponivel = useMemo(() => funilNaoVeio(pessoas), [pessoas]);
+  const funilIndisponivel = useMemo(
+    () => !semVagaCardAtivo && funilNaoVeio(pessoas),
+    [pessoas, semVagaCardAtivo],
+  );
 
   /** As linhas, antes do card e dos filtros locais. Pessoa sem candidatura vira uma linha só. */
   const linhasBase = useMemo<Linha[]>(
@@ -602,9 +561,20 @@ export default function CentralDeCandidatosPage() {
          * AUSENTE x VAZIO. `undefined` é "a busca não mandou o funil desta pessoa", e a linha fica
          * em um terceiro estado, que a tabela mostra como tal. Lista VAZIA é "ela não está em vaga
          * nenhuma", que é estado legítimo e continua sendo "Vaga Não Alocada".
+         *
+         * NO CARD "SEM VAGA", o funil ausente é esperado (`semCandidatura: true` omite o funil no
+         * servidor) e a pessoa não tem vaga por definição: a linha é "Vaga Não Alocada", não o
+         * terceiro estado de falha.
          */
         if (p.candidaturas === undefined) {
-          return [{ chave: p.id, pessoa: p, candidatura: null, funilIndisponivel: true }];
+          return [
+            {
+              chave: p.id,
+              pessoa: p,
+              candidatura: null,
+              funilIndisponivel: !semVagaCardAtivo,
+            },
+          ];
         }
         const minhas = p.candidaturas.filter((c) => !fVaga || c.vagaId === fVaga);
         if (minhas.length === 0) {
@@ -626,7 +596,7 @@ export default function CentralDeCandidatosPage() {
           funilIndisponivel: false,
         }));
       }),
-    [pessoas, fVaga],
+    [pessoas, fVaga, semVagaCardAtivo],
   );
 
   /**
@@ -695,48 +665,18 @@ export default function CentralDeCandidatosPage() {
    * O QUE NÃO VEM DO CATÁLOGO SÃO OS DOIS CARDS QUE NÃO SAEM DE UMA CANDIDATURA: o `total` e o
    * "Sem Vaga", que é a pessoa na base ainda não alocada, ou seja, a AUSÊNCIA de candidatura.
    */
-  /**
-   * O "SEM VAGA" DAS LINHAS CARREGADAS: a pessoa na base que não está em vaga nenhuma (ausência de
-   * candidatura), fora a linha cujo funil não veio (que não se sabe classificar). É a contagem LOCAL,
-   * que o snapshot abaixo congela como número da base inteira quando nenhum card filtra o servidor.
-   */
-  const semVagaLocal = useMemo(
-    () => linhasSemCard.filter((l) => !l.candidatura && !l.funilIndisponivel).length,
-    [linhasSemCard],
-  );
-
-  /**
-   * ─ O SNAPSHOT DA BASE INTEIRA PARA O TOTAL E O "SEM VAGA" (§A.12: card não muda ao clicar) ─────
-   *
-   * Sem card de etapa/situação ativo (Total ou "Sem Vaga"), a busca devolve a base inteira, então
-   * `totalBase` e `semVagaLocal` são os números reais da base. Com um card ativo, a busca devolve só
-   * o subconjunto, e recontá-los dali faria os dois encolherem ao clicar em OUTRO card. Capturados
-   * aqui só quando o servidor NÃO está restringido por card, eles continuam mostrando a base inteira.
-   */
-  const semFiltroDeCardAtivo = cardAtivo === CARD_TOTAL || cardAtivo === CARD_SEM_VAGA;
-  useEffect(() => {
-    if (carregando || !semFiltroDeCardAtivo) return;
-    setTotalSemCard(totalBase);
-    setSemVagaSemCard(semVagaLocal);
-  }, [carregando, semFiltroDeCardAtivo, totalBase, semVagaLocal]);
-
-  // O NÚMERO EXIBIDO: vivo enquanto nenhum card de etapa/situação filtra o servidor; o snapshot da
-  // base inteira quando um filtra. Assim clicar num card NÃO mexe no Total nem no "Sem Vaga".
-  const totalExibido = semFiltroDeCardAtivo ? totalBase : totalSemCard;
-  const semVagaExibido = semFiltroDeCardAtivo ? semVagaLocal : semVagaSemCard;
-
   const funil = useMemo(() => {
     /*
-     * ─ OS NÚMEROS DOS CARDS SÃO OS REAIS DA BASE, E NÃO A CONTAGEM DAS LINHAS CARREGADAS (item 3) ─
+     * ─ OS NÚMEROS DOS CARDS VÊM DO SERVIDOR (paginação no servidor): `paginacao.kpis` ────────────
      *
-     * A tela carrega só a página (200), então contar as linhas faria o KPI dizer que existem 200
-     * candidatos quando há dezenas de milhares. `kpisBase` (`porEtapa`/`porSituacao`) é a contagem
+     * A tela carrega só a página (100), então contar as linhas faria o KPI dizer que existem 100
+     * candidatos quando há dezenas de milhares. `kpis` (`porEtapa`/`porSituacao`) é a contagem
      * agregada do servidor sobre o conjunto FILTRADO inteiro, antes do corte de página, e o backend
      * NÃO aplica o filtro de card a ele: por isso clicar num card não zera as etapas nem os desfechos.
      *
-     * A CONTAGEM LOCAL FICA DE FALLBACK: `kpis` é campo OPCIONAL no contrato (o backend desta frente
-     * sobe em paralelo). Enquanto ele não vier, a fileira conta as linhas carregadas, como antes, em
-     * vez de aparecer zerada.
+     * A CONTAGEM LOCAL FICA DE FALLBACK: enquanto o KPI da primeira página não chegou (`kpisBase`
+     * nulo), a fileira conta as linhas da página em vez de aparecer zerada. É transitório, só até a
+     * primeira resposta.
      */
     const porEtapaLocal: Record<string, number> = {};
     const porDesfechoLocal: Record<string, number> = {};
@@ -751,15 +691,27 @@ export default function CentralDeCandidatosPage() {
     const porEtapa = kpisBase?.porEtapa ?? porEtapaLocal;
     const porDesfecho = kpisBase?.porSituacao ?? porDesfechoLocal;
     return {
-      // TOTAL E "SEM VAGA" VÊM DO SNAPSHOT DA BASE INTEIRA (ver acima), nunca do subconjunto que o
-      // filtro de card devolve: um filtro que muda o próprio número que mostra não serve de nada.
-      total: totalExibido,
-      semVaga: semVagaExibido,
+      // TOTAL: o snapshot da base inteira, congelado enquanto um card filtra (§A.12). SEM VAGA: o
+      // contador dedicado (`semCandidatura: true`), que a página sozinha não teria como calcular.
+      total: totalBaseSnapshot,
+      semVaga: semVagaCount,
       etapas: cardsDeEtapa(catalogoEtapas, porEtapa),
       desfechos: cardsDeDesfecho(porDesfecho),
     };
-  }, [linhasSemCard, catalogoEtapas, kpisBase, totalExibido, semVagaExibido]);
+  }, [linhasSemCard, catalogoEtapas, kpisBase, totalBaseSnapshot, semVagaCount]);
 
+  /**
+   * ─ AS LINHAS EXIBIDAS, E O RECORTE QUE A PAGINAÇÃO POR PESSOA EXIGE (§A.27) ───────────────────
+   *
+   * O servidor pagina por PESSOA e filtra cliente/etapa por `exists` de candidatura: uma pessoa que
+   * casa o filtro vem com TODAS as candidaturas dela, inclusive as que NÃO casam. `linhasSemCard` já
+   * recorta as LINHAS pelos mesmos cliente/etapa/escopo no cliente, então a tabela mostra só as
+   * candidaturas pedidas, como antes. Aqui só aplicamos o CARD ativo por cima, igual à versão antiga.
+   *
+   * O "Sem Vaga" já vem do servidor (`semCandidatura: true` manda só gente sem candidatura viva), mas
+   * o recorte por linha é mantido para pintar exatamente a ausência de candidatura e descartar a
+   * linha cujo funil não veio.
+   */
   const linhas = useMemo(() => {
     if (cardAtivo === CARD_TOTAL) return linhasSemCard;
     // "Sem Vaga" é quem não está em vaga nenhuma, e não quem a tela não conseguiu resolver.
@@ -775,68 +727,30 @@ export default function CentralDeCandidatosPage() {
   }, [linhasSemCard, cardAtivo]);
 
   /**
-   * ─ §A.29: A ORDENAÇÃO CLICÁVEL, reusando a peça que o resto do sistema já usa ────────────────
+   * ─ §A.29: A ORDENAÇÃO CLICÁVEL, AGORA NO SERVIDOR (paginação no servidor) ─────────────────────
    *
-   * `useOrdenacao` + `ColunaOrdenavel` são os mesmos da Integração e da Gestão Das Assinaturas. Nada
-   * de ordenação escrita à mão aqui: um jeito só de ordenar no sistema inteiro.
+   * Nunca houve como ordenar no navegador as dezenas de milhares de linhas que ele não segura mais, e
+   * `useOrdenacao` só é honesto em tabela que carrega o conjunto inteiro (o próprio limite registrado
+   * na peça). A ordenação passou ao servidor: o clique no cabeçalho chama `setOrdenacao` do hook, que
+   * manda a coluna e a direção na busca. Etapa e situação ordenam pelo CATÁLOGO lá (ordem do funil,
+   * `array_position` da situação) e os nulos vão ao fim, as mesmas réguas de antes, só do lado certo.
    *
-   * ELA ENVOLVE O FIM DA CADEIA, e é isso que faz filtro e ordenação CONVIVEREM. A cadeia da tela é
-   * `linhasBase` (busca do backend) → `linhasSemCard` (cliente e etapa) → `linhas` (o card ativo) →
-   * ORDENAÇÃO. Trocar de filtro só troca a lista que entra aqui, e a coluna escolhida continua de pé
-   * porque ela mora no estado do `useOrdenacao`, não na lista; clicar no cabeçalho só reordena o que
-   * o filtro deixou passar, sem tocar em filtro nenhum. Enquanto ninguém clica, a lista sai intacta.
-   *
-   * Client-side é honesto nesta tela: ela carrega o conjunto inteiro (a busca é POST sem paginação),
-   * diferente do Gerenciador, que é paginado no servidor e por isso ficou de fora da peça.
-   *
-   * ETAPA E SITUAÇÃO ORDENAM PELO CATÁLOGO, não pelo rótulo. Alfabética, "Aprovação" viria antes de
-   * "Captação" e o funil apareceria embaralhado; pelo índice do catálogo a coluna sobe na ordem do
-   * processo, do começo para o fim, que é como o time lê o funil.
-   *
-   * ÚLTIMO CONTATO É DATA, e a candidatura sem contato registrado devolve `null`: o `useOrdenacao`
-   * manda vazio para o FIM nas DUAS direções, então inverter a seta nunca traz um bando de "não
-   * informado" para o topo empurrando o dado útil para longe. Vale igual para a linha SEM VAGA, que
-   * não tem etapa, situação nem vaga para comparar.
+   * `ColunaOrdenavel` (§A.29) continua sendo o cabeçalho clicável, sem reescrever a tabela: ele só
+   * precisa de `ord.ordem` (a coluna/direção ativa) e de `ord.alternar` (o clique). Este adaptador os
+   * liga ao hook; `itens` não é usado pelo cabeçalho (a lista exibida é `linhas`), então vai vazio.
    */
-  const colunasOrdenaveis = useMemo<ColOrd<Linha>[]>(
-    () => [
-      { chave: "candidato", tipo: "texto", valor: (l) => l.pessoa.nome },
-      {
-        chave: "vaga",
-        tipo: "texto",
-        // O mesmo texto que a célula mostra: nome de divulgação e, na falta dele, o código.
-        valor: (l) => l.candidatura?.vagaNome ?? l.candidatura?.vagaCodigo ?? null,
-      },
-      { chave: "cliente", tipo: "texto", valor: (l) => l.candidatura?.clienteNome ?? null },
-      { chave: "cargo", tipo: "texto", valor: (l) => l.candidatura?.cargoNome ?? null },
-      {
-        chave: "etapa",
-        tipo: "status",
-        /*
-         * ORDENA PELO QUE A CÉLULA MOSTRA (peça P1). A encerrada devolve `null`, que o `useOrdenacao`
-         * manda para o FIM nas duas direções: ordenar o "Fora Do Funil" pelo índice da etapa
-         * congelada espalharia os encerrados no meio do funil, e a coluna passaria a ordenar por um
-         * dado que ela deixou de exibir.
-         */
-        valor: (l) =>
-          l.candidatura && candidaturaViva(l.candidatura.situacao)
-            ? ordemDaEtapa(l.candidatura.etapa, catalogoEtapas)
-            : null,
-      },
-      {
-        chave: "situacao",
-        tipo: "status",
-        valor: (l) =>
-          l.candidatura ? CANDIDATURA_SITUACOES.indexOf(l.candidatura.situacao) : null,
-      },
-      { chave: "ultimoContato", tipo: "data", valor: (l) => l.candidatura?.ultimoContatoEm ?? null },
-    ],
-    // O CATÁLOGO ENTRA NAS DEPENDÊNCIAS: sem ele, a coluna Etapa ficaria congelada na ordem
-    // calculada ANTES de a rota responder, ou seja, todo mundo empatado no fim da lista.
-    [catalogoEtapas],
+  const ord = useMemo<Ordenacao<Linha>>(
+    () => ({
+      itens: [],
+      ordem: paginacao.ordenarPor
+        ? { chave: paginacao.ordenarPor, dir: paginacao.direcao ?? "asc" }
+        : null,
+      alternar: (chave: string) => setOrdenacao(chave),
+    }),
+    [paginacao.ordenarPor, paginacao.direcao, setOrdenacao],
   );
-  const ord = useOrdenacao(colunasOrdenaveis, linhas);
-  const visiveis = ord.itens;
+  // A LISTA EXIBIDA já vem ordenada do servidor; aqui só passa pelos recortes de linha do cliente.
+  const visiveis = linhas;
 
   /**
    * AS OPÇÕES DE VAGA E DE CLIENTE VÊM DE `/as/candidatos/opcoes` (§A.37), não de `/as/vagas`. A
@@ -925,16 +839,10 @@ export default function CentralDeCandidatosPage() {
     setFOrigem("");
   }
 
-  /**
-   * ─ O ESTADO DA CARGA, PARA O INDICADOR E PARA O AVISO DE CORTE (item 4) ──────────────────────
-   *
-   * Com busca por nome ou CPF ativa, a tela mantém o comportamento de hoje: a página do servidor,
-   * com o aviso de corte quando sobra gente. SEM busca de texto, a carga de fundo acumula a base
-   * inteira, então o indicador de progresso toma o lugar do aviso de corte, que diria "use a busca"
-   * justamente quando a carga de fundo torna isso desnecessário.
-   */
-  const buscandoTexto = busca.trim() !== "" || cpfBusca.replace(/\D/g, "") !== "";
-  const carregadosNaBase = Math.min(pessoas.length, totalBase);
+  // O ERRO EXIBIDO: o do carregamento (hook) ou o de uma ação; qualquer um aparece no mesmo lugar.
+  const erroExibido = paginacao.erro ?? erro;
+  // "X de N": a página atual sobre o total REAL de candidatos (pessoas) do filtro. Formato pt-BR.
+  const fmtNumero = useMemo(() => new Intl.NumberFormat("pt-BR"), []);
 
   return (
     <>
@@ -948,7 +856,7 @@ export default function CentralDeCandidatosPage() {
         <p className="text-sm text-dim">
           {carregando
             ? "Carregando os candidatos."
-            : `${linhas.length} ${linhas.length === 1 ? "linha na fila" : "linhas na fila"}.`}
+            : `${fmtNumero.format(totalBase)} ${totalBase === 1 ? "candidato no filtro" : "candidatos no filtro"}.`}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {/* §A.6: a busca por NOME também viaja no corpo do POST, junto com o resto. Nada desta
@@ -1059,35 +967,12 @@ export default function CentralDeCandidatosPage() {
         </div>
       </div>
 
-      {erro && (
+      {erroExibido && (
         <p
           className="mb-5 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
           role="alert"
         >
-          {erro}
-        </p>
-      )}
-
-      {/* O CORTE DA BUSCA (Frente D, ponto 15). A lista sempre teve teto; o que não podia continuar
-          é ele ser invisível, porque a tela passava a apresentar uma janela como se fosse a base.
-          SÓ APARECE NA BUSCA POR TEXTO: sem ela, a carga de fundo acumula a base inteira e o
-          indicador de progresso logo abaixo substitui este aviso (item 4). */}
-      {buscandoTexto && avisoCorte && (
-        <p className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-dim">
-          {avisoCorte}
-        </p>
-      )}
-
-      {/* O INDICADOR DE PROGRESSO DA CARGA INCREMENTAL (item 4). Mostra só a CONTAGEM (§A.6: nunca
-          nome nem CPF): "Carregados X de N candidatos" enquanto a carga de fundo roda, e "Todos os N
-          candidatos foram carregados" ao cobrir a base. §A.11 sem travessão, §A.24 frase de apoio. */}
-      {!carregando && !buscandoTexto && totalBase > 0 && (
-        <p
-          className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-dim"
-          role="status"
-          aria-live="polite"
-        >
-          {fraseDeProgressoDeCarga(carregadosNaBase, totalBase)}
+          {erroExibido}
         </p>
       )}
 
@@ -1428,6 +1313,56 @@ export default function CentralDeCandidatosPage() {
         </div>
       </GlassCard>
 
+      {/* ─ NAVEGAÇÃO DE PÁGINAS (paginação no servidor) ───────────────────────────────────────────
+          "X de N" é a página atual sobre o total REAL de candidatos do filtro, não as linhas da tela
+          (uma pessoa em três vagas rende três linhas e um candidato só). Os botões ficam desligados
+          nas pontas. §A.11 sem travessão; os rótulos são ações, escrita normal (§A.24). */}
+      {!carregando && paginacao.totalPaginas > 1 && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[13px] text-dim">
+            Página {fmtNumero.format(paginacao.pagina)} de {fmtNumero.format(paginacao.totalPaginas)}
+            <span className="text-faint">
+              {" · "}
+              {fmtNumero.format(totalBase)} candidatos no filtro
+            </span>
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              className="py-2"
+              onClick={() => paginacao.irParaPagina(1)}
+              disabled={paginacao.pagina <= 1}
+            >
+              Primeira
+            </Button>
+            <Button
+              variant="secondary"
+              className="py-2"
+              onClick={() => paginacao.anterior()}
+              disabled={paginacao.pagina <= 1}
+            >
+              Anterior
+            </Button>
+            <Button
+              variant="secondary"
+              className="py-2"
+              onClick={() => paginacao.proxima()}
+              disabled={paginacao.pagina >= paginacao.totalPaginas}
+            >
+              Próxima
+            </Button>
+            <Button
+              variant="secondary"
+              className="py-2"
+              onClick={() => paginacao.irParaPagina(paginacao.totalPaginas)}
+              disabled={paginacao.pagina >= paginacao.totalPaginas}
+            >
+              Última
+            </Button>
+          </div>
+        </div>
+      )}
+
       {novoAberto && (
         <NovoCandidatoModal
           vagasAbertas={vagasAbertas}
@@ -1436,7 +1371,7 @@ export default function CentralDeCandidatosPage() {
           onSalvo={(id) => {
             setNovoAberto(false);
             setFichaId(id);
-            void carregar();
+            recarregar();
           }}
         />
       )}
@@ -1446,7 +1381,7 @@ export default function CentralDeCandidatosPage() {
           vagasAbertas={vagasAbertas}
           token={token}
           onClose={() => setImportarAberto(false)}
-          onImportado={() => void carregar()}
+          onImportado={() => recarregar()}
         />
       )}
 
@@ -1457,7 +1392,7 @@ export default function CentralDeCandidatosPage() {
           onClose={() => setAlocarAberto(false)}
           onAlocado={() => {
             setAlocarAberto(false);
-            void carregar();
+            recarregar();
           }}
         />
       )}
@@ -1470,7 +1405,7 @@ export default function CentralDeCandidatosPage() {
           onClose={() => setTrocaAlvo(null)}
           onTrocado={() => {
             setTrocaAlvo(null);
-            void carregar();
+            recarregar();
           }}
         />
       )}
@@ -1486,7 +1421,7 @@ export default function CentralDeCandidatosPage() {
           onClose={() => setVoltaAlvo(null)}
           onAlocado={() => {
             setVoltaAlvo(null);
-            void carregar();
+            recarregar();
           }}
         />
       )}
@@ -1497,7 +1432,7 @@ export default function CentralDeCandidatosPage() {
           token={token}
           vagaPorId={vagaPorId}
           onClose={() => setFichaId(null)}
-          onMudou={() => void carregar()}
+          onMudou={() => recarregar()}
         />
       )}
 
@@ -1508,7 +1443,7 @@ export default function CentralDeCandidatosPage() {
           onClose={() => setMoverAlvo(null)}
           onFeito={() => {
             setMoverAlvo(null);
-            void carregar();
+            recarregar();
           }}
         />
       )}
@@ -1520,7 +1455,7 @@ export default function CentralDeCandidatosPage() {
           onClose={() => setContatoAlvo(null)}
           onRegistrado={() => {
             setContatoAlvo(null);
-            void carregar();
+            recarregar();
           }}
         />
       )}

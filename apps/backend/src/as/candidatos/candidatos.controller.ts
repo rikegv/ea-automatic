@@ -33,21 +33,28 @@ import { exigirPlanilhaNoTeto, OPCOES_UPLOAD_PLANILHA } from "../../planilha/upl
 import { FiltroUploadPlanilha } from "../../planilha/upload-erro.filter";
 import {
   AdicionarEmLoteDto,
+  AdicionarPorFiltroDto,
   AlocarEmVagaDto,
   BuscarCandidatosDto,
+  CandidaturasDaVagaDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
   FinalizarPosicaoDto,
   FinalizarPosicaoEmLoteDto,
+  FinalizarPosicaoPorFiltroDto,
+  IdsDasCandidaturasDaVagaDto,
   MarcarEntrevistaDto,
   MoverEtapaDto,
   MoverEtapaEmLoteDto,
+  MoverEtapaPorFiltroDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
   ReprovarPeloClienteDto,
   RegistrarSaidaEmLoteDto,
+  RegistrarSaidaPorFiltroDto,
   TrocarVagaDto,
   TrocarVagaEmLoteDto,
+  TrocarVagaPorFiltroDto,
 } from "./candidatos.dto";
 
 /**
@@ -126,6 +133,39 @@ export class CandidatosController {
   @Get("vaga/:vagaId")
   painelVaga(@Param("vagaId", ParseUUIDPipe) vagaId: string) {
     return this.candidatos.painelVaga(vagaId);
+  }
+
+  /**
+   * ─ A ABA VER CANDIDATOS, PAGINADA NO SERVIDOR (07/10/2026), IRMA de `painelVaga` ──────────────
+   *
+   * POST, e não GET, pela MESMA razão de `buscar`: o recorte (busca por nome, situação, etapa) viaja
+   * no CORPO, nunca em query string (§A.6). `HttpCode(200)` porque é leitura, não criação.
+   *
+   * MAIS SEGMENTOS QUE `vaga/:vagaId`, então o Nest não os confunde: a ordem aqui é de leitura. O
+   * caminho `candidaturas/ids` logo abaixo é irmão e também não colide (o último segmento é fixo).
+   *
+   * SEM `@Roles`, como `painelVaga` e todo o módulo: quem restringe é o menu `as-candidatos`.
+   */
+  @Post("vaga/:vagaId/candidaturas")
+  @HttpCode(200)
+  candidaturasDaVaga(
+    @Param("vagaId", ParseUUIDPipe) vagaId: string,
+    @Body() dto: CandidaturasDaVagaDto,
+  ) {
+    return this.candidatos.candidaturasDaVagaPagina(vagaId, dto);
+  }
+
+  /**
+   * OS IDS DAS CANDIDATURAS QUE CASAM O FILTRO, para a seleção de um subconjunto grande sem baixar a
+   * tela inteira. §A.6: devolve só UUIDs, nenhum nome, nenhum CPF. POST pelo mesmo motivo acima.
+   */
+  @Post("vaga/:vagaId/candidaturas/ids")
+  @HttpCode(200)
+  idsDasCandidaturasDaVaga(
+    @Param("vagaId", ParseUUIDPipe) vagaId: string,
+    @Body() dto: IdsDasCandidaturasDaVagaDto,
+  ) {
+    return this.candidatos.idsDaVaga(vagaId, dto);
   }
 
   // ── AS AÇÕES EM MASSA (grupo 1) ───────────────────────────────────────────
@@ -210,6 +250,61 @@ export class CandidatosController {
   @Patch("candidaturas/lote/vaga")
   trocarVagaEmLote(@Body() dto: TrocarVagaEmLoteDto, @CurrentUser() user: AuthUser) {
     return this.candidatos.trocarVagaEmLote(dto, user.id);
+  }
+
+  /**
+   * ─ AS ACOES EM MASSA POR FILTRO, SEM TETO (decisao do diretor, 07/10/2026) ────────────────────
+   *
+   * ┌─ O IRMAO SEM TETO DAS ROTAS `lote` ────────────────────────────────────────────────────────┐
+   * │ As rotas `candidaturas/lote/...` recebem a LISTA de ids marcados (teto de 200, protecao de  │
+   * │ payload). Estas recebem o ALVO POR FILTRO: o servidor resolve o conjunto INTEIRO e age sobre │
+   * │ ele, SEM teto. A acao, a trava e a autorizacao sao as MESMAS da unitaria, reaplicadas linha a │
+   * │ linha (por isso a saida e a adicao recebem o `AuthUser`, nao so o id). Retorno:              │
+   * │ `AsResultadoAcaoEmMassa` (`{ afetados, falharam }`), so contagens (§A.6).                     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `por-filtro` e PREFIXO FIXO, declarado ANTES de `candidaturas/:id/...`, pela mesma razao do `lote`:
+   * o Nest casa na ordem de declaracao, e sem o prefixo proprio um POST bateria na rota de parametro.
+   * SEM `@Roles`, como todo o modulo: quem restringe e o menu `as-candidatos` no `MenuGuard`.
+   */
+
+  /** DESVINCULAR (e ENVIAR PARA ADMISSAO) por filtro. O USUARIO INTEIRO desce: a trava de Master le o papel. */
+  @Post("candidaturas/por-filtro/saida")
+  @HttpCode(200)
+  registrarSaidaPorFiltro(
+    @Body() dto: RegistrarSaidaPorFiltroDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.registrarSaidaPorFiltro(dto, user);
+  }
+
+  /** MOVER NO FUNIL por filtro. PATCH, como a rota individual: a mesma propriedade muda. */
+  @Patch("candidaturas/por-filtro/etapa")
+  moverEtapaPorFiltro(@Body() dto: MoverEtapaPorFiltroDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.moverEtapaPorFiltro(dto, user.id);
+  }
+
+  /** TROCAR A VAGA por filtro. PATCH, como a rota individual. */
+  @Patch("candidaturas/por-filtro/vaga")
+  trocarVagaPorFiltro(@Body() dto: TrocarVagaPorFiltroDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.trocarVagaPorFiltro(dto, user.id);
+  }
+
+  /** FINALIZAR POSICAO por filtro. */
+  @Post("candidaturas/por-filtro/finalizar-posicao")
+  @HttpCode(200)
+  finalizarPosicaoPorFiltro(
+    @Body() dto: FinalizarPosicaoPorFiltroDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.finalizarPosicaoPorFiltro(dto, user.id);
+  }
+
+  /** ADICIONAR A VAGA por filtro: todos os DISPONIVEIS. A vaga de destino vem do `filtro.vagaId`. */
+  @Post("candidaturas/por-filtro/adicionar")
+  @HttpCode(200)
+  adicionarPorFiltro(@Body() dto: AdicionarPorFiltroDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.adicionarPorFiltro(dto, user);
   }
 
   /** Mover de etapa no funil. Não muda a situação: quem chega na Aprovação segue Em Seleção. */

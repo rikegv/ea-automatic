@@ -9,7 +9,7 @@ import {
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { and, asc, desc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
   AsCandidaturaEntrevista,
@@ -22,16 +22,24 @@ import type {
   AsCandidaturaEncerrada,
   AsCandidaturaItem,
   AsCandidaturaNaLista,
+  AsCandidaturasDaVagaPagina,
   AsContatoItem,
   AsFalhaEmMassa,
   AsMotivoDescarte,
   AsOcupacaoVaga,
   AsPainelVaga,
   AsReentradaPrecisaCiencia,
+  AsResultadoAcaoEmMassa,
   AsResultadoEmMassa,
   CandidaturaSituacao,
 } from "@ea/shared-types";
-import { isValidCpf, motivoVemDoCatalogo, normalizeCpf } from "@ea/shared-types";
+import {
+  CANDIDATURA_SITUACOES,
+  SITUACOES_QUE_FINALIZAM_POSICAO,
+  isValidCpf,
+  motivoVemDoCatalogo,
+  normalizeCpf,
+} from "@ea/shared-types";
 /*
  * O CATÁLOGO DE MOTIVOS DE DESCARTE chega como FUNÇÃO DE MÓDULO, e não por injeção de construtor
  * (ver o bloco de `exigirMotivoDoCatalogo`): este serviço tem cinco argumentos e é instanciado por
@@ -47,6 +55,7 @@ import {
   asCandidaturaEtapas,
   asCandidaturas,
   asContatos,
+  asEtapasFunil,
   asRetencaoEventos,
   cargos,
   clientes,
@@ -129,21 +138,27 @@ import type { AuthUser } from "../../auth/auth.types";
 import { BUSCA_LIMITE_MAXIMO, BUSCA_LIMITE_PADRAO } from "./candidatos.dto";
 import type {
   AdicionarEmLoteDto,
+  AdicionarPorFiltroDto,
   AlocarEmVagaDto,
   BuscarCandidatosDto,
+  CandidaturasDaVagaDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
   FinalizarPosicaoDto,
   FinalizarPosicaoEmLoteDto,
+  FinalizarPosicaoPorFiltroDto,
   MarcarEntrevistaDto,
   MoverEtapaDto,
   MoverEtapaEmLoteDto,
+  MoverEtapaPorFiltroDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
   RegistrarSaidaEmLoteDto,
+  RegistrarSaidaPorFiltroDto,
   ReprovarPeloClienteDto,
   TrocarVagaDto,
   TrocarVagaEmLoteDto,
+  TrocarVagaPorFiltroDto,
 } from "./candidatos.dto";
 
 /**
@@ -201,6 +216,17 @@ const ID_DO_CANDIDATO = sql`${asCandidatos}.${sql.identifier("id")}`;
  */
 const NAO_HA_ENVIO_A_REVERTER =
   "Esta candidatura não está enviada para admissão, então não há envio a reverter. Recarregue a página para ver a situação atual.";
+
+/*
+ * ─ O VALOR ESPECIAL "FORA DO FUNIL" DO FILTRO DE ETAPA (paginacao no servidor, 07/10/2026) ──────
+ *
+ * A tabela do painel da vaga nao mostra etapa de quem SAIU do funil: a etapa de uma candidatura
+ * encerrada e memoria, nao posicao atual (`etapaVisivel` em `as-painel-recorte.ts`, no frontend).
+ * Entao o filtro de etapa tambem fala essa lingua: este valor casa "quem saiu do funil", e o
+ * servidor o traduz em `situacao NOT IN (vivas)`. O literal e o MESMO do frontend (`ETAPA_FORA_DO_FUNIL`):
+ * e um valor de filtro que os dois lados trocam no corpo, entao tem de ser identico byte a byte.
+ */
+const ETAPA_FORA_DO_FUNIL = "__FORA_DO_FUNIL__";
 
 @Injectable()
 export class CandidatosService {
@@ -667,6 +693,80 @@ export class CandidatosService {
     }
 
     /*
+     * ┌─ OS TRES FILTROS QUE SAIRAM DO NAVEGADOR PARA A BASE (paginacao no servidor, 07/10/2026) ──┐
+     * │ escopo, cliente e etapa recortavam a tela em `linhasSemCard` (`as/candidatos/page.tsx`), e  │
+     * │ nunca houve como aplica-los no navegador sobre 83 mil linhas que ele nao segura mais. Entram │
+     * │ na BASE (`filtros`), nunca em `filtrosLista`: por isso valem para a lista E para os KPIs (o   │
+     * │ `kpisDaBusca` recebe `and(...filtros)`), e trocar aba/cliente/etapa muda cards e tabela        │
+     * │ JUNTOS. A regua de casamento e a MESMA do client-side, so que traduzida para predicado de     │
+     * │ PESSOA (a unidade da pagina, Opcao A): a pessoa entra se TIVER a candidatura que casa.         │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+
+    /*
+     * ESCOPO. O client-side decide a LINHA por `candidatura === null || situacao === "ATIVO"`
+     * (`emAndamento`), e a unidade aqui e a PESSOA, entao o predicado pergunta se a pessoa TEM a linha
+     * que casa o escopo:
+     *   - `andamento`: a pessoa nao tem candidatura NENHUMA (a linha "sem funil", que fica em
+     *     andamento, nunca no historico) OU tem ao menos uma `ATIVO`;
+     *   - `historico`: a pessoa tem ao menos uma candidatura com desfecho (`situacao <> 'ATIVO'`).
+     * A regua de `emAndamento` olha so `ATIVO`, nao `candidaturaViva`, de proposito: quem esta
+     * APROVADO/ALOCADO/ENVIADO ja recebeu decisao e mora no Historico, que e exatamente onde os cards
+     * de desfecho o contam. Ausente, nao recorta: a base inteira, como antes desta frente.
+     */
+    if (dto.escopo === "andamento") {
+      filtros.push(
+        sql`(not exists (select 1 from ${asCandidaturas}
+                          where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO})
+             or exists (select 1 from ${asCandidaturas}
+                         where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                           and ${asCandidaturas.situacao} = ${"ATIVO"}))`,
+      );
+    } else if (dto.escopo === "historico") {
+      filtros.push(
+        sql`exists (select 1 from ${asCandidaturas}
+                     where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                       and ${asCandidaturas.situacao} <> ${"ATIVO"})`,
+      );
+    }
+
+    /*
+     * CLIENTE pelo NOME DE EXIBICAO, a MESMA expressao da projecao do funil
+     * (`coalesce(nome_operacao, razao_social)`), e nao pelo `codCliente`: o client-side `fCliente`
+     * casava `l.candidatura?.clienteNome === fCliente`, e a opcao do seletor vem desse mesmo nome. O
+     * join a `clientes` e INNER de proposito: so casa um nome concreto, e candidatura sem cliente
+     * (vaga em revisao) nunca iguala um nome, entao a pessoa sem cliente sai quando o filtro esta
+     * ativo, que e o comportamento de antes.
+     */
+    const cliente = dto.cliente?.trim();
+    if (cliente) {
+      filtros.push(
+        sql`exists (select 1 from ${asCandidaturas}
+                     join ${vagas} on ${vagas.id} = ${asCandidaturas.vagaId}
+                     join ${clientes} on ${clientes.codCliente} = ${vagas.codCliente}
+                     where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                       and coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial}) = ${cliente})`,
+      );
+    }
+
+    /*
+     * ETAPA pelo CODIGO, com o alcance SO-VIVOS do client-side `fEtapa`: ele exigia
+     * `candidaturaViva(situacao)` E `etapa = <valor>`, lido da MESMA constante `SITUACOES_VIVAS` que a
+     * coluna e o filtro "sem candidatura" ja usam (uma regua so, nunca uma terceira copia). Filtrar
+     * "Triagem" traz junto quem foi APROVADO ou ALOCADO estando na Triagem, e nunca quem foi
+     * descartado la, exatamente como a tela fazia.
+     */
+    const etapa = dto.etapa?.trim();
+    if (etapa) {
+      filtros.push(
+        sql`exists (select 1 from ${asCandidaturas}
+                     where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                       and ${inArray(asCandidaturas.situacao, SITUACOES_VIVAS)}
+                       and ${asCandidaturas.etapa} = ${etapa})`,
+      );
+    }
+
+    /*
      * ┌─ OS FILTROS DE CARD ENTRAM SÓ NA LISTA, NUNCA NO KPI (06/10/2026) ─────────────────────────┐
      * │ Clicar num card passou a filtrar a LISTA pela BASE INTEIRA (antes era só sobre a página     │
      * │ carregada, e quem não estava nela sumia). MAS os KPIs continuam contados sobre a base SEM    │
@@ -742,11 +842,13 @@ export class CandidatosService {
       // A LISTA LEVA OS FILTROS DE CARD (`filtrosLista`); os KPIs abaixo levam só a base (`filtros`).
       .where(filtrosLista.length > 0 ? and(...filtrosLista) : undefined)
       /*
-       * O DESEMPATE POR `id` NÃO É ENFEITE: sem ele, duas pessoas cadastradas no MESMO instante
-       * (uma importação de planilha grava em lote) têm ordem indefinida entre uma página e a
-       * seguinte, e a mesma linha pode aparecer duas vezes ou sumir no meio da paginação.
+       * A ORDENACAO VIAJA AO SERVIDOR (07/10/2026). O DESEMPATE POR `id` NÃO É ENFEITE e por isso o
+       * builder SEMPRE o anexa: sem ele, duas pessoas cadastradas no MESMO instante (uma importação
+       * de planilha grava em lote) têm ordem indefinida entre uma página e a seguinte, e a mesma
+       * linha pode aparecer duas vezes ou sumir no meio da paginação. Ausente, o builder devolve
+       * `criadoEm desc, id desc`, que é exatamente a ordem de antes.
        */
-      .orderBy(desc(asCandidatos.criadoEm), desc(asCandidatos.id))
+      .orderBy(...this.ordenacaoDaBusca(dto))
       .limit(limite)
       .offset(offset);
 
@@ -793,10 +895,19 @@ export class CandidatosService {
      *
      * SEM FUNIL, SEM KPI: a chamada `semCandidatura: true` oferece gente para alocacao e nao tem
      * coluna de funil (ver `funilDaPagina`); contar etapa/situacao ali seria trabalho jogado fora.
+     *
+     * ┌─ O KPI SO VEM NA PRIMEIRA PAGINA (`offset === 0`), uma vez por filtro (07/10/2026) ───────┐
+     * │ O group-by pesado conta o conjunto filtrado INTEIRO e nao muda entre paginas do MESMO      │
+     * │ filtro, entao recalcula-lo a cada "carregar mais" seria trabalho repetido. `offset === 0`  │
+     * │ <=> o filtro mudou (a tela volta ao topo), que e exatamente quando o KPI precisa refazer.  │
+     * │ `total` (o `count(*) over()`) continua vindo em TODA pagina, barato, entao a tela nunca     │
+     * │ fica sem o numero real. O KPI segue contado sobre `filtros` (a base), jamais `filtrosLista`.│
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
      */
-    const kpis = dto.semCandidatura
-      ? undefined
-      : await this.kpisDaBusca(filtros.length > 0 ? and(...filtros) : undefined);
+    const kpis =
+      dto.semCandidatura || offset > 0
+        ? undefined
+        : await this.kpisDaBusca(filtros.length > 0 ? and(...filtros) : undefined);
 
     const itens: AsCandidatoListItem[] = linhas.map((l) => ({
       id: l.id,
@@ -884,6 +995,81 @@ export class CandidatosService {
     for (const l of porSituacaoLinhas) porSituacao[l.chave] = Number(l.quantidade ?? 0);
 
     return { porEtapa, porSituacao };
+  }
+
+  /*
+   * ─ A ORDENACAO DA BUSCA, TRADUZIDA EM ORDER BY (paginacao no servidor, 07/10/2026) ─────────────
+   *
+   * ┌─ CORRELACIONADA, NUNCA JOIN NA CONSULTA PAGINADA ──────────────────────────────────────────┐
+   * │ A unidade da pagina e PESSOA (Opcao A do plano). Ordenar por coluna de CANDIDATURA (vaga,    │
+   * │ cliente, cargo, etapa, situacao, ultimo contato) usa um VALOR REPRESENTATIVO por pessoa, numa │
+   * │ subconsulta correlacionada. Um JOIN aqui seria a armadilha E-6: `total` (`count(*) over()`)  │
+   * │ passaria a contar candidaturas e o `limit` a cortar candidaturas, e uma pessoa com 118        │
+   * │ candidaturas estouraria a pagina sozinha. Por isso NENHUMA destas expressoes toca o `from`/   │
+   * │ `join` da consulta paginada: elas vivem so no `order by`.                                     │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NULOS AO FIM nas DUAS direcoes (`nulls last`): etapa de quem saiu do funil e contato que nunca
+   * houve nao sobem ao topo so por serem nulos. O Postgres poe nulo primeiro no `desc`, entao o
+   * `nulls last` e explicito. O DESEMPATE por `id desc` e SEMPRE anexado (ver `buscar`).
+   *
+   * etapa e situacao ordenam pelo CATALOGO, nunca pelo texto: etapa pela `ordem` de `as_etapas_funil`
+   * (a MESMA ordem do funil que o diretor define), situacao por `array_position` na lista do dominio.
+   * §A.6: tudo isto e chave de coluna e codigo de catalogo, nenhum dado pessoal entra na ordenacao.
+   */
+  private ordenacaoDaBusca(dto: BuscarCandidatosDto): SQL[] {
+    const desempate = desc(asCandidatos.id);
+    const dir = dto.direcao === "asc" ? sql`asc` : sql`desc`;
+    const ordenar = (expr: SQL) => [sql`${expr} ${dir} nulls last` as SQL, desempate];
+
+    const porCandidato = sql`${asCandidaturas.candidatoId} = ${asCandidatos.id}`;
+    const vivas = inArray(asCandidaturas.situacao, SITUACOES_VIVAS);
+    const posicoesSituacao = sql.join(
+      CANDIDATURA_SITUACOES.map((s) => sql`${s}`),
+      sql`, `,
+    );
+
+    switch (dto.ordenarPor) {
+      case "candidato":
+        return ordenar(sql`${asCandidatos.nome}`);
+      case "criadoEm":
+        return ordenar(sql`${asCandidatos.criadoEm}`);
+      case "ultimoContato":
+        return ordenar(
+          sql`(select max(${asCandidaturas.ultimoContatoEm}) from ${asCandidaturas} where ${porCandidato})`,
+        );
+      case "etapa":
+        return ordenar(
+          sql`(select min(${asEtapasFunil.ordem}) from ${asCandidaturas}
+                 join ${asEtapasFunil} on ${asEtapasFunil.codigo} = ${asCandidaturas.etapa}
+                where ${porCandidato} and ${vivas})`,
+        );
+      case "situacao":
+        return ordenar(
+          sql`(select min(array_position(array[${posicoesSituacao}]::text[], ${asCandidaturas.situacao}::text))
+                 from ${asCandidaturas} where ${porCandidato})`,
+        );
+      case "vaga":
+        return ordenar(
+          sql`(select min(${vagas.codigo}) from ${asCandidaturas}
+                 join ${vagas} on ${vagas.id} = ${asCandidaturas.vagaId} where ${porCandidato})`,
+        );
+      case "cliente":
+        return ordenar(
+          sql`(select min(coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial})) from ${asCandidaturas}
+                 join ${vagas} on ${vagas.id} = ${asCandidaturas.vagaId}
+                 left join ${clientes} on ${clientes.codCliente} = ${vagas.codCliente} where ${porCandidato})`,
+        );
+      case "cargo":
+        return ordenar(
+          sql`(select min(${cargos.nome}) from ${asCandidaturas}
+                 join ${vagas} on ${vagas.id} = ${asCandidaturas.vagaId}
+                 left join ${cargos} on ${cargos.id} = ${vagas.cargoId} where ${porCandidato})`,
+        );
+      default:
+        // AUSENTE: a ordem de antes, intacta (`criadoEm desc, id desc`).
+        return [desc(asCandidatos.criadoEm), desc(asCandidatos.id)];
+    }
   }
 
   /*
@@ -2895,6 +3081,179 @@ export class CandidatosService {
     return err.message;
   }
 
+  /*
+   * ─ AS ACOES EM MASSA POR FILTRO, SEM TETO (decisao do diretor, 07/10/2026) ──────────────────────
+   *
+   * ┌─ POR QUE O SERVIDOR RESOLVE O CONJUNTO, E DEPOIS USA O MESMO `emLote` ─────────────────────┐
+   * │ O diretor quer agir sobre TODOS do filtro, sem o teto de 200. Entao a tela manda o FILTRO,  │
+   * │ nao a lista, e estes metodos resolvem os ids (do conjunto INTEIRO) e os entregam ao MESMO    │
+   * │ `emLote` das acoes com lista: UMA TRANSACAO POR LINHA, sequencial. Isso NAO burla o teto: o   │
+   * │ teto era barreira de PAYLOAD (lista gigante no corpo), e aqui o corpo e so o filtro. A         │
+   * │ seguranca do lote continua inteira porque o `emLote` nao mudou, e e ele quem a garante (pool  │
+   * │ `max=10`, lock da vaga serializado linha a linha). Processar "500 por transacao" seria MENOS   │
+   * │ seguro que a transacao-por-linha que ja existe: uma transacao de 500 seguraria o lock da vaga  │
+   * │ o lote inteiro e mataria o lote parcial. §A.38: a autorizacao e a trava sao as da UNITARIA,    │
+   * │ reaplicadas por linha (o `registrarSaidaPorFiltro` recebe o `AuthUser`, nao so o id).         │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O retorno e `AsResultadoAcaoEmMassa` (`{ afetados, falharam }`): num conjunto de milhares, a lista
+   * de falhas com motivo seria relatorio de dado pessoal indo ao cliente (§A.6). O modo LISTA (`*EmLote`)
+   * continua devolvendo o resultado rico com as falhas por linha, que a selecao manual sabe mapear.
+   */
+
+  /** `{ aplicadas, falhas }` do `emLote` vira `{ afetados, falharam }` do contrato por filtro. */
+  private resultadoDaAcaoEmMassa(r: AsResultadoEmMassa): AsResultadoAcaoEmMassa {
+    return { afetados: r.aplicadas, falharam: r.falhas.length };
+  }
+
+  /** DESVINCULAR por filtro (DESCARTADO/DESISTIU, status em massa): `registrarSaida` sobre todo o conjunto da vaga. ENVIAR PARA ADMISSAO e recusado aqui (manda credencial, so nominal). */
+  async registrarSaidaPorFiltro(
+    dto: RegistrarSaidaPorFiltroDto,
+    user: AuthUser,
+  ): Promise<AsResultadoAcaoEmMassa> {
+    /*
+     * STATUS EM MASSA SIM, CREDENCIAL NAO (decisao do diretor, 07/10/2026). As tres saidas entram pela
+     * MESMA `registrarSaida`, mas duas sao ACAO DE STATUS (DESCARTADO, DESISTIU: descarte, encerram o
+     * processo e nada mandam para fora) e uma MANDA CREDENCIAL: `ENVIADO_PARA_ADMISSAO` nasce a
+     * pre-admissao e DISPARA o link de acesso ao prontuario (o Portal, §A.47). Enviar credencial so
+     * pode ser NOMINAL, pessoa por pessoa, com a previa do caminho de lote por ids (`registrarSaidaEmLote`),
+     * nunca "todos do filtro" de uma vez.
+     *
+     * A GUARDA VIVE AQUI, EM CODIGO, e vem ANTES de qualquer linha, nao na disciplina da tela: mesmo
+     * espirito da §A.33 (defesa em profundidade, a trava mora no servico e nao em quem edita o front).
+     * O `registrarSaidaEmLote` (NOMINAL, por ids, com a previa) segue aceitando `ENVIADO_PARA_ADMISSAO`
+     * normalmente; o que esta porta recusa e so o modo "por filtro", sem teto, sobre o conjunto inteiro.
+     */
+    if (dto.situacao === "ENVIADO_PARA_ADMISSAO") {
+      throw new ForbiddenException(
+        "Enviar para admissão manda credencial de acesso ao prontuário e só pode ser feito de forma nominal, pessoa por pessoa, nunca em massa por filtro. Selecione as pessoas e envie uma a uma.",
+      );
+    }
+
+    // MESMA GUARDA DO LOTE (`registrarSaidaEmLote`): motivo que pede pretensao e individual, entao
+    // recusa o pedido inteiro antes de qualquer linha. Duplicada aqui de proposito para nao tocar o
+    // caminho de lote ja validado (§A.26); a frase e a mesma porque a regra e a mesma.
+    if (motivoVemDoCatalogo(dto.situacao)) {
+      const ativos = await motivosDeDescarteAtivos(this.db);
+      const escolhido = ativos.find((m) => m.nome === dto.motivo);
+      if (escolhido?.pedePretensao === true) {
+        throw new BadRequestException(
+          "Este motivo pede a pretensão salarial, e a pretensão salarial é de cada pessoa. Por isso ele só pode ser usado no desvínculo individual: desvincule uma pessoa por vez informando o valor de cada uma, ou escolha outro motivo para o lote.",
+        );
+      }
+    }
+    const ids = await this.idsDaVaga(dto.filtro.vagaId, dto.filtro);
+    const r = await this.emLote(ids, (candidaturaId) =>
+      this.registrarSaida(candidaturaId, { situacao: dto.situacao, motivo: dto.motivo }, user),
+    );
+    return this.resultadoDaAcaoEmMassa(r);
+  }
+
+  /** MOVER NO FUNIL por filtro: `moverEtapa` sobre todo o conjunto da vaga. */
+  async moverEtapaPorFiltro(
+    dto: MoverEtapaPorFiltroDto,
+    porId: string,
+  ): Promise<AsResultadoAcaoEmMassa> {
+    const ids = await this.idsDaVaga(dto.filtro.vagaId, dto.filtro);
+    const r = await this.emLote(ids, (candidaturaId) =>
+      this.moverEtapa(candidaturaId, { etapa: dto.etapa }, porId),
+    );
+    return this.resultadoDaAcaoEmMassa(r);
+  }
+
+  /** TROCAR A VAGA por filtro: `trocarVaga` sobre o conjunto da vaga de ORIGEM (`filtro.vagaId`). */
+  async trocarVagaPorFiltro(
+    dto: TrocarVagaPorFiltroDto,
+    porId: string,
+  ): Promise<AsResultadoAcaoEmMassa> {
+    // A MESMA PRE-CONFERENCIA DE UX do `trocarVagaEmLote`: vaga de DESTINO encerrada recusa o pedido
+    // inteiro. A trava do destino continua rodando por linha, dentro da `trocarVaga`.
+    const regua = await this.statusVaga.regua();
+    const destino = await this.db.query.vagas.findFirst({ where: eq(vagas.id, dto.vagaId) });
+    if (!destino) throw new NotFoundException("Vaga de destino não encontrada.");
+    if (!regua.recebeCandidato(destino.status)) {
+      throw new ConflictException(
+        "Esta vaga não recebe candidato: ela está encerrada. Escolha uma vaga aberta.",
+      );
+    }
+    const ids = await this.idsDaVaga(dto.filtro.vagaId, dto.filtro);
+    const r = await this.emLote(ids, (candidaturaId) =>
+      this.trocarVaga(candidaturaId, { vagaId: dto.vagaId, motivo: dto.motivo }, porId),
+    );
+    return this.resultadoDaAcaoEmMassa(r);
+  }
+
+  /** FINALIZAR POSICAO por filtro: `finalizarPosicao` sobre todo o conjunto da vaga. */
+  async finalizarPosicaoPorFiltro(
+    dto: FinalizarPosicaoPorFiltroDto,
+    porId: string,
+  ): Promise<AsResultadoAcaoEmMassa> {
+    const vagaId = dto.filtro.vagaId;
+    const regua = await this.statusVaga.regua();
+    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
+    if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+    if (!regua.recebeCandidato(vaga.status)) {
+      throw new ConflictException(
+        "Esta vaga já foi encerrada e não recebe posição nova. Recarregue a página para ver o estado atual da vaga.",
+      );
+    }
+    const ids = await this.idsDaVaga(vagaId, dto.filtro);
+    const r = await this.emLote(ids, (candidaturaId) =>
+      this.finalizarPosicao(
+        candidaturaId,
+        { lado: dto.lado, cienteBancoComOficiaisAbertas: dto.cienteBancoComOficiaisAbertas },
+        porId,
+      ),
+    );
+    return this.resultadoDaAcaoEmMassa(r);
+  }
+
+  /** ADICIONAR A VAGA por filtro: `alocar` sobre todos os DISPONIVEIS (gente fora da vaga). */
+  async adicionarPorFiltro(
+    dto: AdicionarPorFiltroDto,
+    user: AuthUser,
+  ): Promise<AsResultadoAcaoEmMassa> {
+    const vagaId = dto.filtro.vagaId;
+    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
+    if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+    const regua = await this.statusVaga.regua();
+    if (!regua.recebeCandidato(vaga.status)) {
+      throw new ConflictException("Esta vaga está Fechada e não recebe candidato novo.");
+    }
+    const ids = await this.idsDosDisponiveis(vagaId, dto.filtro.busca);
+    const r = await this.emLote(ids, (candidatoId) =>
+      this.alocar(candidatoId, { vagaId, cienteReentrada: dto.cienteReentrada }, user.id),
+    );
+    return this.resultadoDaAcaoEmMassa(r);
+  }
+
+  /*
+   * Os ids dos CANDIDATOS DISPONIVEIS para a vaga (a fonte da adicao por filtro): quem NAO tem
+   * candidatura VIVA nesta vaga. E a uniao exata das duas fontes da aba Candidatos Disponiveis
+   * (quem esta solto + quem esta vivo em OUTRA vaga): as duas sao "sem viva AQUI". `busca` casa o
+   * nome. §A.6: devolve so o id do candidato (UUID), nenhum dado pessoal.
+   */
+  private async idsDosDisponiveis(vagaId: string, busca?: string): Promise<string[]> {
+    const cond: SQL[] = [
+      sql`not exists (select 1 from ${asCandidaturas}
+                       where ${asCandidaturas.candidatoId} = ${asCandidatos.id}
+                         and ${asCandidaturas.vagaId} = ${vagaId}
+                         and ${inArray(asCandidaturas.situacao, SITUACOES_VIVAS)})`,
+    ];
+    const termo = busca?.trim();
+    if (termo) {
+      cond.push(
+        sql`translate(lower(${asCandidatos.nome}), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')
+            like ${"%" + semAcento(termo) + "%"}`,
+      );
+    }
+    const linhas = await this.db
+      .select({ id: asCandidatos.id })
+      .from(asCandidatos)
+      .where(and(...cond));
+    return linhas.map((l) => l.id);
+  }
+
   /**
    * QUEM PODE DESFAZER UMA ENTREGA. O papel é lido da SESSÃO, nunca do corpo, e é reconferido a cada
    * requisição: a tela esconder o botão é conveniência, o servidor é a autoridade.
@@ -3796,6 +4155,222 @@ export class CandidatosService {
   }
 
   /**
+   * ─ A ABA VER CANDIDATOS, PAGINADA NO SERVIDOR (07/10/2026), IRMA de `painelVaga` ──────────────
+   *
+   * ┌─ POR QUE UM ENDPOINT NOVO, E NAO MEXER NO `painelVaga` ────────────────────────────────────┐
+   * │ `painelVaga` traz TODAS as candidaturas de uma vez (ate 2.509 medidas), e e lido por        │
+   * │ `abrirAcao` e pelo `CandidatosDaVagaModal` (modal de visualizacao simples), que dependem    │
+   * │ disso. Esta rota e a versao PAGINADA so da aba Ver Candidatos: o servidor devolve a pagina   │
+   * │ pedida, com o MESMO recorte que a tela fazia client-side (aba, busca, situacao, etapa).      │
+   * │ `painelVaga` fica intacto (§A.26).                                                          │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `resumo` (a ocupacao/funil da vaga INTEIRA, nao da pagina) so vem no `offset === 0`, uma vez por
+   * filtro, pelo mesmo motivo do `kpis` da Central: contagem do conjunto inteiro nunca sai da pagina.
+   * As contagens das abas e o "selecionar todos" da tela se apoiam nele, nunca nas linhas carregadas.
+   *
+   * §A.6: as candidaturas sao de UMA vaga autorizada, onde `AsCandidaturaItem` ja e permitido. A
+   * busca e por NOME e viaja no CORPO (POST), nunca CPF, nunca query string. RBAC: a controller
+   * inteira e reivindicada pelo menu `as-candidatos` (`MenuGuard`), igual a `painelVaga`.
+   */
+  async candidaturasDaVagaPagina(
+    vagaId: string,
+    dto: CandidaturasDaVagaDto,
+  ): Promise<AsCandidaturasDaVagaPagina> {
+    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
+    if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+
+    const limite = Math.min(Math.max(dto.limite ?? BUSCA_LIMITE_PADRAO, 1), BUSCA_LIMITE_MAXIMO);
+    const offset = Math.max(dto.offset ?? 0, 0);
+    const cond = this.condicoesDaVaga(vagaId, dto);
+
+    const linhas = await this.db
+      .select({
+        c: asCandidaturas,
+        candidatoNome: asCandidatos.nome,
+        vagaCodigo: vagas.codigo,
+        vagaNome: vagas.nomeDivulgacao,
+        autor: usuarios.nome,
+        // `count(*) over ()`: o total do recorte INTEIRO, em toda pagina, sem segunda consulta. É o
+        // mesmo recurso que o `buscar` da Central usa, e pela mesma razão de não ver bases diferentes.
+        total: sql<number>`count(*) over ()`,
+      })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .innerJoin(vagas, eq(vagas.id, asCandidaturas.vagaId))
+      .leftJoin(usuarios, eq(usuarios.id, asCandidaturas.alocadoPorId))
+      .where(and(...cond))
+      .orderBy(...this.ordenacaoDaVaga(dto))
+      .limit(limite)
+      .offset(offset);
+
+    const total = Number(linhas[0]?.total ?? 0);
+    // `l` carrega o `total` a mais, inofensivo: a tipagem estrutural de `candidaturaItemDaLinha`
+    // ignora a propriedade excedente, e o campo nao entra no `AsCandidaturaItem` devolvido.
+    const itens = linhas.map((l) => candidaturaItemDaLinha(l));
+    // O RESUMO SO NA PRIMEIRA PAGINA: a ocupacao/funil da vaga inteira nao muda entre paginas do
+    // mesmo filtro, e recalcula-la a cada "carregar mais" seria trabalho repetido.
+    const resumo = offset === 0 ? await this.resumoDaVaga(vaga) : undefined;
+
+    return {
+      itens,
+      total,
+      limite,
+      offset,
+      truncado: offset + itens.length < total,
+      ...(resumo ? { resumo } : {}),
+    };
+  }
+
+  /**
+   * ─ OS IDS DAS CANDIDATURAS QUE CASAM O FILTRO, SEM PII (07/10/2026) ───────────────────────────
+   *
+   * Para a selecao manual de um subconjunto grande sem baixar a tela inteira: a tela marca "todos do
+   * filtro" e, quando a acao dispara, pede so os UUIDs. §A.6: devolve EXCLUSIVAMENTE o id da
+   * candidatura (UUID), nenhum nome, nenhum CPF, nenhum texto de processo. Mesmo recorte da pagina.
+   */
+  async idsDaVaga(
+    vagaId: string,
+    filtro?: { aba?: string; busca?: string; filtroSituacao?: string[]; filtroEtapa?: string[] },
+  ): Promise<string[]> {
+    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
+    if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+
+    const cond = this.condicoesDaVaga(vagaId, filtro ?? {});
+    const linhas = await this.db
+      .select({ id: asCandidaturas.id })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .where(and(...cond));
+    return linhas.map((l) => l.id);
+  }
+
+  /*
+   * O RECORTE DA VAGA, EM UM LUGAR SO: a MESMA régua serve a pagina, o ids-only e o modo-filtro das
+   * acoes em massa. Uma régua só evita que as tres divirjam (o defeito que `as-painel-recorte.ts`
+   * descreve, de tela contar um e banco contar outro).
+   *
+   * O tipo do parametro e ESTRUTURAL de proposito: tanto `RecorteDaVagaDto` quanto o alvo das acoes
+   * em massa (`AlvoPorFiltroDaVagaDto`) o satisfazem, e os dois precisam da mesma clausula.
+   */
+  private condicoesDaVaga(
+    vagaId: string,
+    recorte: { aba?: string; busca?: string; filtroSituacao?: string[]; filtroEtapa?: string[] },
+  ): SQL[] {
+    const cond: SQL[] = [eq(asCandidaturas.vagaId, vagaId)];
+
+    // `alocados` = quem ENTREGOU posicao (`finalizaPosicao`), a MESMA régua que define a aba na tela.
+    // `candidatos` (default) nao restringe situacao: e a lista inteira da vaga.
+    if (recorte.aba === "alocados") {
+      cond.push(inArray(asCandidaturas.situacao, [...SITUACOES_QUE_FINALIZAM_POSICAO]));
+    }
+
+    const busca = recorte.busca?.trim();
+    if (busca) {
+      // A MESMA expressao da busca por nome da Central: sem acento, sem caixa, com `translate`.
+      cond.push(
+        sql`translate(lower(${asCandidatos.nome}), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')
+            like ${"%" + semAcento(busca) + "%"}`,
+      );
+    }
+
+    if (recorte.filtroSituacao && recorte.filtroSituacao.length > 0) {
+      // Vocabulario fechado, mas quem casa e a clausula: situacao desconhecida nao acha linha, sem
+      // derrubar a chamada. O cast satisfaz o tipo do enum sem travar valor fora da lista.
+      cond.push(
+        inArray(asCandidaturas.situacao, recorte.filtroSituacao as CandidaturaSituacao[]),
+      );
+    }
+
+    if (recorte.filtroEtapa && recorte.filtroEtapa.length > 0) {
+      const porEtapa = this.condicaoDeEtapaVisivel(recorte.filtroEtapa);
+      if (porEtapa) cond.push(porEtapa);
+    }
+
+    return cond;
+  }
+
+  /*
+   * A ETAPA VISIVEL, TRADUZIDA EM CLAUSULA, espelhando `etapaVisivel` do frontend: para quem esta
+   * VIVO, a etapa dela; para quem SAIU, o valor especial "fora do funil". Filtrar por "Triagem" so
+   * pode alcancar quem a tela MOSTRA em Triagem (vivo), e "fora do funil" alcanca so quem saiu.
+   */
+  private condicaoDeEtapaVisivel(etapas: string[]): SQL | undefined {
+    const partes: SQL[] = [];
+    const normais = etapas.filter((e) => e !== ETAPA_FORA_DO_FUNIL);
+    if (normais.length > 0) {
+      const casa = and(
+        inArray(asCandidaturas.etapa, normais),
+        inArray(asCandidaturas.situacao, SITUACOES_VIVAS),
+      );
+      if (casa) partes.push(casa);
+    }
+    if (etapas.includes(ETAPA_FORA_DO_FUNIL)) {
+      partes.push(notInArray(asCandidaturas.situacao, SITUACOES_VIVAS));
+    }
+    return partes.length > 0 ? or(...partes) : undefined;
+  }
+
+  /*
+   * A ORDENACAO DA ABA VER CANDIDATOS. A unidade da pagina aqui e CANDIDATURA (sao de UMA vaga), entao
+   * etapa e situacao ordenam DIRETO na linha (sem valor representativo). etapa pela `ordem` do
+   * catalogo (subselect escalar, sem join, para nao mudar a unidade do `count`/`limit`), situacao por
+   * `array_position`. Nulos ao fim, desempate por `id`, ausente = `alocadoEm desc` (a ordem do painel).
+   */
+  private ordenacaoDaVaga(dto: CandidaturasDaVagaDto): SQL[] {
+    const desempate = desc(asCandidaturas.id);
+    const dir = dto.direcao === "asc" ? sql`asc` : sql`desc`;
+    const ordenar = (expr: SQL) => [sql`${expr} ${dir} nulls last` as SQL, desempate];
+    const posicoesSituacao = sql.join(
+      CANDIDATURA_SITUACOES.map((s) => sql`${s}`),
+      sql`, `,
+    );
+
+    switch (dto.ordenarPor) {
+      case "candidato":
+        return ordenar(sql`${asCandidatos.nome}`);
+      case "ultimoContato":
+        return ordenar(sql`${asCandidaturas.ultimoContatoEm}`);
+      case "etapa":
+        return ordenar(
+          sql`(select ${asEtapasFunil.ordem} from ${asEtapasFunil} where ${asEtapasFunil.codigo} = ${asCandidaturas.etapa})`,
+        );
+      case "situacao":
+        return ordenar(
+          sql`array_position(array[${posicoesSituacao}]::text[], ${asCandidaturas.situacao}::text)`,
+        );
+      default:
+        return [desc(asCandidaturas.alocadoEm), desc(asCandidaturas.id)];
+    }
+  }
+
+  /*
+   * O RESUMO DA VAGA (ocupacao + funil), a MESMA derivacao do `painelVaga`, numa leitura propria para
+   * NAO tocar aquele metodo (§A.26). Como ele, nada e armazenado: os numeros saem das candidaturas.
+   */
+  private async resumoDaVaga(vaga: {
+    id: string;
+    posicoesOficiais: number | null;
+  }): Promise<AsOcupacaoVaga> {
+    const lados = await this.db
+      .select({
+        situacao: asCandidaturas.situacao,
+        posicaoLado: asCandidaturas.posicaoLado,
+        etapa: asCandidaturas.etapa,
+      })
+      .from(asCandidaturas)
+      .where(eq(asCandidaturas.vagaId, vaga.id));
+
+    const derivada = ocupacaoDaVaga(vaga.posicoesOficiais, lados);
+    return {
+      vagaId: vaga.id,
+      posicoesOficiais: vaga.posicoesOficiais,
+      ...derivada,
+      ...kpisDoFunil(lados),
+    };
+  }
+
+  /**
    * ─ QUEM PODE SER TRANSFERIDO PARA ESTA VAGA (Frente D, ponto 13, conjunto "b") ─────────────────
    *
    * A ABA "CANDIDATOS DISPONÍVEIS" da Gestão da Vaga tem DOIS conjuntos, e eles respondem a
@@ -4260,4 +4835,42 @@ function semAcento(v: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+/**
+ * UMA LINHA DE CANDIDATURA VIRANDO `AsCandidaturaItem`, no MESMO formato de `candidaturasPor`.
+ *
+ * Ela existe para a aba Ver Candidatos paginada reusar o mapeamento sem TOCAR `candidaturasPor`
+ * (\u00a7A.26, c\u00f3digo validado): aquele m\u00e9todo segue com o map inline dele, e esta fun\u00e7\u00e3o serve o
+ * caminho novo. A r\u00e9gua de cada campo \u00e9 a mesma, inclusive o `posicaoLado` CRU por `ladoGravado`
+ * (nulo quer dizer "n\u00e3o ocupa posi\u00e7\u00e3o", nunca "oficial por omiss\u00e3o") e a pretens\u00e3o como string.
+ *
+ * \u00a7A.6: a fun\u00e7\u00e3o s\u00f3 repassa o que a consulta j\u00e1 selecionou. Ela n\u00e3o vai ao banco e n\u00e3o seleciona
+ * CPF; a superf\u00edcie de UMA vaga \u00e9 onde `AsCandidaturaItem` j\u00e1 \u00e9 autorizado.
+ */
+function candidaturaItemDaLinha(l: {
+  c: typeof asCandidaturas.$inferSelect;
+  candidatoNome: string;
+  vagaCodigo: string | null;
+  vagaNome: string | null;
+  autor: string | null;
+}): AsCandidaturaItem {
+  const c = l.c;
+  return {
+    id: c.id,
+    candidatoId: c.candidatoId,
+    candidatoNome: l.candidatoNome,
+    vagaId: c.vagaId,
+    vagaCodigo: l.vagaCodigo,
+    vagaNome: l.vagaNome,
+    etapa: c.etapa,
+    situacao: c.situacao,
+    motivoDescarte: c.motivoDescarte,
+    alocadoEm: c.alocadoEm.toISOString(),
+    alocadoPorNome: l.autor,
+    atualizadoEm: c.atualizadoEm.toISOString(),
+    ultimoContatoEm: c.ultimoContatoEm ? c.ultimoContatoEm.toISOString() : null,
+    posicaoLado: ladoGravado(c.posicaoLado),
+    pretensaoSalarial: c.pretensaoSalarial,
+  };
 }
