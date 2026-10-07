@@ -360,6 +360,24 @@ export class IngestaoDeParaCliente implements PortaPropostaDeClienteDaVaga {
                  when data_limite is null and ${valores.dataLimite}::date is not null
                  then ${procedencia} else data_limite_origem end
          where id = ${vagaId}::uuid
+           -- A VAGA RECUSADA E INTOCAVEL PELA VARREDURA (decisao 6 do diretor, F4).
+           -- Achado do tester independente: o where filtrava so pelo id, e a vaga RECUSADA volta da
+           -- varredura intocada MAS COM O ID, entao o ciclo seguia e o pre-preenchimento escrevia
+           -- nela de 30 em 30 minutos. A regra do diretor e que a marca recusada_em e respeitada
+           -- pela varredura: ela nao recria, nao reabre e nao mexe. Preencher campo e mexer. So o
+           -- gesto humano de devolver tira a vaga da recusa, e ai ela volta a ser elegivel.
+           and recusada_em is null
+           -- E SO VAGA EM REVISAO, que e o que a OST pede, nem antes nem depois.
+           -- Mesmo achado: sem isto, vaga JA LIBERADA com qualquer dos cinco campos nulo tambem
+           -- recebia escrita, fora do requisito e sem a trilha de edicao que toda gravacao de campo
+           -- em vaga liberada tem. O papel vem do catalogo as_vaga_status, entao a pergunta e feita
+           -- a ele e nao a um literal: renomear o status na tela de catalogos nao reabre este
+           -- caminho. (Sem acento e sem backtick aqui de proposito: este SQL vive dentro de um
+           -- template literal, e backtick em comentario FECHA o template e quebra o parse.)
+           and exists (
+             select 1 from as_vaga_status s
+              where s.codigo = vagas.status and s.papel = 'REVISAO'
+           )
            and ((natureza is null and ${valores.natureza}::vaga_natureza is not null)
              or (linha_servico_id is null and ${valores.linhaServicoId}::int is not null)
              or (cargo_id is null and ${valores.cargoId}::uuid is not null)

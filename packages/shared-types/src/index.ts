@@ -2445,22 +2445,62 @@ export interface VagaMetaReducao {
   quandoIso: string;
 }
 
+/**
+ * OS CAMPOS DA VAGA QUE FORAM PRÉ-PREENCHIDOS A PARTIR DA PLANILHA (07/10/2026).
+ *
+ * Vocabulário FECHADO, e ele é o MESMO de `as_candidatura_etapas.procedencia_planilha`, que é o
+ * retrato gravado quando a vaga vai para a admissão pela ponte do funil. Um vocabulário só para as
+ * duas superfícies, porque a pergunta no dia ruim é a mesma nas duas: "quais campos desta vaga
+ * vieram da linha da planilha que estava errada?".
+ */
+export type VagaCampoDaPlanilha =
+  | "natureza"
+  | "linhaServico"
+  | "cargo"
+  | "dataAbertura"
+  | "dataLimite";
+
 export interface VagaListItem {
   id: string;
+  /**
+   * QUAIS CAMPOS DESTA VAGA VIERAM DA PLANILHA e ainda não foram tocados por uma pessoa.
+   *
+   * ┌─ POR QUE A TELA PRECISA DISTO, E POR QUE NÃO É ENFEITE ─────────────────────────────────────┐
+   * │ O valor pré-preenchido mora na COLUNA OPERACIONAL, igual ao que uma pessoa teria digitado,  │
+   * │ então sem esta lista a tela não tem como distinguir "a planilha propôs" de "o time escolheu".│
+   * │ Medido no dia da decisão: 94 vagas em revisão já tinham `cargo_id` casado por MÁQUINA na     │
+   * │ ingestão, indistinguível de escolha humana, e esta lista é o que fecha essa lacuna.          │
+   * │                                                                                             │
+   * │ Ela DERIVA das colunas `vagas.*_origem`, nunca de estado de componente: o que a tela diz é o │
+   * │ que o banco diz. E a edição humana do campo LIMPA a origem dele, por campo, então um campo   │
+   * │ que a pessoa trocou sai desta lista sozinho.                                                 │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * Vazia ou ausente quando nada veio da planilha, e aí a tela fica como era.
+   */
+  camposVindosDaPlanilha?: VagaCampoDaPlanilha[] | null;
   /**
    * A PROPOSTA DE CLIENTE VINDA DA PLANILHA DO TIME, quando existe. Ver `PropostaDeClienteDaVaga`.
    *
    * ┌─ ELA NÃO É O `codCliente`, E A DISTÂNCIA ENTRE OS DOIS É O PONTO ────────────────────────────┐
    * │ `codCliente` é o cliente DA VAGA: alguém escolheu, e ele decide régua documental e pasta do  │
-   * │ prontuário. Esta é a resposta que a PLANILHA dá, e ela não decide nada: a tela a mostra, uma │
-   * │ pessoa confere, e só a confirmação escreve o `codCliente` pelo caminho humano, com trilha.   │
-   * │                                                                                             │
-   * │ Por isso o seletor de cliente da tela NASCE VAZIO mesmo havendo proposta. Pré-preencher faria│
-   * │ quem libera assinar a escolha da planilha sem ter conferido, e a trilha afirmaria que uma    │
-   * │ PESSOA escolheu. É a condição C1 da auditoria, e ela se cumpre na MECÂNICA, não no texto.    │
+   * │ prontuário. Esta é a resposta que a PLANILHA dá, e a tela a mostra para conferência.          │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
-   * Ausente ou nula nas 158 das 470 vagas abertas que a planilha não tem, e aí a tela fica como era.
+   * ┌─ ESTE BLOCO DIZIA "O SELETOR NASCE VAZIO", E A REGRA FOI REVOGADA EM 07/10/2026 ────────────┐
+   * │ A redação anterior afirmava que pré-preencher o cliente "faria quem libera assinar a escolha │
+   * │ da planilha sem ter conferido, e a trilha afirmaria que uma PESSOA escolheu". O diretor      │
+   * │ decidiu o contrário, e a auditoria MEDIU que o argumento não se sustentava: a trilha grava   │
+   * │ `porId` do usuário e a frase "Liberada da revisão com o cliente X", que não afirma           │
+   * │ conferência campo a campo de nada, e é verdade com ou sem pré-preenchimento. Exigir a        │
+   * │ confirmação humana do de/para preencheria ZERO cliente (0 de 924 linhas confirmadas).        │
+   * │                                                                                             │
+   * │ HOJE: o cliente É pré-preenchido quando o de/para casa de forma INEQUÍVOCA (casamento        │
+   * │ EXATO). PREFIXO não preenche e continua só proposta, porque prefixo é onde o erro humano de  │
+   * │ confirmação acontece. AMBÍGUO e SEM_PALPITE não preenchem, e aí o seletor fica vazio mesmo.  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * Ausente ou nula nas vagas que a planilha não tem, e aí a tela fica como era.
    */
   propostaDeCliente?: PropostaDeClienteDaVaga | null;
   /**
@@ -3247,6 +3287,38 @@ export interface AsCandidatosPagina {
 }
 
 /**
+ * AS COLUNAS PELAS QUAIS A LISTA ORDENA NO SERVIDOR (paginacao de fundo, 07/10/2026).
+ *
+ * A ordenacao deixou de ser client-side (nunca houve como ordenar 83 mil linhas que o navegador nao
+ * segura mais): ela viaja ao servidor como chave FECHADA de coluna. Nao e dado de catalogo do diretor,
+ * e chave de coluna, entao `@IsIn` sobre este conjunto e legitimo. etapa e situacao ordenam pelo
+ * CATALOGO (ordem do funil, `array_position` da situacao), nunca pelo texto. Ausente = `criadoEm desc`.
+ */
+export type AsCandidatoOrdenarPor =
+  | "candidato"
+  | "vaga"
+  | "cliente"
+  | "cargo"
+  | "etapa"
+  | "situacao"
+  | "ultimoContato"
+  | "criadoEm";
+
+export type AsDirecaoOrdenacao = "asc" | "desc";
+
+/**
+ * O RESULTADO DE UMA ACAO EM MASSA (07/10/2026, decisao do diretor: agir sobre TODOS do filtro, sem teto).
+ *
+ * `afetados` = quantas candidaturas a acao de fato mudou; `falharam` = quantas o servidor tentou e nao
+ * conseguiu (falha parcial, nunca metade em silencio). A tela confirma o numero ao fim e, com `falharam>0`,
+ * avisa o que nao foi. §A.6: sao contagens, nenhum identificador.
+ */
+export interface AsResultadoAcaoEmMassa {
+  afetados: number;
+  falharam: number;
+}
+
+/**
  * A FICHA de um candidato: o ÚNICO lugar em que os dados de contato e o CPF trafegam.
  *
  * `anonimizadoEm` preenchido quer dizer que a retenção venceu e os identificadores diretos já foram
@@ -3978,6 +4050,30 @@ export interface AsPainelVaga {
   ocupacao: AsOcupacaoVaga;
   candidaturas: AsCandidaturaItem[];
 }
+
+/**
+ * UMA PAGINA DAS CANDIDATURAS DE UMA VAGA (paginacao no servidor da aba Ver Candidatos, 07/10/2026).
+ *
+ * O `AsPainelVaga` traz TODAS as candidaturas de uma vez (ate 2.509 medidas), que o navegador janelava
+ * no cliente e travava. Esta e a versao paginada: o servidor devolve so a pagina pedida. `painelVaga`
+ * (o tipo acima) CONTINUA para o modal de visualizacao simples e para a `abrirAcao`; esta rota e irma,
+ * nao o substitui. §A.6: `AsCandidaturaItem` ja e autorizado para a superficie de UMA vaga.
+ *
+ * `resumo` (ocupacao/funil da vaga INTEIRA, nao da pagina) vem so no `offset === 0`, uma vez por filtro,
+ * pelo mesmo motivo do `kpis` da Central: contagem do conjunto inteiro, nunca da pagina visivel. As
+ * contagens e o "selecionar todos" da tela se apoiam nele (o conjunto inteiro, nao as linhas carregadas).
+ */
+export interface AsCandidaturasDaVagaPagina {
+  itens: AsCandidaturaItem[];
+  total: number;
+  limite: number;
+  offset: number;
+  truncado: boolean;
+  resumo?: AsOcupacaoVaga;
+}
+
+/** As colunas pelas quais a aba Ver Candidatos ordena no servidor (subconjunto, sao de UMA vaga). */
+export type AsCandidaturaDaVagaOrdenarPor = "candidato" | "etapa" | "situacao" | "ultimoContato";
 
 // ─── A ENTREVISTA MARCADA (Frente E, ponto 8) ───────────────────────────────────────────────────
 /**

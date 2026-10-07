@@ -389,11 +389,34 @@ export function dataDaPlanilha(bruto: unknown): string | null {
 // O AGREGADOR: UM CÓDIGO, VÁRIAS LINHAS, UM VEREDICTO POR CAMPO
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** O resultado de um campo: o alvo único (quando há) e o porquê. `AUSENTE` separa-se de `NAO_CASOU`. */
+/**
+ * O resultado de um campo: o alvo único (quando há) e o porquê. `AUSENTE` separa-se de `NAO_CASOU`.
+ *
+ * ┌─ O `preferir` EXISTE PORQUE A ÚLTIMA LINHA ESTAVA DECIDINDO (achado do `tester` independente) ─┐
+ * │ Isto era `porChave.set(chaveDe(v), v)` puro, e `Map.set` SOBRESCREVE: duas linhas com a MESMA  │
+ * │ chave deixavam vencer a ÚLTIMA. Para quatro dos cinco campos é inofensivo, porque a chave É o   │
+ * │ valor, e colisão de chave significa valores idênticos. Para o CARGO não: a chave é o `cargoId`  │
+ * │ e o valor carrega o GRAU, então duas linhas que apontam para o mesmo cargo por graus            │
+ * │ diferentes (uma EXATO, outra PREFIXO) davam resultado dependente da ORDEM das linhas da         │
+ * │ planilha: `[exata, curta]` abstinha o cargo, `[curta, exata]` preenchia.                        │
+ * │                                                                                                │
+ * │ Isso violava DUAS réguas escritas neste próprio módulo: "o EXATO vence o prefixo" e "escolher   │
+ * │ pela ordem é proibido, porque decisão que depende da ordem muda quando alguém edita a planilha".│
+ * │ A régua velha falava da PRIMEIRA linha; aqui era a última, e o defeito é o mesmo.               │
+ * │                                                                                                │
+ * │ O conserto NÃO é "manter a primeira" (seria a mesma dependência com outro nome) nem tratar como │
+ * │ AMBÍGUO (as duas linhas CONCORDAM sobre o cargo, discordam só da confiança, e abster perderia   │
+ * │ um casamento exato legítimo). É desempatar pela RÉGUA: quem decide é o grau, não a posição.     │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `preferir` recebe os dois concorrentes da MESMA chave e devolve o que fica. Omitido, mantém o
+ * primeiro, que é indiferente quando a chave é o próprio valor.
+ */
 function agregarCampo<T>(
   resolvidos: readonly (T | null)[],
   disseAlgo: boolean,
   chaveDe: (valor: T) => string,
+  preferir?: (atual: T, novo: T) => T,
 ): { valor: T | null; veredicto: VeredictoDoPrePreenchimento } {
   /* AUSÊNCIA NÃO É DISCORDÂNCIA: filtra-se antes de contar distintos (molde do status). */
   const uteis = resolvidos.filter((v): v is T => v !== null && v !== undefined);
@@ -401,7 +424,13 @@ function agregarCampo<T>(
     return { valor: null, veredicto: disseAlgo ? "NAO_CASOU" : "AUSENTE" };
   }
   const porChave = new Map<string, T>();
-  for (const v of uteis) porChave.set(chaveDe(v), v);
+  for (const v of uteis) {
+    const chave = chaveDe(v);
+    const atual = porChave.get(chave);
+    /* NUNCA sobrescreve às cegas: sem `preferir`, o primeiro fica; com ele, a régua desempata. */
+    if (atual === undefined) porChave.set(chave, v);
+    else if (preferir) porChave.set(chave, preferir(atual, v));
+  }
   if (porChave.size > 1) return { valor: null, veredicto: "AMBIGUO_NA_PLANILHA" };
   const unico = [...porChave.values()][0] as T;
   return { valor: unico, veredicto: "PREENCHIDO" };
@@ -471,6 +500,15 @@ export function agregarPrePreenchimentoPorCodigo(
       doCodigo.map((l) => cargoDaPlanilha(l.cargo, cargos)),
       algumaCelulaPreenchida(doCodigo.map((l) => l.cargo)),
       (v) => v.cargoId,
+      /*
+       * O EXATO VENCE O PREFIXO, e é ESTE desempate que tira a decisão da ordem das linhas. Duas
+       * linhas do mesmo código podem apontar para o MESMO cargo por graus diferentes ("Analista
+       * Fiscal Senior" exato e "Analista Fiscal" por prefixo), e elas CONCORDAM sobre o cargo: o que
+       * difere é a confiança. Sem este desempate a última linha vencia, e `[exata, curta]` abstinha
+       * enquanto `[curta, exata]` preenchia a mesma vaga. É a régua declarada no topo do módulo,
+       * agora aplicada no único ponto em que a chave não é o próprio valor.
+       */
+      (atual, novo) => (atual.grau === "EXATO" ? atual : novo),
     );
     const aberturas = agregarCampo(
       doCodigo.map((l) => dataDaPlanilha(l.dataAbertura)),

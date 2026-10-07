@@ -73,7 +73,10 @@ import {
 } from "../../db/schema";
 import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
 import { vagaDaPlanilhaSai } from "../../domain/as-planilha-status-vaga";
-import { procedenciaALimpar } from "../../domain/as-planilha-prepreenchimento";
+import {
+  camposComProcedenciaDaPlanilha,
+  procedenciaALimpar,
+} from "../../domain/as-planilha-prepreenchimento";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { derivarStatusDaVaga } from "./derivar-status-da-vaga";
 /*
@@ -619,6 +622,29 @@ export class VagasService {
        * resposta depois da conclusão de quem perguntou.
        */
       metaReducoes: reducoes.get(v.id) ?? [],
+      /*
+       * ─ QUAIS CAMPOS DAQUELA VAGA VIERAM DA PLANILHA, para a tela poder MARCAR ──────────────────
+       *
+       * SEM CONSULTA NENHUMA, e é por isso que a derivação mora AQUI e não num enriquecedor por
+       * lote como o da proposta de cliente: as cinco colunas `*_origem` são colunas de `vagas`, e
+       * esta consulta já traz a linha INTEIRA (`v: vagas`). Um leitor separado faria uma segunda
+       * ida ao banco (ou, pior, uma por linha) para reler colunas que já estão na mão, numa fila
+       * com centenas de linhas. A proposta de cliente é separada por outra razão, que não vale
+       * aqui: ela tem LISTA BRANCA DE LEITORES porque carrega razão social; procedência é NOME DE
+       * CAMPO de vocabulário fechado.
+       *
+       * A TRADUÇÃO "coluna de origem -> nome de campo do contrato" É PURA e vive no domínio
+       * (`camposComProcedenciaDaPlanilha`), a MESMA função que o retrato da ponte do funil usa:
+       * duas traduções divergiriam no dia em que o CHECK ganhasse o segundo valor de procedência, e
+       * a tela passaria a marcar um conjunto diferente do que a trilha registrou.
+       *
+       * VAZIO, NUNCA NULO NEM OMITIDO: sem o `[]`, a tela não distingue "nada veio da planilha" de
+       * "não sei" (mesma razão do retrato da ponte). A função já devolve `[]`, inclusive para a vaga
+       * digitada à mão, cujas cinco colunas nascem nulas.
+       *
+       * §A.6: sai NOME DE CAMPO, de lista fechada. O texto da célula da planilha não atravessa.
+       */
+      camposVindosDaPlanilha: camposComProcedenciaDaPlanilha(v),
     }));
   }
 
@@ -2792,11 +2818,30 @@ export class VagasService {
          * OS CARIMBOS DA REABERTURA, COMUNS AOS DOIS CAMINHOS. Eles saem no MESMO `.set` do resto,
          * mais abaixo, e o prazo anterior só é copiado quando há prazo novo para substituí-lo:
          * gravar a cópia sem a substituição afirmaria uma renegociação que não houve.
+         *
+         * ┌─ A REABERTURA É A SÉTIMA PORTA, E ELA LIMPA `dataLimiteOrigem` (achado do `seguranca`) ─┐
+         * │ O pré-preenchimento marca `data_limite_origem = 'PLANILHA'` quando a data veio da       │
+         * │ planilha, e a regra é que TODA gravação humana daquele valor limpa a marca. As outras   │
+         * │ três portas chamam `procedenciaALimpar`; esta ficou de fora, e o caminho não é          │
+         * │ hipotético: reabrir a partir da ENTREGA **exige** prazo novo (o lançamento logo acima),  │
+         * │ então aqui a troca da data é OBRIGATÓRIA. Sem esta linha o carimbo passaria a dizer      │
+         * │ "veio da planilha" sobre um prazo que um Master acabou de renegociar, e a tela mostraria │
+         * │ "Da Planilha, A Conferir" num valor conferido. Pior: esse nome de campo entra no RETRATO │
+         * │ PERMANENTE da ponte (`as_candidatura_etapas.procedencia_planilha`), que é imutável, e aí │
+         * │ a contagem do dia ruim conta a vaga JÁ CORRIGIDA dentro do estrago.                      │
+         * │                                                                                          │
+         * │ NÃO se usa `procedenciaALimpar` aqui, de propósito: ela recebe a saída de                │
+         * │ `camposDaTrilha`, e este objeto não é ela nem carrega os outros quatro campos. A limpeza  │
+         * │ mora DENTRO do mesmo ternário do prazo, então ela acontece exatamente quando a data muda, │
+         * │ e cobre os DOIS `.set` que espalham este objeto de uma vez.                               │
+         * └──────────────────────────────────────────────────────────────────────────────────────────┘
          */
         const carimbosDaReabertura = {
           dataReabertura: hojeEmSaoPaulo(),
           reaberturaPorId: user.id,
-          ...(prazoNovo ? { dataLimiteAnterior: vaga.dataLimite, dataLimite: prazoNovo } : {}),
+          ...(prazoNovo
+            ? { dataLimiteAnterior: vaga.dataLimite, dataLimite: prazoNovo, dataLimiteOrigem: null }
+            : {}),
         };
 
         if (ehReaberturaDeEntrega) {

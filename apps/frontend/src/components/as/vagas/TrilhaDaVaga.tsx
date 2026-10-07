@@ -90,6 +90,7 @@ import {
   type AsVagaEdicaoPrevia,
   type AsVagaIdioma,
   type IdiomaNivel,
+  type VagaCampoDaPlanilha,
   type VagaContextoAs,
   type VagaDetalhe,
   type VagaListItem,
@@ -117,6 +118,7 @@ import { statusDePublicacao, statusDoPapel, type AsVagaStatus } from "@/lib/as-s
 import { avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
 import { liberarVagaPendenteRevisao, salvarVagaEmRevisao } from "@/lib/as-vagas-revisao";
 import { propostaDaVaga } from "@/lib/as-proposta-cliente";
+import { camposDaPlanilha, SEM_CAMPO_DA_PLANILHA } from "@/lib/as-campos-da-planilha";
 import {
   avisoDaFronteiraDaAdmissao,
   carregarConsultores,
@@ -483,6 +485,75 @@ function useMarcacao(ancora: string | undefined, obrigatorio: boolean): Marcacao
 }
 
 /**
+ * ─ OS CAMPOS QUE A PLANILHA PRÉ-PREENCHEU, DITOS CAMPO A CAMPO (pedido do diretor, 07/10/2026) ──
+ *
+ * ┌─ POR QUE É POR CAMPO, E NUNCA UM AVISO NO TOPO ─────────────────────────────────────────────┐
+ * │ Um aviso geral ("esta vaga foi pré-preenchida") não diz o que a pessoa está conferindo: ela  │
+ * │ precisa saber, campo a campo, qual valor é proposta de máquina e qual já é escolha de gente.  │
+ * │ Medido no dia da decisão: 94 vagas em revisão já tinham cargo casado por MÁQUINA, e na tela   │
+ * │ isso era indistinguível de alguém ter escolhido o cargo.                                      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O CONJUNTO DESCE PELO CONTEXTO, no mesmo desenho da marcação de pendência logo acima, e vem do
+ * SERVIDOR (`camposVindosDaPlanilha`): nenhum campo se declara "da planilha" por estar vazio nem
+ * por estado de componente. Fora do modo LIBERAÇÃO o conjunto é vazio e nada é desenhado.
+ *
+ * A MARCA É INFORMATIVA, e o valor segue editável: trocar o valor limpa a origem no servidor, e o
+ * campo sai desta lista na próxima leitura. Nada aqui trava, desabilita ou esconde campo.
+ */
+const CamposDaPlanilhaNaTrilha = createContext<ReadonlySet<VagaCampoDaPlanilha>>(
+  SEM_CAMPO_DA_PLANILHA,
+);
+
+/**
+ * A TAG DA PROCEDÊNCIA, ao lado do rótulo (§A.24: tag em title case; §A.11: nenhum travessão).
+ *
+ * ÍCONE E TEXTO ANDAM JUNTOS pelo mesmo motivo da `MarcaDoCampo`: cor sozinha não chega a quem não
+ * distingue as cores, e o texto por extenso é o que o leitor de tela lê.
+ */
+function MarcaDaPlanilha() {
+  return (
+    <span
+      className="ml-1.5 inline-flex items-center gap-1 align-middle text-[11px] font-semibold text-warn-2"
+      title="Valor pré-preenchido pela planilha do time. Ninguém conferiu ainda: confira e, se não confere, troque o valor neste campo."
+      data-testid="marca-da-planilha"
+    >
+      <Icon name="alert" className="h-3 w-3 flex-none" aria-hidden />
+      Da Planilha, A Conferir
+    </span>
+  );
+}
+
+/** A tag aparece quando, e só quando, o servidor listou ESTE campo como vindo da planilha. */
+function useMarcaDaPlanilha(campo: VagaCampoDaPlanilha | undefined): boolean {
+  const campos = useContext(CamposDaPlanilhaNaTrilha);
+  return campo !== undefined && campos.has(campo);
+}
+
+/**
+ * OS DOIS CONTEXTOS DA TRILHA, EMPILHADOS NUM ELEMENTO SÓ.
+ *
+ * Existe para o provedor novo não reindentar as ~1.500 linhas de JSX do corpo da trilha: um `diff`
+ * de indentação sobre um arquivo que várias frentes tocam esconde a mudança de verdade no meio do
+ * ruído, e é assim que revisão vira carimbo.
+ */
+function ProvedoresDaTrilha({
+  marcacao,
+  camposDaPlanilha: campos,
+  children,
+}: {
+  marcacao: { pendentes: readonly VagaPendencia[]; ligada: boolean };
+  camposDaPlanilha: ReadonlySet<VagaCampoDaPlanilha>;
+  children: React.ReactNode;
+}) {
+  return (
+    <MarcacaoDaTrilha.Provider value={marcacao}>
+      <CamposDaPlanilhaNaTrilha.Provider value={campos}>{children}</CamposDaPlanilhaNaTrilha.Provider>
+    </MarcacaoDaTrilha.Provider>
+  );
+}
+
+/**
  * A TAG DO ESTADO DO CAMPO, ao lado do rótulo (§A.24: tag em title case).
  *
  * ELA NÃO SUBSTITUI O ASTERISCO, soma a ele: o asterisco diz "este campo é obrigatório" e continua
@@ -530,14 +601,18 @@ export function Campo({
   largo = false,
   obrigatorio = false,
   id,
+  campoDaPlanilha,
 }: {
   rotulo: string;
   children: React.ReactNode;
   largo?: boolean;
   obrigatorio?: boolean;
   id?: string;
+  /** Qual campo do vocabulário fechado este é, para a tag de procedência saber se é dele. */
+  campoDaPlanilha?: VagaCampoDaPlanilha;
 }) {
   const marcacao = useMarcacao(id, obrigatorio);
+  const daPlanilha = useMarcaDaPlanilha(campoDaPlanilha);
   return (
     <label
       id={id}
@@ -548,6 +623,7 @@ export function Campo({
         {obrigatorio && <Obrigatorio />}
         {obrigatorio && <span className="sr-only"> (obrigatório)</span>}
         {marcacao && <MarcaDoCampo estado={marcacao} />}
+        {daPlanilha && <MarcaDaPlanilha />}
       </span>
       {children}
     </label>
@@ -561,14 +637,18 @@ function CampoSelect({
   largo = false,
   obrigatorio = false,
   id,
+  campoDaPlanilha,
 }: {
   rotulo: string;
   children: React.ReactNode;
   largo?: boolean;
   obrigatorio?: boolean;
   id?: string;
+  /** Qual campo do vocabulário fechado este é, para a tag de procedência saber se é dele. */
+  campoDaPlanilha?: VagaCampoDaPlanilha;
 }) {
   const marcacao = useMarcacao(id, obrigatorio);
+  const daPlanilha = useMarcaDaPlanilha(campoDaPlanilha);
   return (
     <div
       id={id}
@@ -579,6 +659,7 @@ function CampoSelect({
         {obrigatorio && <Obrigatorio />}
         {obrigatorio && <span className="sr-only"> (obrigatório)</span>}
         {marcacao && <MarcaDoCampo estado={marcacao} />}
+        {daPlanilha && <MarcaDaPlanilha />}
       </span>
       {children}
     </div>
@@ -1166,6 +1247,22 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
   );
 
   /**
+   * OS CAMPOS PRÉ-PREENCHIDOS PELA PLANILHA, lidos do SERVIDOR e só no modo LIBERAÇÃO.
+   *
+   * SÓ NA LIBERAÇÃO, pelo mesmo motivo da proposta de cliente: a conferência é o trabalho DAQUELA
+   * tela. No `clone` seria pior que inútil, porque a vaga nova herdaria uma procedência que não é
+   * dela; nos demais modos a vaga já passou por gente.
+   *
+   * `vagaEmEdicao` NÃO serve aqui: o conjunto é um retrato do que o banco respondeu na abertura, e
+   * não acompanha o que a pessoa digita. Trocar o valor limpa a origem no SERVIDOR, e o campo sai
+   * da lista na próxima leitura, que é o que mantém a tela dizendo o que o banco diz.
+   */
+  const camposPreenchidosPelaPlanilha = useMemo(
+    () => (modo.tipo === "liberacao" ? camposDaPlanilha(modo.vaga) : SEM_CAMPO_DA_PLANILHA),
+    [modo],
+  );
+
+  /**
    * CLICAR NA PENDÊNCIA E CAIR NO CAMPO (item 4, o pedido literal do diretor).
    *
    * Troca o passo e, no quadro seguinte, rola até o campo e põe o cursor nele. O `requestAnimationFrame`
@@ -1457,7 +1554,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
   }
 
   return (
-    <MarcacaoDaTrilha.Provider value={marcacaoDaTrilha}>
+    <ProvedoresDaTrilha marcacao={marcacaoDaTrilha} camposDaPlanilha={camposPreenchidosPelaPlanilha}>
       <Modal
         onClose={pedirParaSair}
         className="max-w-[1100px] p-0"
@@ -1652,7 +1749,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     />
                   </Campo>
 
-                  <CampoSelect rotulo="Cargo" obrigatorio id="vaga-cargo">
+                  <CampoSelect rotulo="Cargo" obrigatorio id="vaga-cargo" campoDaPlanilha="cargo">
                     {/* O seletor SUGERE e não bloqueia: o catálogo inteiro fica alcançável pela busca. */}
                     <Select
                       value={form.cargoId}
@@ -1692,7 +1789,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     />
                   </Campo>
 
-                  <CampoSelect rotulo="Tipo de vaga" obrigatorio id="vaga-natureza">
+                  <CampoSelect rotulo="Tipo de vaga" obrigatorio id="vaga-natureza" campoDaPlanilha="natureza">
                     <Select
                       value={form.natureza}
                       onChange={(v) => set("natureza", v)}
@@ -1730,7 +1827,12 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         liga a busca sozinho acima de 8 itens). Linha inativada some da escolha e
                         continua escrita nas vagas antigas, que é o que `incluirInativas=1` na
                         leitura garante. */}
-                  <CampoSelect rotulo="Célula de atendimento" obrigatorio id="vaga-linha-servico">
+                  <CampoSelect
+                    rotulo="Célula de atendimento"
+                    obrigatorio
+                    id="vaga-linha-servico"
+                    campoDaPlanilha="linhaServico"
+                  >
                     <Select
                       value={form.linhaServicoId}
                       onChange={(v) => set("linhaServicoId", v)}
@@ -1905,7 +2007,12 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     />
                   </Campo>
 
-                  <Campo rotulo="Data de abertura" obrigatorio id="vaga-data-abertura">
+                  <Campo
+                    rotulo="Data de abertura"
+                    obrigatorio
+                    id="vaga-data-abertura"
+                    campoDaPlanilha="dataAbertura"
+                  >
                     <input
                       type="date"
                       value={form.dataAbertura}
@@ -1931,7 +2038,12 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         do salto). O RASCUNHO continua salvando sem prazo. De passagem, é isto que
                         faz a coluna SLA De Entrega parar de dizer "não informado": ela lê
                         exatamente este campo. */}
-                  <Campo rotulo="Previsão de entrega" obrigatorio id="vaga-previsao-entrega">
+                  <Campo
+                    rotulo="Previsão de entrega"
+                    obrigatorio
+                    id="vaga-previsao-entrega"
+                    campoDaPlanilha="dataLimite"
+                  >
                     <input
                       type="date"
                       value={form.dataLimite}
@@ -2977,6 +3089,6 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
         }}
         onCancel={() => setConfirmarDescarte(false)}
       />
-    </MarcacaoDaTrilha.Provider>
+    </ProvedoresDaTrilha>
   );
 }
