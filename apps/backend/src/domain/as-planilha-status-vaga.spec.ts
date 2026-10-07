@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  STATUS_DE_PLANILHA_QUE_ENTRAM,
+  STATUS_DE_PLANILHA_QUE_SAEM,
   agregarStatusDaPlanilha,
   normalizarStatusDaPlanilha,
-  vagaDaPlanilhaEntra,
+  vagaDaPlanilhaSai,
 } from "./as-planilha-status-vaga";
 
 /**
- * ─ A RÉGUA DO STATUS DA PLANILHA, PURA (F2/F3) ─────────────────────────────────────────────────
+ * ─ A RÉGUA DO STATUS DA PLANILHA, PURA (F2/F3, OPÇÃO A) ────────────────────────────────────────
+ *
+ * A vaga APARECE por padrão; só FECHADO e CANCELADO a tiram de vista. Ausência de status, status
+ * nulo e status desconhecido NÃO escondem vaga: o risco a evitar é perder vaga real de vista.
  *
  * §A.6: dado sintético. §A.11: sem travessão.
  */
@@ -39,44 +42,54 @@ describe("normalizarStatusDaPlanilha: tolera acento, caixa e gênero, e fecha o 
   });
 });
 
-describe("vagaDaPlanilhaEntra: SÓ ABERTO e ENTREGUE entram", () => {
-  it("entra em aberto e entregue, cru ou canônico", () => {
-    expect(vagaDaPlanilhaEntra("Aberto")).toBe(true);
-    expect(vagaDaPlanilhaEntra("ENTREGUE")).toBe(true);
-    expect(vagaDaPlanilhaEntra("ABERTO")).toBe(true);
+describe("vagaDaPlanilhaSai: SÓ FECHADO e CANCELADO saem", () => {
+  it("SAI em fechado e cancelado, cru ou canônico", () => {
+    expect(vagaDaPlanilhaSai("Fechado")).toBe(true);
+    expect(vagaDaPlanilhaSai("FECHADO")).toBe(true);
+    expect(vagaDaPlanilhaSai("Encerrada")).toBe(true);
+    expect(vagaDaPlanilhaSai("Cancelado")).toBe(true);
+    expect(vagaDaPlanilhaSai("CANCELADO")).toBe(true);
   });
 
-  it("NÃO entra em fechado, cancelado, outro, ausente", () => {
-    expect(vagaDaPlanilhaEntra("Fechado")).toBe(false);
-    expect(vagaDaPlanilhaEntra("Cancelado")).toBe(false);
-    expect(vagaDaPlanilhaEntra("Em seleção")).toBe(false);
-    expect(vagaDaPlanilhaEntra(null)).toBe(false);
-    expect(vagaDaPlanilhaEntra("")).toBe(false);
+  it("NÃO sai em aberto, entregue, outro, ausente: aparece por padrão", () => {
+    expect(vagaDaPlanilhaSai("Aberto")).toBe(false);
+    expect(vagaDaPlanilhaSai("ENTREGUE")).toBe(false);
+    expect(vagaDaPlanilhaSai("Em seleção")).toBe(false);
+    expect(vagaDaPlanilhaSai(null)).toBe(false);
+    expect(vagaDaPlanilhaSai(undefined)).toBe(false);
+    expect(vagaDaPlanilhaSai("")).toBe(false);
   });
 
   it("concorda com a lista FECHADA exportada, que é a fonte única da decisão", () => {
-    expect([...STATUS_DE_PLANILHA_QUE_ENTRAM].sort()).toEqual(["ABERTO", "ENTREGUE"]);
-    for (const token of STATUS_DE_PLANILHA_QUE_ENTRAM) {
-      expect(vagaDaPlanilhaEntra(token)).toBe(true);
+    expect([...STATUS_DE_PLANILHA_QUE_SAEM].sort()).toEqual(["CANCELADO", "FECHADO"]);
+    for (const token of STATUS_DE_PLANILHA_QUE_SAEM) {
+      expect(vagaDaPlanilhaSai(token)).toBe(true);
     }
   });
 });
 
-describe("agregarStatusDaPlanilha: fail-closed no conflito entre linhas da mesma vaga", () => {
-  it("todas iguais e entrando: entra, com ENTREGUE preferido a ABERTO", () => {
+describe("agregarStatusDaPlanilha: NÃO alterada pela Opção A, escolhe o TOKEN, não a visibilidade", () => {
+  it("todas iguais e de vaga viva: token de vaga viva, com ENTREGUE preferido a ABERTO", () => {
     expect(agregarStatusDaPlanilha(["Aberto", "aberta", "ABERTO"])).toBe("ABERTO");
     expect(agregarStatusDaPlanilha(["Aberto", "Entregue"])).toBe("ENTREGUE");
   });
 
-  it("qualquer linha que NÃO entra domina (fail-closed), e não entra", () => {
-    expect(vagaDaPlanilhaEntra(agregarStatusDaPlanilha(["Aberto", "Fechado"]))).toBe(false);
+  it("qualquer linha fora de ABERTO/ENTREGUE domina o token (prefere CANCELADO a FECHADO a OUTRO)", () => {
     expect(agregarStatusDaPlanilha(["Aberto", "Fechado"])).toBe("FECHADO");
     expect(agregarStatusDaPlanilha(["Aberto", "Cancelado", "Fechado"])).toBe("CANCELADO");
     expect(agregarStatusDaPlanilha(["Aberto", "Em seleção"])).toBe("OUTRO");
   });
 
-  it("nenhuma linha com status legível devolve null", () => {
+  it("a visibilidade do token agregado segue a Opção A: só FECHADO/CANCELADO tiram a vaga de vista", () => {
+    expect(vagaDaPlanilhaSai(agregarStatusDaPlanilha(["Aberto", "Fechado"]))).toBe(true);
+    expect(vagaDaPlanilhaSai(agregarStatusDaPlanilha(["Aberto", "Cancelado"]))).toBe(true);
+    // Conflito que agrega em OUTRO NÃO esconde a vaga: ninguém disse que ela fechou.
+    expect(vagaDaPlanilhaSai(agregarStatusDaPlanilha(["Aberto", "Em seleção"]))).toBe(false);
+  });
+
+  it("nenhuma linha com status legível devolve null, e null não esconde a vaga", () => {
     expect(agregarStatusDaPlanilha([null, undefined, "  "])).toBeNull();
     expect(agregarStatusDaPlanilha([])).toBeNull();
+    expect(vagaDaPlanilhaSai(agregarStatusDaPlanilha([]))).toBe(false);
   });
 });

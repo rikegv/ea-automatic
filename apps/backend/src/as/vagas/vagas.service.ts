@@ -72,7 +72,7 @@ import {
   vagas,
 } from "../../db/schema";
 import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
-import { vagaDaPlanilhaEntra } from "../../domain/as-planilha-status-vaga";
+import { vagaDaPlanilhaSai } from "../../domain/as-planilha-status-vaga";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { derivarStatusDaVaga } from "./derivar-status-da-vaga";
 /*
@@ -3623,21 +3623,22 @@ export class VagasService {
   }
 
   /**
-   * ─ O FILTRO DA FILA DE REVISÃO (F3/F4, 06/10/2026): PLANILHA E RECUSA ──────────────────────────
+   * ─ O FILTRO DA FILA DE REVISÃO (F3/F4, OPÇÃO A em 07/10/2026): PLANILHA E RECUSA ───────────────
    *
    * A fila mostra só o que é trabalho VIVO de revisão. Duas subtrações, as duas ZERO DELEÇÃO (as
    * vagas continuam no banco, só somem da tela):
    *   1. F4, RECUSADA: a vaga com `recusada_em` não nula está na aba RECUSADAS, não na fila.
-   *   2. F3, PLANILHA: a vaga do Pandapé só aparece se a planilha a traz como ABERTO/ENTREGUE
-   *      (`vagaDaPlanilhaEntra`, a MESMA régua do gate de entrada da varredura). Vaga MANUAL
-   *      (sem `idVacancyPandape`) não é do Pandapé: a planilha não se aplica, e ela sempre aparece.
+   *   2. F3, PLANILHA: a vaga do Pandapé APARECE por padrão, e só sai quando a planilha a traz como
+   *      FECHADO ou CANCELADO (`vagaDaPlanilhaSai`, a MESMA régua do gate de entrada da varredura).
+   *      Código ausente da planilha, status nulo ou status desconhecido: APARECE. O fundamento do
+   *      diretor é não PERDER VAGA DE VISTA porque o time ainda não lançou o código na planilha.
+   *      Vaga MANUAL (sem `idVacancyPandape`) não é do Pandapé: a planilha não se aplica a ela.
    *
    * ┌─ O FILTRO DE PLANILHA SÓ VALE QUANDO O ESPELHO ESTÁ POPULADO ────────────────────────────────┐
-   * │ Sem planilha configurada o espelho não tem status nenhum, e filtrar por um espelho vazio      │
-   * │ esvaziaria a fila de TODAS as vagas do Pandapé (dev, homolog, ou antes do primeiro sync). O    │
-   * │ sinal de "planilha ativa" é haver QUALQUER linha com `status_planilha` não nulo, no mesmo       │
-   * │ espírito do gate (que só é injetado com a planilha configurada). Inativo, a F3 não filtra, e   │
-   * │ a fila volta ao comportamento de antes desta frente.                                           │
+   * │ Sem planilha configurada o espelho não tem status nenhum, e nesse estado nem há o que excluir. │
+   * │ O sinal de "planilha ativa" é haver QUALQUER linha com `status_planilha` não nulo, no mesmo    │
+   * │ espírito do gate (que só é injetado com a planilha configurada). Inativo, a F3 não filtra, o   │
+   * │ que é fail-open e segue coerente com a Opção A.                                                │
    * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   private async filtrarFilaDeRevisao(itens: VagaItemOndaE[]): Promise<VagaItemOndaE[]> {
@@ -3651,11 +3652,31 @@ export class VagasService {
       if (v.idVacancyPandape === null) return true;
       const chaveId = normalizarCodigoDeVaga(v.idVacancyPandape);
       const chaveRef = normalizarCodigoDeVaga(v.codigo);
+      /*
+       * ┌─ A CHAVE FORTE DECIDE QUANDO ESTÁ PRESENTE, E "PRESENTE DIZENDO NADA" É PRESENÇA ─────────┐
+       * │ ISTO ERA UM `??` EM CADEIA, e o `??` não distingue "a chave não existe no espelho" de "a   │
+       * │ chave existe com status NULO". `porCodigo` é `Map<string, string | null>`, então a chave    │
+       * │ forte presente com nulo devolvia `null`, e `null ?? X` CAÍA PARA A CHAVE FRACA. Com o id    │
+       * │ do Pandapé no espelho sem status e o `codigo` no espelho como FECHADO, a fila ESCONDIA a    │
+       * │ vaga, enquanto o gate de escrita (que usa `find` sobre as linhas) a DEIXAVA ENTRAR: os dois │
+       * │ consumidores discordavam, e a varredura espelhava de 30 em 30 minutos uma vaga que a tela   │
+       * │ nunca mostrava. É exatamente o "perder vaga de vista" que a Opção A existe para eliminar.   │
+       * │                                                                                             │
+       * │ Pela régua do requisito, status NULO APARECE. Agora a presença é testada com `has`, e só    │
+       * │ quando a chave forte está AUSENTE a fraca responde, espelhando a precedência do gate.       │
+       * │ Achado pelo `tester` independente (§A.38); impacto medido em produção na publicação: 0      │
+       * │ vaga, porque só 2 linhas do espelho estão sem status. Consertado antes de a planilha        │
+       * │ ganhar mais linhas sem status, não depois.                                                  │
+       * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+       */
       const status =
-        (chaveId !== null ? planilha.porCodigo.get(chaveId) : undefined) ??
-        (chaveRef !== null ? planilha.porCodigo.get(chaveRef) : undefined) ??
-        null;
-      return vagaDaPlanilhaEntra(status);
+        chaveId !== null && planilha.porCodigo.has(chaveId)
+          ? (planilha.porCodigo.get(chaveId) ?? null)
+          : chaveRef !== null && planilha.porCodigo.has(chaveRef)
+            ? (planilha.porCodigo.get(chaveRef) ?? null)
+            : null;
+      // OPÇÃO A: aparece por padrão, sai só quando a planilha diz FECHADO ou CANCELADO.
+      return !vagaDaPlanilhaSai(status);
     });
   }
 

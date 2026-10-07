@@ -11,7 +11,7 @@ import {
   type DivergenciaARegistrar,
 } from "../../domain/as-precedencia-ingestao";
 import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
-import { vagaDaPlanilhaEntra } from "../../domain/as-planilha-status-vaga";
+import { vagaDaPlanilhaSai } from "../../domain/as-planilha-status-vaga";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
@@ -184,13 +184,13 @@ export class IngestaoRepositorio
   }
 
   /**
-   * ─ O GATE DE ENTRADA PELA PLANILHA (F2): A VAGA ENTRA? ─────────────────────────────────────────
+   * ─ O GATE DE ENTRADA PELA PLANILHA (F2, OPÇÃO A): A VAGA ENTRA? ────────────────────────────────
    *
    * Lê o ESPELHO `as_depara_cliente_vaga.status_planilha` (frescor ~1h, materializado pelo
    * scheduler), nunca o Drive ao vivo. As duas chaves da planilha são as MESMAS do de/para de
    * cliente: o `idVacancy` primeiro, a `reference` como segunda busca, pela mesma régua medida
-   * (`resolverClienteDaVaga`). A régua do status é `vagaDaPlanilhaEntra`, COMPARTILHADA com a fila de
-   * revisão (F3): só ABERTO/ENTREGUE entram.
+   * (`resolverClienteDaVaga`). A régua do status é `vagaDaPlanilhaSai`, COMPARTILHADA com a fila de
+   * revisão (F3): a vaga ENTRA por padrão, e só FECHADO ou CANCELADO a exclui.
    *
    * ┌─ `ativo` NÃO ENTRA NA CONSULTA, E A OMISSÃO É DELIBERADA ────────────────────────────────────┐
    * │ `ativo = false` é o gesto "pare de confiar nesta TRADUÇÃO DE CLIENTE" (ambiguidade, ou o      │
@@ -200,16 +200,22 @@ export class IngestaoRepositorio
    * │ o dela.                                                                                        │
    * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    *
-   * AUSENTE DA PLANILHA = NÃO ENTRA: sem linha no espelho para nenhuma das chaves, devolve falso. A
-   * precedência `idVacancy > reference` espelha a do cliente: a chave FORTE decide quando existe.
+   * ┌─ AUSENTE DA PLANILHA = ENTRA (decisão do diretor, 07/10/2026) ────────────────────────────────┐
+   * │ Sem código normalizável, ou sem linha no espelho para nenhuma das chaves, a vaga ENTRA: a       │
+   * │ planilha não disse que ela fechou, e vaga real não pode deixar de ser espelhada só porque o     │
+   * │ time ainda não lançou o código. O risco a evitar é PERDER VAGA DE VISTA. Conforme o código é    │
+   * │ lançado, a planilha passa a governar, e vindo FECHADO/CANCELADO a vaga sai.                     │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A precedência `idVacancy > reference` espelha a do cliente: a chave FORTE decide quando existe.
    * §A.6: devolve só booleano; nenhum valor da planilha sai daqui.
    *
    * ┌─ O ESPELHO AINDA NÃO ATIVO = FAIL-OPEN, IDÊNTICO AO LADO DA LEITURA (F3) ─────────────────────┐
    * │ ANTES do lookup por chave, pergunta a MESMA coisa que a fila de revisão                        │
    * │ (`statusDaPlanilhaDasVagas`): `exists(status_planilha is not null)`. Se NENHUM status foi       │
    * │ populado (coluna recém-criada toda nula logo após a 0144, ou falha do scheduler que grava os    │
-   * │ tokens), o filtro da planilha ainda não está ativo: devolve TRUE (deixa entrar), em vez de      │
-   * │ barrar TODA vaga e PARAR a ingestão em silêncio. Os dois lados perguntam o mesmo `exists` com a │
+   * │ tokens), o filtro da planilha ainda não está ativo: devolve TRUE (deixa entrar), coerente com a │
+   * │ Opção A, em vez de olhar linha por linha à toa. Os dois lados perguntam o mesmo `exists` com a  │
    * │ mesma `FONTE_DO_DEPARA_DE_CLIENTE`, então ligam/desligam JUNTOS. §A.6: só booleano.             │
    * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
@@ -224,7 +230,8 @@ export class IngestaoRepositorio
     const chaveId = normalizarCodigoDeVaga(idVacancy);
     const chaveRef = normalizarCodigoDeVaga(reference);
     const chaves = [...new Set([chaveId, chaveRef].filter((c): c is string => c !== null))];
-    if (chaves.length === 0) return false;
+    // SEM CHAVE NORMALIZÁVEL a planilha não tem como dizer FECHADO desta vaga, então ela entra.
+    if (chaves.length === 0) return true;
     const lista = sql.join(
       chaves.map((c) => sql`${c}`),
       sql`, `,
@@ -235,11 +242,12 @@ export class IngestaoRepositorio
        where fonte = ${FONTE_DO_DEPARA_DE_CLIENTE}
          and codigo_externo in (${lista})
     `)) as unknown as { codigo_externo: string; status_planilha: string | null }[];
-    if (linhas.length === 0) return false;
+    // AUSENTE DO ESPELHO ATIVO: a planilha não marcou esta vaga como encerrada, então ela entra.
+    if (linhas.length === 0) return true;
     // A CHAVE FORTE (idVacancy) DECIDE QUANDO EXISTE; a reference só responde quando o id não casou.
     const porId = chaveId === null ? undefined : linhas.find((l) => l.codigo_externo === chaveId);
     const escolhida = porId ?? linhas.find((l) => l.codigo_externo === chaveRef) ?? linhas[0];
-    return vagaDaPlanilhaEntra(escolhida.status_planilha);
+    return !vagaDaPlanilhaSai(escolhida.status_planilha);
   }
 
   // ── ESCRITA ──────────────────────────────────────────────────────────────────────────────────

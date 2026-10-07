@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizarCodigoDeVaga } from "../../domain/as-depara-cliente-vaga";
-import { vagaDaPlanilhaEntra } from "../../domain/as-planilha-status-vaga";
+import { vagaDaPlanilhaSai } from "../../domain/as-planilha-status-vaga";
 import { FONTE_DO_DEPARA_DE_CLIENTE } from "../depara-cliente/depara-cliente.fonte";
 import { descobrirVagasAtivas, novoResumo } from "./ingestao-ciclo";
 import { IngestaoRepositorio } from "./ingestao-repositorio";
@@ -15,9 +15,10 @@ import type {
  * ─ QA INDEPENDENTE (tester, §A.38): F2, O GATE DE ENTRADA E A TRAVA DO EXPURGO ──────────────────
  *
  * DIFERENÇA DELIBERADA do spec do autor (`gate-da-planilha.tester.spec.ts`): ali o filtro era um
- * `Set<number>` pré-computado; aqui eu ligo a RÉGUA REAL do domínio (`vagaDaPlanilhaEntra`) à porta,
- * keyada pelo STATUS da planilha. Assim o teste exercita o REQUISITO ("FECHADO/CANCELADO/ausente não
- * entram; ABERTO/ENTREGUE entram") de ponta a ponta pela varredura, e não a suposição do autor.
+ * `Set<number>` pré-computado; aqui eu ligo a RÉGUA REAL do domínio (`vagaDaPlanilhaSai`) à porta,
+ * keyada pelo STATUS da planilha. Assim o teste exercita o REQUISITO VIGENTE (OPÇÃO A, 07/10/2026:
+ * "a vaga entra por padrão; só FECHADO e CANCELADO não entram; ausente da planilha ENTRA") de ponta
+ * a ponta pela varredura, e não a suposição do autor.
  *
  * E provo a trava mais perigosa do `seguranca`: a vaga que SAIU da planilha mas CONTINUA ATIVA no
  * ATS (VacancyStatus=2) NÃO pode ser encerrada pelo filtro. `encerrarAusentes` tem de receber o
@@ -52,8 +53,9 @@ function bancoQueAnota(): { banco: PortaBanco; espelhadas: number[] } {
 
 /**
  * Monta as deps da varredura com o GATE LIGADO À RÉGUA REAL: a porta `vagaEntra` consulta o status
- * da planilha daquela vaga (mapa por idVacancy) e devolve `vagaDaPlanilhaEntra(status)`. Status
- * ausente do mapa = vaga ausente do espelho = não entra, exatamente como o repositório de produção.
+ * da planilha daquela vaga (mapa por idVacancy) e devolve `!vagaDaPlanilhaSai(status)`. Status
+ * ausente do mapa = vaga ausente do espelho = ENTRA, exatamente como o repositório de produção pela
+ * Opção A.
  */
 function deps(
   vagasAtivasNoAts: { idVacancy: number; reference: string | null }[],
@@ -84,7 +86,7 @@ function deps(
     filtroDaPlanilha: comFiltro
       ? {
           vagaEntra: (idVacancy: number) =>
-            Promise.resolve(vagaDaPlanilhaEntra(statusDaPlanilhaPorVaga[idVacancy])),
+            Promise.resolve(!vagaDaPlanilhaSai(statusDaPlanilhaPorVaga[idVacancy])),
         }
       : undefined,
   };
@@ -92,13 +94,15 @@ function deps(
 }
 
 describe("QA F2 (varredura): o gate de entrada pela régua real da planilha", () => {
-  it("só ABERTO/ENTREGUE do espelho são espelhados; FECHADO, CANCELADO e AUSENTE NÃO entram", async () => {
+  it("só FECHADO/CANCELADO são barrados; ABERTO, ENTREGUE, AUSENTE, NULO e OUTRO são espelhados", async () => {
     const vagas = [
       { idVacancy: 10, reference: "R10" }, // ABERTO -> entra
       { idVacancy: 20, reference: "R20" }, // ENTREGUE -> entra
-      { idVacancy: 30, reference: "R30" }, // FECHADO -> não entra
-      { idVacancy: 40, reference: "R40" }, // CANCELADO -> não entra
-      { idVacancy: 50, reference: "R50" }, // ausente do espelho -> não entra
+      { idVacancy: 30, reference: "R30" }, // FECHADO -> NÃO entra
+      { idVacancy: 40, reference: "R40" }, // CANCELADO -> NÃO entra
+      { idVacancy: 50, reference: "R50" }, // ausente do espelho -> ENTRA (Opção A)
+      { idVacancy: 60, reference: "R60" }, // status nulo/vazio -> ENTRA (Opção A)
+      { idVacancy: 70, reference: "R70" }, // OUTRO (desconhecido) -> ENTRA (Opção A)
     ];
     const { deps: d, espelhadas } = deps(vagas, {
       10: "Aberto",
@@ -106,14 +110,17 @@ describe("QA F2 (varredura): o gate de entrada pela régua real da planilha", ()
       30: "Fechado",
       40: "Cancelada",
       // 50 ausente de propósito
+      60: "",
+      70: "stand by",
     });
     const resumo = novoResumo();
 
     const r = await descobrirVagasAtivas(d, resumo);
 
-    expect(espelhadas.sort((a, b) => a - b)).toEqual([10, 20]);
-    expect(r.map((v) => v.idVacancy).sort((a, b) => a - b)).toEqual([10, 20]);
-    expect(resumo.vagasForaDaPlanilha).toBe(3);
+    expect(espelhadas.sort((a, b) => a - b)).toEqual([10, 20, 50, 60, 70]);
+    expect(r.map((v) => v.idVacancy).sort((a, b) => a - b)).toEqual([10, 20, 50, 60, 70]);
+    // Só as duas ENCERRADAS ficaram fora: vaga sem código lançado não se perde mais de vista.
+    expect(resumo.vagasForaDaPlanilha).toBe(2);
   });
 
   it("SEM filtro (planilha não configurada): fail-closed NÃO barra em massa, toda ATS-ativa entra", async () => {
@@ -134,14 +141,14 @@ describe("QA F2 (varredura): o gate de entrada pela régua real da planilha", ()
 });
 
 describe("QA F2 (varredura): a TRAVA do seguranca sobre o conjunto de encerramento", () => {
-  it("vaga que SAIU da planilha mas CONTINUA ATIVA no ATS NÃO é encerrada: encerrarAusentes recebe TODAS", async () => {
+  it("vaga FECHADA na planilha mas CONTINUA ATIVA no ATS NÃO é encerrada: encerrarAusentes recebe TODAS", async () => {
     const vagas = [
       { idVacancy: 10, reference: "R10" }, // ABERTO na planilha
-      { idVacancy: 99, reference: "R99" }, // ATS-ativa, mas FORA da planilha agora
+      { idVacancy: 99, reference: "R99" }, // ATS-ativa, mas FECHADA na planilha
     ];
     const { deps: d, espelhadas, encerrarRecebeu } = deps(vagas, {
       10: "Aberto",
-      // 99 fora da planilha: não é espelhada, MAS continua ATS-ativa
+      99: "Fechado", // barrada da ESCRITA, MAS continua ATS-ativa
     });
     const resumo = novoResumo();
 
@@ -150,7 +157,7 @@ describe("QA F2 (varredura): a TRAVA do seguranca sobre o conjunto de encerramen
     // A 99 NÃO foi espelhada (gate de escrita a barrou)...
     expect(espelhadas).toEqual([10]);
     // ...mas o conjunto que alimenta o encerramento tem AS DUAS: a 99 não pode ser encerrada só por
-    // ter saído da planilha. Encerrar a 99 aqui acenderia o relógio de expurgo por base ilícita.
+    // estar FECHADA na planilha. Encerrar a 99 aqui acenderia o relógio de expurgo por base ilícita.
     expect(encerrarRecebeu).toHaveLength(1);
     expect(encerrarRecebeu[0].sort((a, b) => a - b)).toEqual([10, 99]);
   });
@@ -161,8 +168,12 @@ describe("QA F2 (varredura): a TRAVA do seguranca sobre o conjunto de encerramen
       { idVacancy: 2, reference: "R2" },
       { idVacancy: 3, reference: "R3" },
     ];
-    // Todas FECHADAS/ausentes: nada entra, mas as três continuam ativas no ATS.
-    const { deps: d, espelhadas, encerrarRecebeu } = deps(vagas, { 1: "Fechado", 2: "Cancelada" });
+    // Todas FECHADAS/CANCELADAS: nada entra, mas as três continuam ativas no ATS.
+    const { deps: d, espelhadas, encerrarRecebeu } = deps(vagas, {
+      1: "Fechado",
+      2: "Cancelada",
+      3: "Encerrada",
+    });
     const resumo = novoResumo();
 
     await descobrirVagasAtivas(d, resumo);
@@ -227,18 +238,27 @@ describe("QA F2 (repositório real): vagaEntra lê o status_planilha do espelho"
   // `normalizarCodigoDeVaga` recusa não-número (MALFORMADO -> null).
   const chave = (id: number) => normalizarCodigoDeVaga(id)!;
 
-  it("entra só quando o status gravado é ABERTO/ENTREGUE; não entra em FECHADO/CANCELADO", async () => {
+  it("não entra só quando o status gravado é FECHADO/CANCELADO; ABERTO, ENTREGUE e OUTRO entram", async () => {
     const repoAberto = repositorioComEspelho([{ codigo_externo: chave(100), status_planilha: "ABERTO" }]);
+    const repoEntregue = repositorioComEspelho([{ codigo_externo: chave(100), status_planilha: "ENTREGUE" }]);
+    const repoOutro = repositorioComEspelho([{ codigo_externo: chave(100), status_planilha: "OUTRO" }]);
     const repoFechado = repositorioComEspelho([{ codigo_externo: chave(100), status_planilha: "FECHADO" }]);
+    const repoCancelado = repositorioComEspelho([
+      { codigo_externo: chave(100), status_planilha: "CANCELADO" },
+    ]);
 
     expect(await repoAberto.vagaEntra(100, null)).toBe(true);
+    expect(await repoEntregue.vagaEntra(100, null)).toBe(true);
+    expect(await repoOutro.vagaEntra(100, null)).toBe(true);
     expect(await repoFechado.vagaEntra(100, null)).toBe(false);
+    expect(await repoCancelado.vagaEntra(100, null)).toBe(false);
   });
 
-  it("AUSENTE de um espelho ATIVO (há status, mas não o desta vaga) NÃO entra", async () => {
-    // Espelho populado (há status) mas sem a vaga 777: lookup devolve zero linha, não entra.
+  it("AUSENTE de um espelho ATIVO (há status, mas não o desta vaga) ENTRA (Opção A)", async () => {
+    // Espelho populado (há status) mas sem a vaga 777: lookup devolve zero linha. A planilha não
+    // disse que a 777 fechou, então ela ENTRA, em vez de se perder de vista por falta de lançamento.
     const repo = repositorioComEspelho([{ codigo_externo: chave(100), status_planilha: "ABERTO" }]);
-    expect(await repo.vagaEntra(777, null)).toBe(false);
+    expect(await repo.vagaEntra(777, null)).toBe(true);
   });
 
   it("ESPELHO INATIVO (nenhum status_planilha populado) => FAIL-OPEN, qualquer vaga entra", async () => {

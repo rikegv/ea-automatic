@@ -18,8 +18,13 @@ import type {
  * porta real, e prova, com um `vagaEntra` FALSO keyado por status, que o encerramento vê o ATS
  * completo. O buraco que sobrava entre os dois é o caminho de PRODUÇÃO no estado mais perigoso:
  *
- *   ESPELHO POPULADO (fail-open DESLIGADO) + a porta REAL do repositório ligada ao ciclo, deixando
- *   SÓ ABERTO/ENTREGUE entrar e BARRANDO o resto, SEM que o conjunto de encerramento encolha.
+ *   ESPELHO POPULADO (fail-open DESLIGADO) + a porta REAL do repositório ligada ao ciclo, BARRANDO
+ *   o que a planilha marca como FECHADO/CANCELADO e deixando o resto entrar, SEM que o conjunto de
+ *   encerramento encolha.
+ *
+ * A RÉGUA É A OPÇÃO A (decisão do diretor, 07/10/2026): a vaga ENTRA por padrão, e só FECHADO ou
+ * CANCELADO a exclui. Código ausente da planilha ENTRA, porque vaga real não pode se perder de
+ * vista só porque o time ainda não lançou o código.
  *
  * A diferença importa porque o fail-open e o filtro ativo são DOIS ramos distintos de `vagaEntra`
  * (o `if (ativaLinhas[0]?.ativa !== true) return true` contra o lookup `codigo_externo in (...)`),
@@ -141,46 +146,48 @@ function depsComRepositorioReal(
 
 describe("F2 (porta real + ciclo): espelho ATIVO filtra a ESCRITA, nunca o conjunto de encerramento", () => {
   /**
-   * O CENÁRIO DE PRODUÇÃO COM O ESPELHO JÁ POPULADO. Quatro vagas ATS-ativas, o espelho diz:
-   *   10 ABERTO   -> entra
-   *   20 ENTREGUE -> entra
-   *   30 FECHADO  -> NÃO entra
-   *   40 ausente do espelho (porém ATS-ativa) -> NÃO entra
+   * O CENÁRIO DE PRODUÇÃO COM O ESPELHO JÁ POPULADO. Cinco vagas ATS-ativas, o espelho diz:
+   *   10 ABERTO    -> entra
+   *   20 ENTREGUE  -> entra
+   *   30 FECHADO   -> NÃO entra
+   *   40 CANCELADO -> NÃO entra
+   *   50 ausente do espelho (porém ATS-ativa) -> ENTRA, pela Opção A
    *
-   * O que o teste trava de uma vez: (1) o gate pela porta REAL deixa só 10 e 20 serem espelhadas, e
-   * (2) `encerrarAusentes` recebe AS QUATRO (10, 20, 30, 40). A 30 e a 40 foram barradas da ESCRITA,
-   * mas continuam ATS-ativas: encerrá-las só por não estarem na planilha acenderia o relógio de
-   * expurgo por base ilícita (a trava do `seguranca`, `ativos.push` antes do gate).
+   * O que o teste trava de uma vez: (1) o gate pela porta REAL barra só as duas ENCERRADAS, e
+   * (2) `encerrarAusentes` recebe AS CINCO. A 30 e a 40 foram barradas da ESCRITA, mas continuam
+   * ATS-ativas: encerrá-las por causa da planilha acenderia o relógio de expurgo por base ilícita
+   * (a trava do `seguranca`, `ativos.push` antes do gate).
    */
-  it("com espelho POPULADO, só ABERTO/ENTREGUE entram, e o encerramento vê o ATS completo", async () => {
+  it("com espelho POPULADO, só FECHADO/CANCELADO são barrados, e o encerramento vê o ATS completo", async () => {
     const vagas = [
       { idVacancy: 10, reference: null },
       { idVacancy: 20, reference: null },
       { idVacancy: 30, reference: null },
       { idVacancy: 40, reference: null },
+      { idVacancy: 50, reference: null },
     ];
     const { deps, espelhadas, encerrarRecebeu } = depsComRepositorioReal(vagas, [
       { codigo_externo: chave(10), status_planilha: "ABERTO" },
       { codigo_externo: chave(20), status_planilha: "ENTREGUE" },
       { codigo_externo: chave(30), status_planilha: "FECHADO" },
-      // 40 ausente de propósito: espelho ATIVO sem a linha dela.
+      { codigo_externo: chave(40), status_planilha: "CANCELADO" },
+      // 50 ausente de propósito: espelho ATIVO sem a linha dela, e pela Opção A ela ENTRA.
     ]);
     const resumo = novoResumo();
 
     await descobrirVagasAtivas(deps, resumo);
 
-    expect(espelhadas.sort((a, b) => a - b)).toEqual([10, 20]);
+    expect(espelhadas.sort((a, b) => a - b)).toEqual([10, 20, 50]);
     expect(resumo.vagasForaDaPlanilha).toBe(2);
     expect(encerrarRecebeu).toHaveLength(1);
-    expect(encerrarRecebeu[0].sort((a, b) => a - b)).toEqual([10, 20, 30, 40]);
+    expect(encerrarRecebeu[0].sort((a, b) => a - b)).toEqual([10, 20, 30, 40, 50]);
   });
 
   /**
-   * O PIOR CASO DO RAMO DE FILTRO ATIVO: espelho POPULADO em que NENHUMA vaga ATS-ativa está como
-   * ABERTO/ENTREGUE (todas fechadas ou ausentes). Nada é espelhado, mas `encerrarAusentes` ainda
-   * recebe o ATS inteiro. Este é o espelho exato do caso "todas barradas" do autor, porém pela porta
-   * REAL e com o espelho ATIVO (não pelo fail-open): é o ramo que, se encolhesse `ativos`, expurgaria
-   * em massa.
+   * O PIOR CASO DO RAMO DE FILTRO ATIVO: espelho POPULADO em que TODA vaga ATS-ativa está encerrada
+   * na planilha (FECHADO ou CANCELADO). Nada é espelhado, mas `encerrarAusentes` ainda recebe o ATS
+   * inteiro. Este é o espelho exato do caso "todas barradas" do autor, porém pela porta REAL e com o
+   * espelho ATIVO (não pelo fail-open): é o ramo que, se encolhesse `ativos`, expurgaria em massa.
    */
   it("espelho ATIVO barrando TODAS não dispara expurgo: encerramento recebe o ATS inteiro", async () => {
     const vagas = [
@@ -191,7 +198,7 @@ describe("F2 (porta real + ciclo): espelho ATIVO filtra a ESCRITA, nunca o conju
     const { deps, espelhadas, encerrarRecebeu } = depsComRepositorioReal(vagas, [
       { codigo_externo: chave(1), status_planilha: "FECHADO" },
       { codigo_externo: chave(2), status_planilha: "CANCELADA" },
-      // 3 ausente do espelho ativo.
+      { codigo_externo: chave(3), status_planilha: "ENCERRADA" },
     ]);
     const resumo = novoResumo();
 
@@ -201,6 +208,29 @@ describe("F2 (porta real + ciclo): espelho ATIVO filtra a ESCRITA, nunca o conju
     expect(resumo.vagasForaDaPlanilha).toBe(3);
     expect(encerrarRecebeu).toHaveLength(1);
     expect(encerrarRecebeu[0].sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  });
+
+  /**
+   * O CANÁRIO DA OPÇÃO A PELO CAMINHO REAL: espelho ATIVO, e a vaga cujo código o time AINDA NÃO
+   * LANÇOU na planilha. Antes de 07/10/2026 ela era barrada e se perdia de vista; agora ela ENTRA.
+   */
+  it("espelho ATIVO: a vaga AUSENTE da planilha, e a de status nulo, ENTRAM (o fundamento da Opção A)", async () => {
+    const vagas = [
+      { idVacancy: 11, reference: null }, // ausente do espelho
+      { idVacancy: 12, reference: null }, // presente, status NULO
+      { idVacancy: 13, reference: null }, // FECHADO, a única que sai
+    ];
+    const { deps, espelhadas, encerrarRecebeu } = depsComRepositorioReal(vagas, [
+      { codigo_externo: chave(12), status_planilha: null },
+      { codigo_externo: chave(13), status_planilha: "FECHADO" },
+    ]);
+    const resumo = novoResumo();
+
+    await descobrirVagasAtivas(deps, resumo);
+
+    expect(espelhadas.sort((a, b) => a - b)).toEqual([11, 12]);
+    expect(resumo.vagasForaDaPlanilha).toBe(1);
+    expect(encerrarRecebeu[0].sort((a, b) => a - b)).toEqual([11, 12, 13]);
   });
 
   /**

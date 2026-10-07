@@ -5422,9 +5422,13 @@ export const asDeparaClienteVaga = pgTable(
      * O token FECHADO (`ABERTO`/`ENTREGUE`/`FECHADO`/`CANCELADO`/`OUTRO`) que
      * `normalizarStatusDaPlanilha` produz a partir do texto cru da planilha. É este ESPELHO
      * (frescor ~1h, materializado pelo scheduler) que a varredura lê para o GATE DE ENTRADA e que
-     * a fila de revisão lê para o FILTRO: só `ABERTO`/`ENTREGUE` entram, por
-     * `STATUS_DE_PLANILHA_QUE_ENTRAM`. Nulo é "a planilha não disse o status desta vaga", e não
-     * entra, como o status desconhecido.
+     * a fila de revisão lê para o FILTRO.
+     *
+     * A RÉGUA É A OPÇÃO A (diretor, 07/10/2026): só `FECHADO` e `CANCELADO` EXCLUEM, por
+     * `STATUS_DE_PLANILHA_QUE_SAEM`/`vagaDaPlanilhaSai`. `ABERTO`, `ENTREGUE`, o status
+     * desconhecido (`OUTRO`) e o NULO ("a planilha não disse") todos APARECEM. *(Este bloco dizia o
+     * inverso, que era a régua anterior: "só ABERTO/ENTREGUE entram". Foi revogada, porque vaga real
+     * não pode sumir por falta de lançamento do código na planilha.)*
      *
      * §A.6: STATUS É CICLO DE VIDA, não dado pessoal. Ao contrário do nome do cliente e do código,
      * ele não identifica ninguém, então gravá-lo aqui é minimização respeitada. Guardar o texto

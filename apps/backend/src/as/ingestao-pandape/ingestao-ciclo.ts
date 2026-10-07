@@ -205,12 +205,27 @@ export async function descobrirVagasAtivas(
      */
     ativos.push(vaga.idVacancy);
     /*
-     * ─ O GATE DE ENTRADA PELA PLANILHA (F2): SÓ A ESCRITA É GATEADA ──────────────────────────────
+     * ─ O GATE DE ENTRADA PELA PLANILHA (F2, OPÇÃO A): SÓ A ESCRITA É GATEADA ─────────────────────
      *
-     * Ausente o filtro (planilha não configurada), nada é gateado e a vaga entra como hoje. Presente,
-     * a vaga só é espelhada/criada (e tem as páginas varridas, porque só as espelhadas são
-     * enfileiradas) quando a planilha a traz como ABERTO ou ENTREGUE. Fora da planilha, ou FECHADO/
-     * CANCELADO: a vaga NÃO é espelhada, mas JÁ está em `ativos`, então não é encerrada por engano.
+     * ┌─ A RÉGUA INVERTEU EM 07/10/2026, E ESTE BLOCO AFIRMAVA A REVOGADA ─────────────────────────┐
+     * │ ANTES: "a vaga só é espelhada quando a planilha a traz como ABERTO ou ENTREGUE; fora da     │
+     * │ planilha NÃO é espelhada". O diretor TROCOU para a OPÇÃO A, e o texto velho era o OPOSTO do │
+     * │ código vigente, no arquivo que guarda a trava de retenção logo acima. Documentação que      │
+     * │ descreve um mundo que acabou é pior que nenhuma: ela convence a próxima sessão de que a      │
+     * │ busca terminou.                                                                             │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * AGORA: a vaga é espelhada/criada POR PADRÃO (e tem as páginas varridas, porque só as
+     * espelhadas são enfileiradas). O gate só a EXCLUI quando a planilha traz o código como
+     * FECHADO ou CANCELADO. Fora da planilha, status nulo e status desconhecido: a vaga ENTRA.
+     *
+     * O FUNDAMENTO É DO DIRETOR: vaga real não pode sumir só porque o time ainda não lançou o
+     * código na planilha. O risco a evitar é PERDER VAGA DE VISTA, e a planilha é artefato
+     * administrativo, não declaração de finalidade. Conforme o time preenche o código, a planilha
+     * passa a governar: se vier FECHADO, a vaga deixa de ser espelhada.
+     *
+     * Ausente o filtro (planilha não configurada), nada é gateado. E em TODOS os casos a vaga JÁ
+     * está em `ativos` (push acima), então o gate nunca a encerra por engano.
      */
     if (deps.filtroDaPlanilha) {
       const entra = await deps.filtroDaPlanilha.vagaEntra(vaga.idVacancy, vaga.reference);
