@@ -14,15 +14,7 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { cn } from "@/lib/cn";
 import { DependenciaDrawer } from "@/components/diagnostico/DependenciaDrawer";
-import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
-import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
-import { dataHoraBr } from "@/lib/as-candidatos";
-import {
-  NAO_INFORMADO,
-  listarEntradasPandape,
-  rotuloMotivo,
-} from "@/lib/pandape-entradas";
-import type { PandapeEntradaItem } from "@ea/shared-types";
+import { listarEntradasPandape } from "@/lib/pandape-entradas";
 // A régua da busca por nome mora no lib: a busca do modal da fila degradada usa a MESMA.
 import { normBusca } from "@/lib/busca-nome";
 
@@ -204,57 +196,23 @@ export default function DiagnosticoPage() {
    * derruba o Diagnóstico e NÃO some com o card, porque o destino continua valendo mesmo sem o
    * número; some o número, não a porta.
    */
-  const [entradas, setEntradas] = useState<PandapeEntradaItem[] | null>(null);
+  const [entradasPendentes, setEntradasPendentes] = useState<number | null>(null);
   const podeVerEntradas = temMenu("entradas-pandape");
 
-  /*
-   * O FETCH NÃO É GATED PELO MENU. A seção "CPF Inválido" (abaixo) serve a quem vê o Diagnóstico,
-   * que já é Master/Super_admin, o mesmo RBAC do endpoint `/pandape-entradas`. Ela não depende do
-   * menu `entradas-pandape` (§A.23). O card "Entradas Do Pandapé" da faixa continua aparecendo só
-   * para quem tem o menu; o que muda é só de onde vem o dado, agora compartilhado. Uma leitura só,
-   * ao endpoint durável da entrada, SEM nenhuma chamada nova à API do Pandapé (a cota é da folha).
-   */
   useEffect(() => {
-    if (!token) return;
+    if (!token || !podeVerEntradas) return;
     let vivo = true;
     listarEntradasPandape(token)
       .then((itens) => {
-        if (vivo) setEntradas(itens);
+        if (vivo) setEntradasPendentes(itens.length);
       })
       .catch(() => {
-        if (vivo) setEntradas(null);
+        if (vivo) setEntradasPendentes(null);
       });
     return () => {
       vivo = false;
     };
-  }, [token]);
-
-  // Contagem do card da faixa, derivada da MESMA lista. `null` é "não sei" (carregando ou falhou).
-  const entradasPendentes = entradas === null ? null : entradas.length;
-
-  /*
-   * SÓ OS CASOS DE CPF INVÁLIDO AINDA PENDENTES. A fonte é a tabela `pandape_entrada`, durável: o
-   * backoff do `sync-candidate` virou 1h (15/09), então um CPF inválido fica ~31h em `delayed` e
-   * NUNCA em `failed`, sumindo de qualquer leitura por fila do BullMQ. A entrada não some.
-   *
-   * `listarEntradasPandape` já traz só-pendente por padrão; o guard por `resolvidoEm` é cinto e
-   * suspensório, e é o que faz o caso SUMIR sozinho quando o CPF é corrigido na origem.
-   */
-  const cpfInvalidos = useMemo(
-    () => (entradas ?? []).filter((i) => i.motivo === "CPF_INVALIDO" && i.resolvidoEm === null),
-    [entradas],
-  );
-  const colunasCpf = useMemo<ColOrd<PandapeEntradaItem>[]>(
-    () => [
-      { chave: "candidato", tipo: "texto", valor: (i) => i.candidatoNome ?? "" },
-      { chave: "vaga", tipo: "texto", valor: (i) => i.idVacancy },
-      { chave: "motivo", tipo: "texto", valor: (i) => rotuloMotivo(i.motivo) },
-      { chave: "tentativas", tipo: "numero", valor: (i) => i.tentativas },
-      { chave: "recebidoEm", tipo: "data", valor: (i) => i.recebidoEm },
-    ],
-    [],
-  );
-  const ordCpf = useOrdenacao(colunasCpf, cpfInvalidos);
+  }, [token, podeVerEntradas]);
 
   const acao = useCallback(
     async (rota: string, body: Record<string, string>, rotulo: string) => {
@@ -720,93 +678,6 @@ export default function DiagnosticoPage() {
           </div>
         </>
       )}
-
-      {/* ── SEÇÃO: CPF INVÁLIDO ──────────────────────────────────────────────────────────────
-          Casos de CPF inválido lidos da tabela `pandape_entrada`, a fonte durável, e NÃO dos jobs
-          `failed` do BullMQ: com o backoff de 1h (15/09) o caso fica ~31h em `delayed`, nunca em
-          `failed`, e some da leitura por fila. Aparece aqui na hora e sai sozinho quando o CPF é
-          corrigido na origem (a entrada é resolvida). Serve a quem vê o Diagnóstico, sem depender
-          do menu `entradas-pandape` (§A.23). Máscara única de tabela (§A.12/§A.20), ordenável
-          (§A.29). Nenhuma chamada nova à API do Pandapé: o nome vem do próprio item (§A.5). */}
-      <GlassCard className="mt-[14px] overflow-hidden p-2">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-3 pt-2">
-          <div>
-            <div className="eyebrow !mb-1">Entradas Do Pandapé</div>
-            <h2 className="text-lg font-semibold text-text">CPF Inválido</h2>
-          </div>
-          <StatusPill
-            tone={cpfInvalidos.length > 0 ? "wn" : "ok"}
-            label={String(cpfInvalidos.length)}
-          />
-        </div>
-        <div className="ea-scroll overflow-x-auto">
-          {/* As cinco larguras somam 100%; a min-w faz a tabela ROLAR em vez de espremer (§A.20). */}
-          <table className="ds-table min-w-[820px]">
-            <thead>
-              <tr>
-                <ColunaOrdenavel as="th" ord={ordCpf} chave="candidato" className="w-[34%]">
-                  Candidato
-                </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ordCpf} chave="vaga" className="w-[16%]">
-                  Vaga
-                </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ordCpf} chave="motivo" className="w-[18%]">
-                  Motivo
-                </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ordCpf} chave="tentativas" className="w-[12%]">
-                  Tentativas
-                </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ordCpf} chave="recebidoEm" className="w-[20%]">
-                  Recebido Em
-                </ColunaOrdenavel>
-              </tr>
-            </thead>
-            <tbody>
-              {entradas === null ? (
-                <tr>
-                  <td colSpan={5} className="py-8 text-center text-faint">
-                    Carregando…
-                  </td>
-                </tr>
-              ) : ordCpf.itens.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-8 text-center text-faint">
-                    Nenhum caso de CPF inválido pendente.
-                  </td>
-                </tr>
-              ) : (
-                ordCpf.itens.map((i) => (
-                  <tr key={i.id}>
-                    <td>
-                      {/* Nome quando o cache já resolveu; "não informado" quando não, sempre com o
-                          identificador do ATS abaixo, que é o que identifica a linha nesse caso. */}
-                      <span
-                        className={cn(
-                          "block font-semibold",
-                          !i.candidatoNome && "font-normal text-faint",
-                        )}
-                      >
-                        {i.candidatoNome ?? NAO_INFORMADO}
-                      </span>
-                      <span className="block text-[12px] text-dim tabular-nums">
-                        ID {i.idPrecollaborator ?? NAO_INFORMADO}
-                      </span>
-                    </td>
-                    <td className="text-center text-dim tabular-nums">
-                      {i.idVacancy ?? NAO_INFORMADO}
-                    </td>
-                    <td className="text-center text-dim">{rotuloMotivo(i.motivo)}</td>
-                    <td className="text-center tabular-nums">{i.tentativas}</td>
-                    <td className="text-center text-dim tabular-nums">
-                      {dataHoraBr(i.recebidoEm)}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </GlassCard>
 
       {/* ── DETALHE de uma DEPENDÊNCIA: o padrão único de 4 blocos (onda 1) ── */}
       {depAberta && (
