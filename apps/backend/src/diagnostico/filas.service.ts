@@ -104,7 +104,7 @@ export class FilasDiagnosticoService {
    * O QUE O SNAPSHOT PEDE: ZERO linha. `estado()` tem DOIS consumidores, e só um usa a lista. O card
    * "Fila (BullMQ)" de `/diagnostico` (`diagnostico.service.dependencias`) consome SÓ a contagem e os
    * indisponíveis; subir o teto para ele faria toda abertura da tela ler centenas de hashes do Redis
-   * para descartar todos. Zero significa "nem chame o `getFailed`".
+   * para descartar todos. Zero significa "nem chame o `getFailed` NEM o `getDelayed`".
    */
   static readonly LIMITE_SNAPSHOT = 0;
 
@@ -182,8 +182,16 @@ export class FilasDiagnosticoService {
         contagem.atrasados += c.delayed ?? 0;
 
         // A lista é opcional: o snapshot pede 0 e nem chega a ler os hashes (ver LIMITE_SNAPSHOT).
-        const falhados = teto > 0 ? await q.getFailed(0, teto - 1) : [];
-        for (const j of falhados) {
+        // DELAYED entra JUNTO com FAILED no mesmo array: um job em re-tentativa (ex.: "CPF inválido"
+        // com backoff de 1h) fica em `delayed` entre as tentativas, carrega o `failedReason` da última
+        // tentativa e o `attemptsMade`, e precisa aparecer na lista e na busca como qualquer falhado.
+        const [falhados, atrasados] =
+          teto > 0
+            ? await Promise.all([q.getFailed(0, teto - 1), q.getDelayed(0, teto - 1)])
+            : [[], []];
+        for (const j of [...falhados, ...atrasados]) {
+          // Em delayed na 1ª espera (ainda não tentou) não há `finishedOn`/`processedOn`: cai em null,
+          // honesto. Com attemptsMade>=1, `finishedOn ?? processedOn` é o fim da ÚLTIMA tentativa.
           const quando = j.finishedOn ?? j.processedOn ?? null;
           jobs.push({
             fila: nome,
@@ -205,7 +213,15 @@ export class FilasDiagnosticoService {
     }
 
     jobs.sort((a, b) => (b.falhouEm ?? "").localeCompare(a.falhouEm ?? ""));
-    return { disponivel: alguma, contagem, jobs, indisponiveis };
+    // CAP À SOMA: failed + delayed de três filas pode passar do teto por fila. A lista total não
+    // ultrapassa LIMITE_LISTA (o mesmo teto do cache de nomes), então a busca por nome e a lista
+    // falam da mesma janela. Teto 0 (snapshot) já veio com jobs vazio e o slice não muda nada.
+    return {
+      disponivel: alguma,
+      contagem,
+      jobs: jobs.slice(0, FilasDiagnosticoService.LIMITE_LISTA),
+      indisponiveis,
+    };
   }
 
   /**
@@ -229,9 +245,14 @@ export class FilasDiagnosticoService {
     );
     if (!q || teto <= 0) return [];
     try {
-      const falhados = await q.getFailed(0, teto - 1);
+      // DELAYED entra junto: job em re-tentativa também precisa ter o nome resolvido pela busca.
+      // Um job está em failed OU em delayed, nunca nos dois, então não há jobId duplicado aqui.
+      const [falhados, atrasados] = await Promise.all([
+        q.getFailed(0, teto - 1),
+        q.getDelayed(0, teto - 1),
+      ]);
       const alvos: { jobId: string; idPrecollaborator: string }[] = [];
-      for (const j of falhados) {
+      for (const j of [...falhados, ...atrasados]) {
         const id = (j.data as Record<string, unknown> | undefined)?.idPrecollaborator;
         if (id) alvos.push({ jobId: String(j.id ?? ""), idPrecollaborator: String(id) });
       }
@@ -296,8 +317,26 @@ export class FilasDiagnosticoService {
     if (!q) throw new NotFoundException(`Fila ${fila} indisponível.`);
     const job = await this.buscarJob(fila, jobId);
     const nome = job.name;
-    await job.retry();
-    this.logger.log(`Job falhado reenfileirado: ${fila}/${jobId}. Acompanhando o desfecho.`);
+
+    // O DISPARO DEPENDE DO ESTADO. `job.retry()` só é válido em FAILED e LANÇA em qualquer outro
+    // ("Job is not in the failed state"), que era o que quebrava o botão num job `delayed` (em
+    // re-tentativa com backoff). Um `delayed` sai pela promoção: `job.promote()` o move para waiting
+    // e o worker o pega já. Qualquer outro estado (waiting/active) já está a caminho: não re-dispara,
+    // só acompanha. Depois daqui, o MESMO laço de espera abaixo observa completed/failed para os três.
+    const estadoInicial = await job.getState();
+    if (estadoInicial === "failed") {
+      await job.retry();
+      this.logger.log(`Job falhado reenfileirado: ${fila}/${jobId}. Acompanhando o desfecho.`);
+    } else if (estadoInicial === "delayed") {
+      await job.promote();
+      this.logger.log(`Job atrasado promovido: ${fila}/${jobId}. Acompanhando o desfecho.`);
+    } else {
+      // waiting/active/etc.: o job já está na fila ou rodando. Promover/retentar aqui lançaria; o
+      // laço abaixo acompanha o desfecho real, e no teto devolve EM_PROCESSAMENTO (verdade).
+      this.logger.log(
+        `Job em "${estadoInicial}", já a caminho: ${fila}/${jobId}. Apenas acompanhando.`,
+      );
+    }
 
     const inicio = Date.now();
     const segundos = () => Math.round((Date.now() - inicio) / 1000);
@@ -313,7 +352,9 @@ export class FilasDiagnosticoService {
         return { fila, jobId, nome, desfecho: "CONCLUIDO", esperouSegundos: segundos() };
       }
       // O `retry()` apaga `failedReason` junto com o estado antigo (script `reprocessJob` do BullMQ),
-      // então "falhado COM motivo" é necessariamente a falha NOVA, nunca o eco da anterior.
+      // então "falhado COM motivo" é necessariamente a falha NOVA, nunca o eco da anterior. No caminho
+      // do `promote()` o `failedReason` antigo não é apagado, mas o job promovido sai para waiting, e
+      // só volta a "failed" depois de rodar de novo: ler "failed" aqui ainda significa falha NOVA.
       if (estado === "failed" && atual.failedReason) {
         this.logger.warn(`Reprocesso falhou de novo: ${fila}/${jobId}.`);
         return {
