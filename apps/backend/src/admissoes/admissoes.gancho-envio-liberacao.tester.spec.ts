@@ -20,7 +20,8 @@ import { asCandidaturas } from "../db/schema";
  *   (b) um `enviarParaAdmissao` que LANÇA não derruba `liberar`.
  *   (c) um `enviarParaAdmissao` que devolve `enviado:false` também não derruba.
  *   (d) `CandidatosService.registrarSaida` cria a pré-admissão + grava `admissao_id` e NÃO emite.
- *   (e) `liberarEmLote` NÃO emite (provado por ausência de dependência no caminho do lote).
+ *   (e) `liberarEmLote` (Alto Volume) TAMBÉM emite, best-effort (comportamento provado em
+ *       `admissoes.liberar-lote.spec.ts`; aqui cobrimos a liberação individual).
  *
  * §A.6: todo CPF/e-mail que circula é sintético (família reservada, verificador válido), e as
  * asserções de log provam que, na falha, só sai o CÓDIGO do motivo ou o NOME do erro, nunca PII.

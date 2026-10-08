@@ -21,7 +21,8 @@ import {
  * │ O risco continua POSICIONAL e a UMA LINHA de distância, só que no destino novo: o gancho fica  │
  * │ DEPOIS do commit da transação de `liberar`, e é BEST-EFFORT (try que absorve a falha, catch    │
  * │ que não relança), porque a LIBERAÇÃO é o fato e o envio é o aviso (§A.5). Em `liberarEmLote`   │
- * │ (Alto Volume) o gancho NÃO existe, de propósito: o lote mandaria N credenciais de uma vez.     │
+ * │ (Alto Volume) o MESMO gancho foi ligado (decisão do diretor, e03ddde): dispara para cada      │
+ * │ admissão liberada, FORA das transações, best-effort, e a falha do envio não derruba o lote.   │
  * │                                                                                               │
  * │ A colocação é lida do CÓDIGO EXECUTÁVEL (comentários apagados por `corpoDoMetodo`: eles usam    │
  * │ as mesmas palavras da regra e já deram falso positivo nesta fábrica, ver a memória "varredura  │
@@ -182,14 +183,18 @@ describe("o envio dispara na LIBERAÇÃO, e não mais na saída do funil (S19, m
   });
 
   /**
-   * O ALTO VOLUME NÃO AVISA, de propósito (requisito). O lote mandaria N credenciais de uma vez, e
-   * a decisão do diretor manteve o envio só na liberação INDIVIDUAL.
+   * O ALTO VOLUME TAMBÉM AVISA, best-effort (decisão do diretor, no ar em e03ddde). O mesmo gancho
+   * da liberação INDIVIDUAL foi ligado para a liberação em MASSA: dispara `enviarParaAdmissao` para
+   * cada admissão de fato liberada, FORA das transações, e a falha de envio não derruba o lote (a
+   * liberação é o fato, o envio é o aviso, §A.5). O comportamento (best-effort, quem falha não
+   * recebe) está provado contra o serviço REAL em `admissoes.gancho-envio-liberacao.tester.spec.ts`
+   * e em `admissoes.liberar-lote.spec.ts`.
    */
-  it("`liberarEmLote` (Alto Volume) NÃO chama o envio", () => {
+  it("`liberarEmLote` (Alto Volume) CHAMA o envio, best-effort", () => {
     expect(
       CHAMA_O_ENVIO.test(corpoAdm("liberarEmLote")),
-      "o lote dispararia uma credencial por pessoa, fora de escopo",
-    ).toBe(false);
+      "o lote não avisa o candidato: o gancho do Alto Volume sumiu",
+    ).toBe(true);
   });
 
   /**

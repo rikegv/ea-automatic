@@ -568,15 +568,23 @@ export default function PortalDoCandidatoPage() {
     linkRef.current = link;
     setLinkToken(link);
 
-    // A SESSÃO GUARDADA RETOMA SEM RE-IDENTIFICAR. Se ela expirou, o 401 da leitura reabre a
-    // identificação com o link em mãos (progresso vem do servidor). Sem sessão e sem link, é a tela
-    // de "abra o link de novo": não há como emitir sessão nova.
-    const sessaoGuardada = lerGuardado(CHAVE_SESSAO);
-    if (sessaoGuardada) {
-      setSessao(sessaoGuardada);
-      void carregarTrilha(sessaoGuardada);
-    } else if (!link) {
-      setSemFragmento(true);
+    // O TOKEN NOVO DO FRAGMENTO GANHA SEMPRE. Quando o candidato abre um link novo (doFragmento), a
+    // sessão guardada é descartada e o caminho é o de IDENTIFICAÇÃO com o token novo: uma sessão velha
+    // morta não pode roubar o link novo e cair em recusa ("Link Inválido"), e uma sessão velha viva de
+    // um link antigo não pode ignorar o link novo em silêncio. Só quando NÃO há token novo (o candidato
+    // reabriu a aba sem link) é que a sessão guardada retoma sem re-identificar; se ela expirou, o 401
+    // da leitura reabre a identificação com o link em mãos. Sem sessão e sem link, é a tela de "abra o
+    // link de novo": não há como emitir sessão nova.
+    if (doFragmento) {
+      limparGuardado(CHAVE_SESSAO);
+    } else {
+      const sessaoGuardada = lerGuardado(CHAVE_SESSAO);
+      if (sessaoGuardada) {
+        setSessao(sessaoGuardada);
+        void carregarTrilha(sessaoGuardada);
+      } else if (!link) {
+        setSemFragmento(true);
+      }
     }
   }, [carregarTrilha]);
 
