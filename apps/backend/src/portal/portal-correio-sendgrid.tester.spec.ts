@@ -2,7 +2,8 @@ import { Logger } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PortalCorreioService } from "./portal-correio.service";
-import type { EmailDoCodigo, EmailDoLink } from "../domain/portal-envio";
+import { corpoDoEmailDoLink, type EmailDoCodigo, type EmailDoLink } from "../domain/portal-envio";
+import { LOGO_SOULAN_BASE64, LOGO_SOULAN_CID } from "./portal-logo";
 
 /**
  * O CAMINHO SENDGRID DO CORREIO, PROVADO EM EXECUCAO (§A.38, canal novo).
@@ -229,6 +230,66 @@ describe("a requisicao bate o contrato do SendGrid", () => {
   });
 });
 
+describe("o LINK leva o logo como anexo inline (CID); o CÓDIGO não leva anexo nenhum", () => {
+  interface CorpoComAnexos {
+    content: { type: string; value: string }[];
+    attachments?: {
+      content: string;
+      type: string;
+      filename: string;
+      disposition: string;
+      content_id: string;
+    }[];
+  }
+
+  it("enviarLink injeta attachments com content_id = CID e disposition inline", async () => {
+    const { chamadas } = stubarFetch({ status: 202 });
+    const correio = new PortalCorreioService(configCompleta());
+    await correio.enviarLink(EMAIL_CANARIO, MENSAGEM_LINK);
+
+    const corpo = JSON.parse(chamadas[0].body) as CorpoComAnexos;
+    expect(Array.isArray(corpo.attachments), "enviarLink não injetou attachments").toBe(true);
+    expect(corpo.attachments?.length).toBe(1);
+    const anexo = corpo.attachments![0];
+    expect(anexo.content_id).toBe(LOGO_SOULAN_CID);
+    expect(anexo.disposition).toBe("inline");
+    expect(anexo.type).toBe("image/png");
+    expect(anexo.content, "o anexo carrega o base64 do logo").toBe(LOGO_SOULAN_BASE64);
+    expect(anexo.content.length).toBeGreaterThan(0);
+  });
+
+  it("enviarCodigo NÃO injeta attachments: o e-mail do código não leva imagem", async () => {
+    const { chamadas } = stubarFetch({ status: 202 });
+    const correio = new PortalCorreioService(configCompleta());
+    await correio.enviarCodigo(EMAIL_CANARIO, MENSAGEM_CODIGO);
+
+    const corpo = JSON.parse(chamadas[0].body) as CorpoComAnexos;
+    expect("attachments" in corpo, "o e-mail do código veio com attachments").toBe(false);
+  });
+
+  /**
+   * PONTA A PONTA: o corpo REAL (`corpoDoEmailDoLink`) referencia `cid:<X>` no html, e o correio
+   * declara esse MESMO `<X>` como `content_id` do anexo. Sem o casamento, o cliente de e-mail mostra
+   * imagem quebrada mesmo com o anexo presente, e nenhum teste de uma ponta só pegaria isso.
+   */
+  it("o cid referenciado no HTML real casa com o content_id do anexo", async () => {
+    const { chamadas } = stubarFetch({ status: 202 });
+    const correio = new PortalCorreioService(configCompleta());
+    const mensagemReal = corpoDoEmailDoLink({
+      nome: "Candidato Sintético",
+      url: URL_LINK_CANARIO,
+      expiraEm: new Date("2026-09-24T12:00:00.000Z"),
+    });
+    await correio.enviarLink(EMAIL_CANARIO, mensagemReal);
+
+    const corpo = JSON.parse(chamadas[0].body) as CorpoComAnexos;
+    const html = corpo.content.find((c) => c.type === "text/html")?.value ?? "";
+    const cid = corpo.attachments?.[0]?.content_id ?? "";
+    expect(cid).toBe(LOGO_SOULAN_CID);
+    expect(html).toContain(`cid:${cid}`);
+  });
+});
+
 describe("§A.6 em execucao: nada sensivel vaza no log, nem no feliz nem no erro", () => {
   function logJunto(): string {
     return logs.join("\n");
@@ -240,6 +301,9 @@ describe("§A.6 em execucao: nada sensivel vaza no log, nem no feliz nem no erro
     expect(texto.includes(CODIGO_CANARIO), `${contexto}: o codigo apareceu em log`).toBe(false);
     expect(texto.includes(URL_LINK_CANARIO), `${contexto}: o link apareceu em log`).toBe(false);
     expect(texto.includes(CHAVE_CANARIA), `${contexto}: a chave de API apareceu em log`).toBe(false);
+    // O base64 do logo viaja no corpo da requisicao (anexo), NUNCA no log: um blob no log enche o
+    // registro e, pior, carimba qual e-mail levou anexo. So o rotulo da rota e o status entram.
+    expect(texto.includes(LOGO_SOULAN_BASE64), `${contexto}: o base64 do logo apareceu em log`).toBe(false);
   }
 
   it("caminho feliz (202): destinatario, codigo, link e chave nao vao para log", async () => {

@@ -13,8 +13,10 @@ import {
   recorteDaPagina,
   type FatoDaAdmissaoNoPainel,
 } from "../domain/portal-painel";
+import { portalPendenciasNoTime, portalTermoAceite } from "../db/schema";
 import { PortalPainelController } from "./portal-painel.controller";
 import {
+  AGUARDANDO_ACEITE_DO_TERMO,
   FAROIS_FORA_DO_PAINEL,
   PortalPainelService,
   SEM_DOCUMENTO_PENDENTE,
@@ -566,6 +568,15 @@ function banco(dados: {
     dataAdmissao?: string | null;
   }[];
   noTime?: string[];
+  /**
+   * QUEM TEM LINHA EM `portal_termo_aceite`, ou seja quem já aceitou o Termo De Consentimento.
+   *
+   * MODELADO SEPARADO DO `noTime` de propósito: as duas tabelas projetam só `admissaoId`, e o fake
+   * as distingue pela COLUNA de origem (ver o `resolver`), não pela forma da projeção. Ausente é
+   * "ninguém aceitou", que é o estado real de uma admissão recém-encaminhada: a célula mostra então
+   * "Aguardando Aceite Do Termo" no lugar do próximo da régua (o gate da §A.19).
+   */
+  termosAceitos?: string[];
   /** O que a consulta do CATÁLOGO (§A.37) devolveria: pares distintos do recorte. */
   catalogo?: { codCliente: string; cliente: string; cargoId: string; cargo: string }[];
 }) {
@@ -618,7 +629,17 @@ function banco(dados: {
     }
     if (tem("nome")) return dados.cabecalhos ?? [];
     if (tem("expiraEm")) return links;
-    if (tem("admissaoId")) return (dados.noTime ?? []).map((admissaoId) => ({ admissaoId }));
+    // AS DUAS CONSULTAS QUE PROJETAM SÓ `admissaoId` (a queda para o time e o aceite do termo) são
+    // distinguidas pela TABELA de origem, e não pela forma da projeção: as duas projetam o mesmo
+    // `admissaoId`. A `select({ admissaoId: portalTermoAceite.admissaoId })` carrega a COLUNA do
+    // termo, a do `noTime` carrega a de `portalPendenciasNoTime`; comparar a referência da coluna é
+    // ler de QUAL tabela a query lê. Sem isso, as duas colidiam e todo mundo virava pré-termo.
+    if (projecao?.admissaoId === portalTermoAceite.admissaoId) {
+      return (dados.termosAceitos ?? []).map((admissaoId) => ({ admissaoId }));
+    }
+    if (projecao?.admissaoId === portalPendenciasNoTime.admissaoId) {
+      return (dados.noTime ?? []).map((admissaoId) => ({ admissaoId }));
+    }
     return [];
   };
 
@@ -806,6 +827,9 @@ describe("a lista, ponta a ponta contra o banco de mentirinha", () => {
           },
         ],
         noTime: ["adm-9"],
+        // ELA JÁ ACEITOU O TERMO: assim a coluna "documento atual" sai da RÉGUA (o próximo
+        // pendente), e não do gate "Aguardando Aceite Do Termo". O gate tem bloco próprio.
+        termosAceitos: ["adm-9"],
       }),
       regua({
         progresso: { "adm-9": { entregues: 7, total: 10 } },
@@ -915,9 +939,16 @@ const REGUA_DOIS = () =>
     proximo: { "adm-meio": "Comprovante De Residência" },
   });
 
+// AS DUAS ADMISSÕES DESTE CENÁRIO JÁ ACEITARAM O TERMO, e é isso que faz a "documento atual" sair
+// da RÉGUA (próximo pendente, ou vazio), e não do gate "Aguardando Aceite Do Termo" (§A.19). O gate
+// pré-termo tem cenário próprio, no bloco do termo mais abaixo: aqui o que se exercita é a régua.
 const servicoDois = () =>
   new PortalPainelService(
-    banco({ links: [LINK_CONCLUIDO, LINK_ANDAMENTO], cabecalhos: CABECALHOS_DOIS }),
+    banco({
+      links: [LINK_CONCLUIDO, LINK_ANDAMENTO],
+      cabecalhos: CABECALHOS_DOIS,
+      termosAceitos: ["adm-fim", "adm-meio"],
+    }),
     REGUA_DOIS(),
   );
 
@@ -1124,10 +1155,14 @@ describe("os filtros de SQL viram `IN`, e a busca vira `ilike`", () => {
 });
 
 describe("o catálogo dos filtros (§A.37)", () => {
+  // OS DOIS JÁ ACEITARAM O TERMO: assim o catálogo de documento sai da RÉGUA (próximo pendente mais
+  // o "Sem Documento Pendente"), sem o gate pré-termo entrar. O caso pré-termo do catálogo está no
+  // bloco do termo, onde a opção "Aguardando Aceite Do Termo" é provada aparecendo e sumindo.
   const comCatalogo = () =>
     new PortalPainelService(
       banco({
         links: [LINK_CONCLUIDO, LINK_ANDAMENTO],
+        termosAceitos: ["adm-fim", "adm-meio"],
         catalogo: [
           { codCliente: "C2", cliente: "Loja 2", cargoId: "cg-1", cargo: "Auxiliar" },
           { codCliente: "C1", cliente: "Loja 1", cargoId: "cg-1", cargo: "Auxiliar" },
@@ -1187,6 +1222,128 @@ describe("o catálogo dos filtros (§A.37)", () => {
   });
 });
 
+
+// ══ O GATE DO TERMO DE CONSENTIMENTO (§A.19/§A.37) ═══════════════════════════════════════════
+
+/**
+ * A COLUNA "DOCUMENTO ATUAL" TEM UM GATE ANTES DA RÉGUA: sem linha em `portal_termo_aceite`, ela
+ * mostra "Aguardando Aceite Do Termo", e não o próximo da régua (que estava um estágio à frente do
+ * real). Com o aceite, volta a sair da régua. A célula, o filtro e o catálogo leem a MESMA fonte (o
+ * mapa `proximos` já com o gate), então concordam por construção.
+ *
+ * O cenário tem três admissões, todas acessadas e com régua de verdade:
+ *  - `adm-pre`  : NÃO aceitou o termo. Em andamento, falta documento.
+ *  - `adm-pos`  : aceitou o termo. Em andamento, falta "Carteira De Identidade".
+ *  - `adm-fim`  : aceitou o termo. Concluiu a régua (nada pendente).
+ */
+const CENARIO_TERMO = (termosAceitos: string[]) =>
+  new PortalPainelService(
+    banco({
+      links: [
+        {
+          admissaoId: "adm-pre",
+          criadoEm: relativo(-30_000),
+          expiraEm: relativo(3_600_000),
+          primeiroAcessoEm: relativo(-25_000),
+          ultimoAcessoEm: relativo(-25_000),
+        },
+        {
+          admissaoId: "adm-pos",
+          criadoEm: relativo(-20_000),
+          expiraEm: relativo(3_600_000),
+          primeiroAcessoEm: relativo(-15_000),
+          ultimoAcessoEm: relativo(-15_000),
+        },
+        {
+          admissaoId: "adm-fim",
+          criadoEm: relativo(-10_000),
+          expiraEm: relativo(3_600_000),
+          primeiroAcessoEm: relativo(-5_000),
+          ultimoAcessoEm: relativo(-5_000),
+        },
+      ],
+      cabecalhos: [
+        { admissaoId: "adm-pre", nome: "Sintético P", cargo: "Aux", cliente: "Loja 1" },
+        { admissaoId: "adm-pos", nome: "Sintético Q", cargo: "Aux", cliente: "Loja 1" },
+        { admissaoId: "adm-fim", nome: "Sintético R", cargo: "Aux", cliente: "Loja 1" },
+      ],
+      termosAceitos,
+    }),
+    regua({
+      progresso: {
+        "adm-pre": { entregues: 2, total: 10 },
+        "adm-pos": { entregues: 2, total: 10 },
+        "adm-fim": { entregues: 10, total: 10 },
+      },
+      proximo: {
+        "adm-pre": "Carteira De Identidade",
+        "adm-pos": "Carteira De Identidade",
+        "adm-fim": null,
+      },
+    }),
+  );
+
+describe("o gate do Termo De Consentimento na coluna documento atual (§A.19)", () => {
+  /** (a) Sem aceite, a célula mostra o rótulo do gate, nunca o próximo da régua. */
+  it("admissão SEM termo aceito mostra `Aguardando Aceite Do Termo`, não o próximo da régua", async () => {
+    const itens = (await CENARIO_TERMO(["adm-pos", "adm-fim"]).listar({})).itens;
+    const pre = itens.find((i) => i.admissaoId === "adm-pre");
+    expect(pre?.documentoAtual).toBe(AGUARDANDO_ACEITE_DO_TERMO);
+    // E o rótulo não é o que a régua teria respondido para a mesma admissão.
+    expect(pre?.documentoAtual).not.toBe("Carteira De Identidade");
+  });
+
+  /** (b) Com aceite, a célula volta a sair da régua: o próximo pendente. */
+  it("admissão COM termo aceito mostra o próximo obrigatório pendente da régua", async () => {
+    const itens = (await CENARIO_TERMO(["adm-pos", "adm-fim"]).listar({})).itens;
+    const pos = itens.find((i) => i.admissaoId === "adm-pos");
+    expect(pos?.documentoAtual).toBe("Carteira De Identidade");
+  });
+
+  /** (b) Com aceite e nada pendente, a célula é `null` (não o gate, não um documento inventado). */
+  it("admissão COM termo aceito e régua zerada mostra `null`", async () => {
+    const itens = (await CENARIO_TERMO(["adm-pos", "adm-fim"]).listar({ aba: "CONCLUIDO" })).itens;
+    const fim = itens.find((i) => i.admissaoId === "adm-fim");
+    expect(fim?.documentoAtual).toBeNull();
+  });
+
+  /** (c) Filtrar pelo rótulo do gate devolve só as admissões pré-termo. */
+  it("filtrar por `Aguardando Aceite Do Termo` devolve só quem não aceitou", async () => {
+    const itens = (
+      await CENARIO_TERMO(["adm-pos", "adm-fim"]).listar({ documentos: [AGUARDANDO_ACEITE_DO_TERMO] })
+    ).itens;
+    expect(itens.map((i) => i.admissaoId)).toEqual(["adm-pre"]);
+  });
+
+  /** (c) E quem aceitou NÃO cai no filtro do gate: o próximo da régua é outra opção. */
+  it("o filtro do gate não pega quem já aceitou, mesmo com a régua no mesmo documento", async () => {
+    const itens = (
+      await CENARIO_TERMO(["adm-pos", "adm-fim"]).listar({ documentos: ["Carteira De Identidade"] })
+    ).itens;
+    expect(itens.map((i) => i.admissaoId)).toEqual(["adm-pos"]);
+  });
+
+  /** (d) O catálogo oferece a opção do gate SÓ quando existe alguém pré-termo. */
+  it("o catálogo inclui a opção do gate quando há admissão pré-termo", async () => {
+    const c = await CENARIO_TERMO(["adm-pos", "adm-fim"]).catalogoDeFiltros();
+    expect(c.documentos.map((d) => d.valor)).toEqual([
+      "Carteira De Identidade",
+      AGUARDANDO_ACEITE_DO_TERMO,
+      SEM_DOCUMENTO_PENDENTE,
+    ]);
+    // O rótulo do gate É o próprio valor (molde de documento normal), em title case (§A.24).
+    const opcao = c.documentos.find((d) => d.valor === AGUARDANDO_ACEITE_DO_TERMO);
+    expect(opcao?.rotulo).toBe(AGUARDANDO_ACEITE_DO_TERMO);
+  });
+
+  /** (d) Todos aceitaram: a opção do gate some do catálogo (opção que nunca traz linha é ruído). */
+  it("o catálogo NÃO inclui a opção do gate quando todos aceitaram", async () => {
+    const c = await CENARIO_TERMO(["adm-pre", "adm-pos", "adm-fim"]).catalogoDeFiltros();
+    expect(c.documentos.map((d) => d.valor)).not.toContain(AGUARDANDO_ACEITE_DO_TERMO);
+    // E a opção pré-termo não aparecer NÃO apaga o resto do catálogo: a régua continua lá.
+    expect(c.documentos.map((d) => d.valor)).toContain("Carteira De Identidade");
+  });
+});
 
 describe("o `linkJti` da linha, que é o alvo das ações por link", () => {
   /**

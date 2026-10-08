@@ -1,5 +1,6 @@
 import type { MotivoDeRecusaDeEnvio } from "@ea/shared-types";
 import { emailValido } from "./assinante-empresa";
+import { LOGO_SOULAN_CID } from "../portal/portal-logo";
 
 /**
  * O ENVIO DO LINK DO PORTAL, CAMADA PURA: mascaramento do destino, régua do que é enviável, a
@@ -312,29 +313,72 @@ export function corpoDoEmailDoLink(dados: DadosDoEmailDoLink): EmailDoLink {
   const linhas = [
     saudacao,
     "",
-    "Para seguir com a sua admissão, precisamos dos seus documentos. Use o endereço abaixo para enviá-los pelo celular ou pelo computador:",
+    "Seu início começa aqui, e estamos felizes em ter você com a gente.",
+    "",
+    "Para seguir com a sua admissão, falta só enviar os seus documentos, e dá para fazer tudo pelo celular, em poucos minutos.",
+    "",
+    "Você só precisa acessar o Portal do Candidato pelo endereço abaixo:",
     "",
     dados.url,
     "",
-    `Este endereço vale por ${PRAZO_DO_LINK_EM_HORAS} horas e expira em ${prazo}.`,
+    `Este acesso é pessoal e vale por ${PRAZO_DO_LINK_EM_HORAS} horas e expira em ${prazo}.`,
     "",
-    "O endereço é pessoal e dá acesso aos seus documentos. Não repasse para outras pessoas e não publique em grupos de mensagem. Se ele vencer, fale com o seu contato do RH e receba um novo.",
+    "Este endereço dá acesso aos seus documentos. Não repasse para outras pessoas e não publique em grupos de mensagem. Se ele vencer, fale com o seu contato do RH e receba um novo.",
     "",
-    "Se você não está em processo de admissão conosco, ignore esta mensagem.",
+    "Este e-mail é automático e não recebe respostas. Se precisar de ajuda, fale com o RH pelo telefone (11) 3549-6446.",
     "",
-    "Equipe de Admissão, Grupo Soulan",
+    "Se você não está em processo de admissão conosco, pode ignorar esta mensagem.",
+    "",
+    "Equipe De Admissão, Grupo Soulan",
   ];
 
+  // O LOGO É ANEXO INLINE (CID), não `data:` no `src`: muitos clientes de e-mail bloqueiam imagem
+  // embutida em `data:`, mas exibem o anexo referenciado por Content-ID. O base64 viaja no corpo do
+  // SendGrid (ver `portal-correio.service.ts`), e aqui vai só a referência.
+  const urlSegura = escaparHtml(dados.url);
+  const saudacaoSegura = escaparHtml(saudacao);
+  const prazoSeguro = escaparHtml(prazo);
+
+  // ESTILOS INLINE em cada elemento: cliente de e-mail remove a maior parte do `<style>`. O `<head>`
+  // guarda SÓ o `@media` (com `!important` para vencer o inline no celular) e o import do Montserrat.
   const html = [
-    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1f2933">',
-    `<p>${escaparHtml(saudacao)}</p>`,
-    "<p>Para seguir com a sua admissão, precisamos dos seus documentos. Use o botão abaixo para enviá-los pelo celular ou pelo computador:</p>",
-    `<p><a href="${escaparHtml(dados.url)}" style="display:inline-block;padding:12px 20px;background:#0f6f5c;color:#ffffff;text-decoration:none;border-radius:6px">Enviar Meus Documentos</a></p>`,
-    `<p>Este endereço vale por ${PRAZO_DO_LINK_EM_HORAS} horas e expira em ${escaparHtml(prazo)}.</p>`,
-    "<p>O endereço é pessoal e dá acesso aos seus documentos. Não repasse para outras pessoas e não publique em grupos de mensagem. Se ele vencer, fale com o seu contato do RH e receba um novo.</p>",
-    "<p>Se você não está em processo de admissão conosco, ignore esta mensagem.</p>",
-    "<p>Equipe de Admissão, Grupo Soulan</p>",
+    "<!doctype html>",
+    '<html lang="pt-BR"><head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">',
+    "<style>",
+    "@media (max-width:480px){",
+    ".ea-body{padding:24px 18px 8px !important;}",
+    ".ea-ola{font-size:20px !important;}",
+    ".ea-btn{display:block !important;}",
+    "}",
+    "</style>",
+    "</head>",
+    '<body style="margin:0;background:#eef3f8;font-family:\'Montserrat\',Arial,Helvetica,sans-serif;">',
+    '<div style="max-width:600px;margin:0 auto;padding:24px 16px;">',
+    '<div style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(13,43,69,.08);">',
+    '<div style="background:#1A4895;padding:28px 24px;text-align:center;">',
+    `<img src="cid:${LOGO_SOULAN_CID}" alt="Grupo Soulan" style="height:46px;width:auto;display:inline-block;">`,
     "</div>",
+    '<div class="ea-body" style="padding:32px 28px 12px;color:#0d2b45;font-size:15px;line-height:1.65;font-family:\'Montserrat\',Arial,Helvetica,sans-serif;">',
+    `<p class="ea-ola" style="font-size:22px;font-weight:700;color:#1A4895;margin:0 0 14px;">${saudacaoSegura}</p>`,
+    '<p style="margin:0 0 14px;">Seu início começa aqui, e estamos felizes em ter você com a gente.</p>',
+    '<p style="margin:0 0 14px;">Para seguir com a sua admissão, falta só enviar os seus documentos, e dá para fazer tudo pelo celular, em poucos minutos.</p>',
+    '<p style="margin:0 0 14px;">Você só precisa acessar o Portal do Candidato, clicando no botão abaixo:</p>',
+    '<div style="text-align:center;padding:14px 0 22px;">',
+    `<a class="ea-btn" href="${urlSegura}" style="display:inline-block;padding:15px 34px;background:#1A4895;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;font-size:16px;">Acessar O Portal</a>`,
+    "</div>",
+    `<p style="font-size:13px;color:#557089;margin:0 0 14px;">Este acesso é pessoal e vale por ${PRAZO_DO_LINK_EM_HORAS} horas e expira em ${prazoSeguro}.</p>`,
+    '<div style="font-size:13px;color:#557089;background:#f6f9fc;border-radius:8px;padding:12px 14px;margin:18px 0;">Este endereço dá acesso aos seus documentos. Não repasse para outras pessoas e não publique em grupos de mensagem. Se ele vencer, fale com o seu contato do RH e receba um novo.</div>',
+    '<div style="font-size:13px;color:#0d2b45;background:#eef7dc;border-left:4px solid #AAD12F;border-radius:8px;padding:12px 14px;margin:18px 0;">Este e-mail é automático e não recebe respostas. Se precisar de ajuda, fale com o RH pelo telefone <strong style="color:#1A4895;">(11) 3549-6446</strong>.</div>',
+    '<p style="font-size:13px;color:#557089;margin:0 0 14px;">Se você não está em processo de admissão conosco, pode ignorar esta mensagem.</p>',
+    '<p style="font-weight:600;color:#0d2b45;margin-top:18px;">Equipe De Admissão, Grupo Soulan</p>',
+    "</div>",
+    "</div>",
+    '<div style="text-align:center;color:#90a3b6;font-size:12px;padding:18px 16px 4px;">Grupo Soulan, Recursos Humanos</div>',
+    "</div>",
+    "</body></html>",
   ].join("");
 
   return { assunto, texto: linhas.join("\n"), html };

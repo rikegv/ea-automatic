@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { portalPendenciasNoTime, portalTermoAceite } from "../db/schema";
 import { farolGlobalEnum } from "../db/schema/enums";
 import {
   contarPainel,
@@ -10,7 +11,11 @@ import {
   recorteDaPagina,
   type FatoDaAdmissaoNoPainel,
 } from "../domain/portal-painel";
-import { FAROIS_FORA_DO_PAINEL, PortalPainelService } from "./portal-painel.service";
+import {
+  AGUARDANDO_ACEITE_DO_TERMO,
+  FAROIS_FORA_DO_PAINEL,
+  PortalPainelService,
+} from "./portal-painel.service";
 
 /**
  * COBERTURA INDEPENDENTE (§A.38) DO GERENCIADOR DO PORTAL.
@@ -72,6 +77,12 @@ interface DadosFake {
   /** Farol por admissão. Ausente = `EM_ADMISSAO` (viva). */
   farol?: Record<string, string>;
   noTime?: string[];
+  /**
+   * QUEM TEM LINHA EM `portal_termo_aceite` (aceitou o Termo De Consentimento). Ausente = ninguém,
+   * que é o estado real de uma admissão recém-encaminhada. O fake distingue esta consulta da do
+   * `noTime` pela COLUNA de origem (ver o `resolver`): as duas projetam só `admissaoId`.
+   */
+  termosAceitos?: string[];
 }
 
 /** O que o serviço mandou ao driver, para as asserções de paginação. */
@@ -124,7 +135,15 @@ function banco(dados: DadosFake, espiao: Espiao = { limites: [], deslocamentos: 
       }));
     }
     if (tem("expiraEm")) return vivos;
-    if (tem("admissaoId")) {
+    // AS DUAS CONSULTAS DE SÓ `admissaoId` (queda para o time e aceite do termo) distinguidas pela
+    // TABELA de origem: a referência da coluna projetada diz de QUAL tabela a query lê. A da forma
+    // não serve, porque as duas projetam o mesmo `admissaoId` (era essa a colisão do bug).
+    if (projecao.admissaoId === portalTermoAceite.admissaoId) {
+      return (dados.termosAceitos ?? [])
+        .filter((id) => admissoesComLink.includes(id))
+        .map((admissaoId) => ({ admissaoId }));
+    }
+    if (projecao.admissaoId === portalPendenciasNoTime.admissaoId) {
       return (dados.noTime ?? [])
         .filter((id) => admissoesComLink.includes(id))
         .map((admissaoId) => ({ admissaoId }));
@@ -573,6 +592,10 @@ describe("M1 (régua vazia não conclui): tentativas de reabrir por outro caminh
           ultimoAcessoEm: rel(-5_000),
         },
       ],
+      // ELA ACEITOU O TERMO: o que este caso prova é a RÉGUA ausente do mapa (M1), e não o gate do
+      // termo. Sem o aceite, `documentoAtual` sairia como "Aguardando Aceite Do Termo" e o caso
+      // deixaria de exercitar o caminho do `?? { entregues: 0, total: 0 }`.
+      termosAceitos: ["adm-sem-mapa"],
     };
     const r = await servico(dados, regua({ mapaVazio: true })).resumo();
     expect(r.acessaram).toBe(1);
@@ -916,6 +939,110 @@ describe("o contrato de `shared-types` e o objeto que o serviço devolve", () =>
     for (const proibido of ["cpf", "ip", "ua_hash", "uaHash", "tentativa", "suspensoAte", "geo"]) {
       expect(serializado.toLowerCase()).not.toContain(proibido.toLowerCase());
     }
+  });
+});
+
+// ══ 9. O GATE DO TERMO DE CONSENTIMENTO (§A.19), POR OUTRO CAMINHO ════════════════════════════
+
+/**
+ * O GATE QUE O AUTOR INTRODUZIU: a coluna "documento atual" não mostra o próximo da régua enquanto
+ * a admissão não tiver linha em `portal_termo_aceite`. Ela mostra "Aguardando Aceite Do Termo".
+ *
+ * ┌─ O QUE ESTA RODADA ATACA, QUE O FAKE DO AUTOR ESCONDIA ──────────────────────────────────────┐
+ * │ A CONSULTA DO TERMO E A DO `noTime` PROJETAM AS DUAS SÓ `admissaoId`. Um fake que distingue   │
+ * │ consulta pela FORMA da projeção casa as duas na mesma lista: o termo passaria a ler a lista   │
+ * │ do `noTime`, e vice-versa. O serviço estaria certo e o teste mentiria. Aqui a prova é por     │
+ * │ DIFERENÇA, com uma admissão que caiu para o time SEM aceitar o termo e outra que aceitou o    │
+ * │ termo SEM cair para o time: se as duas fontes colidissem, os dois rótulos sairiam trocados.   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+describe("§A.19: o gate do termo é fonte própria, e não colide com a queda para o time", () => {
+  const cenario = (termosAceitos: string[], noTime: string[]) =>
+    servico(
+      {
+        links: [
+          {
+            admissaoId: "sem-termo",
+            criadoEm: rel(-20_000),
+            expiraEm: rel(3_600_000),
+            primeiroAcessoEm: rel(-15_000),
+            ultimoAcessoEm: rel(-15_000),
+          },
+          {
+            admissaoId: "com-termo",
+            criadoEm: rel(-10_000),
+            expiraEm: rel(3_600_000),
+            primeiroAcessoEm: rel(-5_000),
+            ultimoAcessoEm: rel(-5_000),
+          },
+        ],
+        termosAceitos,
+        noTime,
+      },
+      regua({
+        progresso: {
+          "sem-termo": { entregues: 1, total: 10 },
+          "com-termo": { entregues: 1, total: 10 },
+        },
+        proximo: { "sem-termo": "RG", "com-termo": "RG" },
+      }),
+    );
+
+  const linhaDe = async (s: PortalPainelService, id: string) =>
+    (await s.listar({})).itens.find((i) => i.admissaoId === id);
+
+  /** (a) Sem aceite, a célula é o gate, nunca a resposta da régua (que aqui também seria "RG"). */
+  it("sem aceite do termo, `documentoAtual` é o rótulo do gate", async () => {
+    const linha = await linhaDe(cenario([], []), "sem-termo");
+    expect(linha?.documentoAtual).toBe(AGUARDANDO_ACEITE_DO_TERMO);
+  });
+
+  /** (b) Com aceite, a célula volta a sair da régua. */
+  it("com aceite do termo, `documentoAtual` é o próximo da régua", async () => {
+    const linha = await linhaDe(cenario(["com-termo"], []), "com-termo");
+    expect(linha?.documentoAtual).toBe("RG");
+  });
+
+  /**
+   * A PROVA QUE PEGA A COLISÃO: a que caiu para o time NÃO aceitou o termo, a que aceitou o termo
+   * NÃO caiu para o time. Se as duas fontes fossem a mesma lista, o `noTime` e o gate sairiam
+   * trocados. Cada rótulo tem de bater com a SUA tabela.
+   */
+  it("queda para o time e aceite do termo são tabelas diferentes, e não se confundem", async () => {
+    const s = cenario(["com-termo"], ["sem-termo"]);
+    const semTermo = await linhaDe(s, "sem-termo");
+    const comTermo = await linhaDe(s, "com-termo");
+    // A que NÃO aceitou o termo: gate na coluna, e ela é a que caiu para o time.
+    expect(semTermo?.documentoAtual).toBe(AGUARDANDO_ACEITE_DO_TERMO);
+    expect(semTermo?.noTime).toBe(true);
+    // A que aceitou o termo: régua na coluna, e ela NÃO está no time.
+    expect(comTermo?.documentoAtual).toBe("RG");
+    expect(comTermo?.noTime).toBe(false);
+  });
+
+  // O RECORTE POR FILTRO DE DOCUMENTO (c) não é exercitado AQUI de propósito: o banco de mentirinha
+  // deste arquivo ignora o `where` da página (ele modela farol, limite e deslocamento, não o recorte
+  // derivado). O filtro pelo rótulo do gate é provado no arquivo do autor, cujo fake LÊ o `where` via
+  // `idsExigidos`. Aqui a prova é de VALOR da coluna e de catálogo, que este fake sabe responder.
+
+  /** (d) O catálogo oferece a opção do gate só quando existe alguém pré-termo. */
+  it("o catálogo mostra e esconde a opção do gate conforme exista admissão pré-termo", async () => {
+    const comPre = await cenario(["com-termo"], []).catalogoDeFiltros();
+    expect(comPre.documentos.map((d) => d.valor)).toContain(AGUARDANDO_ACEITE_DO_TERMO);
+    const semPre = await cenario(["sem-termo", "com-termo"], []).catalogoDeFiltros();
+    expect(semPre.documentos.map((d) => d.valor)).not.toContain(AGUARDANDO_ACEITE_DO_TERMO);
+  });
+
+  /**
+   * §A.6: o gate lê SÓ `admissao_id` de `portal_termo_aceite`, sem projetar `aceito_em` nem `jti`.
+   * A prova é estrutural porque o que se guarda é a ausência de projeção sensível, não um valor.
+   */
+  it("o serviço lê o termo só pela chave, sem projetar carimbo nem jti do aceite", () => {
+    const inicio = CODIGO_SERVICO.indexOf("portalTermoAceite.admissaoId");
+    expect(inicio).toBeGreaterThan(0);
+    const bloco = CODIGO_SERVICO.slice(inicio - 120, inicio + 240);
+    expect(bloco).not.toMatch(/aceitoEm|aceito_em/);
+    expect(bloco).not.toMatch(/jtiLink|jti_link/);
   });
 });
 

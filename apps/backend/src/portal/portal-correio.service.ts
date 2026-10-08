@@ -1,6 +1,31 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { EmailDoCodigo, EmailDoLink } from "../domain/portal-envio";
+import { LOGO_SOULAN_BASE64, LOGO_SOULAN_CID } from "./portal-logo";
+
+/**
+ * Um anexo do SendGrid, no formato que a API pede (`attachments[]`). Usado só para o logo inline do
+ * e-mail do LINK: `disposition: "inline"` + `content_id` fazem o HTML exibi-lo por `cid:`.
+ */
+interface AnexoSendGrid {
+  content: string;
+  type: string;
+  filename: string;
+  disposition: "inline" | "attachment";
+  content_id: string;
+}
+
+/**
+ * O ANEXO DO LOGO, pronto para o e-mail do LINK. É o único anexo do correio, e vai SÓ no link: o
+ * e-mail do código não leva imagem (continua fora de escopo, régua própria em `portal-envio.ts`).
+ */
+const ANEXO_LOGO_LINK: AnexoSendGrid = {
+  content: LOGO_SOULAN_BASE64,
+  type: "image/png",
+  filename: "logo-soulan.png",
+  disposition: "inline",
+  content_id: LOGO_SOULAN_CID,
+};
 
 /**
  * O CORREIO DO PORTAL. A única porta por onde o EA manda e-mail, e ela manda UM tipo de e-mail só.
@@ -146,6 +171,7 @@ export class PortalCorreioService {
   private async postarMensagem(
     destinatario: string,
     mensagem: EmailDoLink | EmailDoCodigo,
+    anexos?: AnexoSendGrid[],
   ): Promise<boolean> {
     if (!this.configurado()) return false;
 
@@ -157,6 +183,9 @@ export class PortalCorreioService {
         { type: "text/plain", value: mensagem.texto },
         { type: "text/html", value: mensagem.html },
       ],
+      // `attachments` só entra quando há anexo: o e-mail do código não leva nenhum, e um campo vazio
+      // só polui o corpo. O logo do link é inline (CID), referenciado pelo HTML por `cid:`.
+      ...(anexos && anexos.length > 0 ? { attachments: anexos } : {}),
     });
 
     const resposta = await this.postar(URL_ENVIO, {
@@ -173,7 +202,8 @@ export class PortalCorreioService {
    * credencial viva que ninguém recebeu).
    */
   async enviarLink(destinatario: string, mensagem: EmailDoLink): Promise<boolean> {
-    return this.postarMensagem(destinatario, mensagem);
+    // O e-mail do LINK leva o logo da Soulan como anexo inline (CID). É o ÚNICO e-mail com anexo.
+    return this.postarMensagem(destinatario, mensagem, [ANEXO_LOGO_LINK]);
   }
 
   /**
