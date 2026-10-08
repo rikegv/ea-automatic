@@ -7,6 +7,7 @@ import {
   mascararEmail,
 } from "../domain/portal-envio";
 import { CPF_SINTETICO, EMAIL_SINTETICO, URL_SINTETICA } from "./portal-envio.tester-fake";
+import { LOGO_SOULAN_BASE64, LOGO_SOULAN_CID } from "./portal-logo";
 
 /**
  * ─ COBERTURA INDEPENDENTE (§A.38/§A.40) DAS FUNÇÕES PURAS DO ENVIO DO LINK ─────────────────────
@@ -169,5 +170,89 @@ describe("corpoDoEmailDoLink: leva a credencial e NADA mais", () => {
 
   it("diz o prazo, porque o link morre em 72 horas e o candidato precisa saber", () => {
     expect(/72|hora|prazo|expira/i.test(corpo())).toBe(true);
+  });
+});
+
+/**
+ * ─ O E-MAIL BRANDED DO LINK (§A.38/§A.40): logo por CID, botão para a URL, telefone do RH ───────
+ *
+ * Escrito contra o REQUISITO da frente, por quem NÃO fez a troca para o corpo branded. Prova
+ * COMPORTAMENTO, não o texto cosmético: a referência ao logo é por Content-ID (e não `data:`), o
+ * botão aponta para `dados.url` ESCAPADO, o telefone do RH está nas duas representações e a URL vai
+ * crua no texto puro. §A.6 continua valendo: só o primeiro nome entra, e nada mais de PII.
+ *
+ * Por que o html referencia o logo por `cid:` e não por `data:`: muitos clientes de e-mail bloqueiam
+ * imagem embutida em `data:`. O base64 viaja no anexo do SendGrid (provado no spec do correio); aqui,
+ * no corpo puro, deve haver só a REFERÊNCIA, nunca o blob.
+ */
+describe("corpoDoEmailDoLink: e-mail branded (logo por CID, botão, telefone do RH)", () => {
+  const RH_TELEFONE = "(11) 3549-6446";
+  const NOME_COMPLETO = "Mariana Sobrenometeste Apelidoteste";
+  // URL com `&`, que no atributo HTML tem de virar `&amp;`. É o que prova o escape do botão.
+  const URL_COM_ESPECIAL = "https://portal.exemplo-sintetico.test/p?a=1&b=2#t=bilhete-sintetico";
+  const URL_COM_ESPECIAL_ESCAPADA =
+    "https://portal.exemplo-sintetico.test/p?a=1&amp;b=2#t=bilhete-sintetico";
+
+  function montar(over: Partial<Parameters<typeof corpoDoEmailDoLink>[0]> = {}) {
+    return corpoDoEmailDoLink({
+      nome: NOME_COMPLETO,
+      url: URL_COM_ESPECIAL,
+      expiraEm: new Date("2026-09-24T12:00:00.000Z"),
+      ...over,
+    });
+  }
+
+  it("o html referencia o logo por `cid:logo-soulan`, com o CID vindo da constante", () => {
+    const { html } = montar();
+    expect(html).toContain(`cid:${LOGO_SOULAN_CID}`);
+  });
+
+  it("o corpo NÃO carrega o base64 do logo nem um `data:` inline: só a referência", () => {
+    const { html, texto } = montar();
+    expect(html).not.toContain("data:image");
+    // O blob pesado é anexo do correio, não registro do corpo. Se ele vazar para cá, cada e-mail
+    // carrega a imagem duas vezes e o html fica ilegível.
+    expect(html.includes(LOGO_SOULAN_BASE64)).toBe(false);
+    expect(texto.includes(LOGO_SOULAN_BASE64)).toBe(false);
+  });
+
+  it("o botão aponta para `dados.url`, ESCAPADO no atributo href", () => {
+    const { html } = montar();
+    expect(/<a\s[^>]*href=/i.test(html), "não há âncora de botão no html").toBe(true);
+    expect(html).toContain(`href="${URL_COM_ESPECIAL_ESCAPADA}"`);
+    // O `&` cru dentro do atributo é HTML malformado e quebra a URL em alguns clientes.
+    expect(html).not.toContain(`href="${URL_COM_ESPECIAL}"`);
+  });
+
+  it("o telefone do RH aparece no html E no texto puro", () => {
+    const { html, texto } = montar();
+    expect(html).toContain(RH_TELEFONE);
+    expect(texto).toContain(RH_TELEFONE);
+  });
+
+  it("a URL vai CRUA no texto puro: o texto não é escapado e a pessoa copia o endereço", () => {
+    const { texto } = montar();
+    expect(texto).toContain(URL_COM_ESPECIAL);
+  });
+
+  it("§A.6: só o PRIMEIRO nome entra; o restante do nome completo não aparece", () => {
+    const { html, texto } = montar();
+    const junto = `${html}\n${texto}`;
+    expect(junto).toContain("Mariana");
+    expect(junto, "sobrenome vazou para o corpo").not.toContain("Sobrenometeste");
+    expect(junto, "nome extra vazou para o corpo").not.toContain("Apelidoteste");
+  });
+
+  it("§A.6: o CPF nunca entra no corpo (nem html nem texto)", () => {
+    const { html, texto } = montar();
+    expect(html).not.toContain(CPF_SINTETICO);
+    expect(texto).not.toContain(CPF_SINTETICO);
+  });
+
+  it("nome é texto de terceiro e entra ESCAPADO no html, cru no texto", () => {
+    const { html, texto } = montar({ nome: "<b>Ana</b> Teste" });
+    expect(html, "o html deixou passar marcação não escapada do nome").not.toContain("<b>Ana</b>");
+    expect(html).toContain("&lt;b&gt;Ana&lt;/b&gt;");
+    expect(texto).toContain("<b>Ana</b>");
   });
 });

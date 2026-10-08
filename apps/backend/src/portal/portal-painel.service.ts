@@ -21,6 +21,7 @@ import {
   clientes,
   portalLinks,
   portalPendenciasNoTime,
+  portalTermoAceite,
 } from "../db/schema";
 import {
   ORIGENS_DE_ENVIO_DO_LINK,
@@ -225,6 +226,23 @@ export type CatalogoDeFiltrosDoPainel = {
  * coluna cria. O valor é um código, e não a frase da tela, para não amarrar consulta a rótulo.
  */
 export const SEM_DOCUMENTO_PENDENTE = "__SEM_DOCUMENTO";
+
+/**
+ * O ESTÁGIO ANTERIOR AO PRIMEIRO DOCUMENTO: o candidato ainda NÃO aceitou o Termo De Consentimento
+ * (§A.19, bug medido na produção).
+ *
+ * A régua (`proximoObrigatorioPendenteMap`) devolve o próximo OBRIGATÓRIO pendente da lista SEM
+ * olhar se o portal já foi aberto a sério: ela respondia "RG" para quem nem passou da porta do
+ * termo, um estágio à frente do real. O gate do termo corrige isso ANTES de a régua falar, sem
+ * recalcular a régua: sem linha em `portal_termo_aceite`, a coluna mostra este rótulo, e o próximo
+ * da lista só reaparece quando o aceite existe.
+ *
+ * DIFERENTE DO `SEM_DOCUMENTO_PENDENTE`: aquele é um CÓDIGO (`__...`) com rótulo próprio porque a
+ * célula fica VAZIA no caso dele; aqui o valor É o próprio texto da célula, no mesmo molde de um
+ * documento normal (valor = rótulo = o que a coluna mostra), para que a opção do filtro e a célula
+ * digam exatamente a mesma palavra. Title case (§A.24), sem travessão (§A.11).
+ */
+export const AGUARDANDO_ACEITE_DO_TERMO = "Aguardando Aceite Do Termo";
 
 /**
  * OS RÓTULOS DA ORIGEM. Title case (§A.24), sem travessão (§A.11).
@@ -463,9 +481,20 @@ export class PortalPainelService {
     // linhas de `portal_links` ofereceria a origem de links revogados, que a tela não exibe.
     const vigentes = await this.estadoDoLinkVigente(idsDoRecorte);
     const algumSemOrigem = idsDoRecorte.some((id) => (vigentes.get(id)?.origem ?? null) === null);
+    // O MESMO GATE DO TERMO DA LISTA (`idsQuePassam`): o catálogo precisa oferecer o que a COLUNA
+    // mostra, e a coluna mostra "aguardando aceite do termo" para quem não aceitou. Sem ler o termo
+    // aqui, a opção nunca apareceria na barra, ou (pior) apareceria "RG" para alguém que a célula
+    // mostra como pré-termo, a divergência que a §A.37 existe para impedir.
+    const termosAceitos = await this.termosAceitos(idsDoRecorte);
     const documentos = new Set<string>();
     let algumSemPendente = false;
-    for (const nome of proximos.values()) {
+    let algumAguardandoTermo = false;
+    for (const id of idsDoRecorte) {
+      if (!termosAceitos.has(id)) {
+        algumAguardandoTermo = true;
+        continue;
+      }
+      const nome = proximos.get(id) ?? null;
       if (nome) documentos.add(nome);
       else algumSemPendente = true;
     }
@@ -482,7 +511,11 @@ export class PortalPainelService {
         ...[...documentos]
           .sort((a, b) => a.localeCompare(b, "pt-BR"))
           .map((nome) => ({ valor: nome, rotulo: nome })),
-        // O valor especial só entra quando EXISTE alguém nele: opção que nunca traz linha é ruído.
+        // Os valores especiais só entram quando EXISTE alguém neles: opção que nunca traz linha é
+        // ruído. O rótulo do pré-termo É o valor (molde de documento normal, não de código).
+        ...(algumAguardandoTermo
+          ? [{ valor: AGUARDANDO_ACEITE_DO_TERMO, rotulo: AGUARDANDO_ACEITE_DO_TERMO }]
+          : []),
         ...(algumSemPendente
           ? [{ valor: SEM_DOCUMENTO_PENDENTE, rotulo: "Sem Documento Pendente" }]
           : []),
@@ -601,12 +634,21 @@ export class PortalPainelService {
   }> {
     const recorte = await this.encaminhados(condicoes);
     const ids = recorte.map((r) => r.admissaoId);
-    const [progresso, proximos, noTime, estados] = await Promise.all([
+    const [progresso, proximos, noTime, estados, termosAceitos] = await Promise.all([
       this.regua.progressoObrigatoriosMap(ids),
       this.regua.proximoObrigatorioPendenteMap(ids),
       this.admissoesNoTime(ids),
       this.estadoDoLinkVigente(ids),
+      this.termosAceitos(ids),
     ]);
+
+    // O GATE DO TERMO, APLICADO NA PRÓPRIA FONTE (§A.19): quem ainda não aceitou o termo passa a ter
+    // "documento atual" igual a este rótulo, e não o próximo da régua, que estava um estágio à
+    // frente do real. Mexer AQUI, no mapa único, e não nos dois pontos de leitura, é o que garante
+    // que a CÉLULA e o FILTRO concordem por construção: os dois leem este mesmo `proximos`.
+    for (const id of ids) {
+      if (!termosAceitos.has(id)) proximos.set(id, AGUARDANDO_ACEITE_DO_TERMO);
+    }
 
     const card = this.cardDoFiltro(f.recorte);
     const aba = abaDoPainel(f.aba);
@@ -721,6 +763,26 @@ export class PortalPainelService {
           sql`${portalPendenciasNoTime.liberadoEm} is null`,
         ),
       );
+    return new Set(linhas.map((l) => l.admissaoId));
+  }
+
+  /**
+   * QUEM JÁ ACEITOU O TERMO DE CONSENTIMENTO, EM LOTE.
+   *
+   * MESMO CRITÉRIO de `PortalDocumentosService.termoAceito` (uma linha em `portal_termo_aceite` =
+   * aceito): aqui é a versão em lote, um `inArray` sobre os ids do recorte, nunca N+1. Uma consulta
+   * própria, e não a injeção daquele serviço, para não arrastar o grafo de dependências da trilha
+   * do candidato (credencial, link vivo, log) para dentro desta tela de acompanhamento.
+   *
+   * §A.6: lê só `admissao_id`, sem PII. A existência da linha é a resposta; `aceito_em` e `jti` não
+   * são projetados.
+   */
+  private async termosAceitos(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const linhas = await this.db
+      .select({ admissaoId: portalTermoAceite.admissaoId })
+      .from(portalTermoAceite)
+      .where(inArray(portalTermoAceite.admissaoId, ids));
     return new Set(linhas.map((l) => l.admissaoId));
   }
 
