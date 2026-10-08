@@ -2951,6 +2951,8 @@ export const vagas = pgTable(
      * revisão. §A.6: é código de vaga, não dado de pessoa.
      */
     idVacancyPandape: varchar("id_vacancy_pandape", { length: 40 }),
+    /** Status cru da vaga no ATS (Pandape). Numero do fornecedor, sem CHECK e sem traducao. */
+    statusPandape: integer("status_pandape"),
     /**
      * ─ A PROCEDÊNCIA DE CADA CAMPO PRÉ-PREENCHIDO PELA PLANILHA (migration 0146, 07/10/2026) ────
      *

@@ -453,6 +453,7 @@ export class VagasService {
       // nome de operação cadastrado, cai na razão social, que é o que existe.
       clienteNome: v.codCliente ? (l.clienteOperacao ?? l.clienteRazao ?? null) : null,
       idVacancyPandape: v.idVacancyPandape,
+      statusPandape: v.statusPandape,
       natureza: v.natureza,
       vinculo: v.vinculo,
       // O status dormente "VAGA_BANCO" é traduzido na ENTRADA (item 8, 07/09): a régua e o porquê

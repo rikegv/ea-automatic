@@ -25,6 +25,7 @@ import {
 } from "../../domain/digai";
 import { DigaiCliente } from "./digai.cliente";
 import { DigaiRepositorio } from "./digai-repositorio";
+import { DigaiVagaRastreioService } from "./digai-vaga-rastreio.service";
 
 /**
  * ─ A INGESTAO DO DIGAI: A SEGUNDA CHAMADA, O PLANO E A ESCRITA IDEMPOTENTE ─────────────────────
@@ -84,9 +85,19 @@ export class DigaiImportacaoService {
 
   private readonly cliente: DigaiCliente;
 
+  /**
+   * ─ O RASTREIO DA VAGA E OPCIONAL NO CONSTRUTOR, E ISSO E DELIBERADO ──────────────────────────
+   *
+   * Em producao ele e SEMPRE injetado (esta nos `providers` do modulo). O opcional existe porque os
+   * contratos do `tester` constroem este servico com DOIS argumentos, e eles sao de outro dono
+   * (§A.39): um terceiro parametro obrigatorio obrigaria a editar arquivo que nao e meu para
+   * acrescentar um dublê que aquele teste nao pediu. Ausente, a vaga nasce exatamente como nascia
+   * antes desta frente, que e o comportamento que aqueles testes afirmam.
+   */
   constructor(
     private readonly config: ConfigService,
     private readonly repo: DigaiRepositorio,
+    private readonly rastreioDaVaga?: DigaiVagaRastreioService,
   ) {
     this.cliente = new DigaiCliente({ token: this.config.get<string>("DIGAI_API_TOKEN") });
   }
@@ -391,7 +402,40 @@ export class DigaiImportacaoService {
       );
     }
 
-    const vaga = await this.repo.espelharVaga(String(espelho.id_vacancy_pandape));
+    const numeroDaVaga = String(espelho.id_vacancy_pandape);
+    const vaga = await this.repo.espelharVaga(numeroDaVaga);
+    /*
+     * ─ A VAGA-ESPELHO PARA DE NASCER EM BRANCO, E A CANDIDATURA NAO DEPENDE DISSO ───────────────
+     *
+     * ┌─ POR QUE AQUI, E POR QUE ANTES DA CANDIDATURA ────────────────────────────────────────────┐
+     * │ `espelharVaga` so tem o NUMERO do Pandape para oferecer (o contrato do Digai tem oito      │
+     * │ campos e so um e de vaga), e o resultado medido em producao em 08/10/2026 foram 13 vagas    │
+     * │ sem codigo, sem titulo e sem cidade, com 223 candidaturas dentro. O enriquecimento vem da   │
+     * │ planilha viva do time e da lista de vagas do ATS, e as duas sao lidas pelo rastreio.        │
+     * │                                                                                            │
+     * │ ANTES DA CANDIDATURA porque e a vaga que esta sendo montada, e a ordem deixa a vaga         │
+     * │ completa no instante em que a primeira pessoa entra nela. NUNCA LANCA, e por isso a ordem   │
+     * │ nao cria risco: falha de rastreio nao pode custar a candidatura de ninguem.                │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * NAO TOCA CANDIDATURA, EM CAMINHO NENHUM: o rastreio escreve so em `vagas`, e so coluna nula.
+     *
+     * O `try` E CINTO SOBRE SUSPENSORIO, E ELE FICA: o rastreio NAO LANCA por desenho (cada caminho
+     * dele tem o seu `catch`), mas o preenchimento acontece ANTES da candidatura, entao uma excecao
+     * vazada dali custaria a candidatura da pessoa que estava entrando. A garantia nao pode depender
+     * de o arquivo vizinho continuar disciplinado. §A.6: o log diz o numero da VAGA no ATS e mais
+     * nada.
+     */
+    if (this.rastreioDaVaga) {
+      try {
+        await this.rastreioDaVaga.enriquecer(vaga.id, numeroDaVaga);
+      } catch {
+        this.logger.warn(
+          `Ingestao do Digai: o rastreio da vaga ${numeroDaVaga} falhou. A candidatura segue, e a ` +
+            `volta seguinte tenta de novo.`,
+        );
+      }
+    }
     await this.repo.garantirCandidatura({
       candidatoId: pessoaId,
       vagaId: vaga.id,

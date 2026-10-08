@@ -8,6 +8,7 @@ import { DigaiImportacaoService } from "./digai/digai-importacao.service";
 import { DigaiPollingController } from "./digai/digai-polling.controller";
 import { DigaiRepositorio } from "./digai/digai-repositorio";
 import { DigaiSchedulerService } from "./digai/digai-scheduler.service";
+import { DigaiVagaRastreioService } from "./digai/digai-vaga-rastreio.service";
 import { DigaiVarreduraService } from "./digai/digai-varredura.service";
 import {
   DigaiWebhookController,
@@ -31,6 +32,7 @@ import { CidadesController } from "./cidades/cidades.controller";
 import { CidadesService } from "./cidades/cidades.service";
 import { CandidatosService } from "./candidatos/candidatos.service";
 import { CandidatosImportService } from "./candidatos/candidatos-import.service";
+import { CandidatosImportCurriculoService } from "./candidatos/candidatos-import-curriculo.service";
 import { DeparaEtapaExternaService } from "./depara/depara-etapa-externa.service";
 import { RetencaoCandidatosService } from "./candidatos/retencao-candidatos.service";
 import { EtapasFunilAdminController } from "./etapas/etapas-funil-admin.controller";
@@ -290,6 +292,10 @@ import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
     // método no `CandidatosService`, para não acrescentar um quinto argumento de construtor às ~14
     // specs que o instanciam (§A.26). Reusa `criar` e `adicionarEmLote` daquele serviço.
     CandidatosImportService,
+    // Importação de candidatos por CURRÍCULO (.pdf/.docx, extração de VALOR por IA). Serviço PRÓPRIO,
+    // pela mesma razão do import por planilha: reusa `criar` e `adicionarEmLote` sem acrescentar
+    // argumento de construtor ao `CandidatosService` nem às specs dele (§A.26).
+    CandidatosImportCurriculoService,
     RetencaoCandidatosService,
     EtapasFunilService,
     MotivosCancelamentoVagaService,
@@ -405,6 +411,20 @@ import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
      */
     DigaiRepositorio,
     DigaiImportacaoService,
+    /*
+     * ─ A SETIMA PECA: O RASTREIO DA VAGA-ESPELHO (08/10/2026) ──────────────────────────────────
+     *
+     * A vaga que o Digai cria nascia so com o numero do Pandape (medido em producao: 13 vagas em
+     * branco, 223 candidaturas dentro). Esta peca enche o que esta NULO nela, de duas fontes que a
+     * casa ja le: o de/para da planilha viva (reusando `IngestaoDeParaCliente`, acima, sem copiar
+     * logica) e a lista de vagas do ATS (`PandapeApiService`, do `PandapeArquivosModule` ja
+     * importado), com CACHE de uma listagem por ciclo, porque a v1 nao tem busca por id e cada
+     * listagem custa 9,8 MB da cota compartilhada com o webhook da folha (§A.5).
+     *
+     * ELA NAO TOCA CANDIDATURA e escreve so em `vagas`, so onde a coluna esta nula, so em vaga em
+     * REVISAO e nao recusada. Ver o cabecalho de `digai-vaga-rastreio.service.ts`.
+     */
+    DigaiVagaRastreioService,
     DigaiVarreduraService,
     DigaiFilaService,
     DigaiSchedulerService,

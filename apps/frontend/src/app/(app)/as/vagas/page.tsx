@@ -120,6 +120,8 @@ import {
   textoBuscavel,
   totalDePaginas,
 } from "@/lib/as-vagas-lista";
+import { CodigoDaVaga } from "@/components/as/vagas/CodigoDaVaga";
+import { codigoDaVagaNaTela, textoDoCodigoDaVaga } from "@/lib/as-vaga-codigo";
 import { CandidatosPendentesModal } from "@/components/as/vagas/CandidatosPendentesModal";
 import { RecusaFechamentoModal } from "@/components/as/vagas/RecusaFechamentoModal";
 import { CancelarVagaModal, type CancelamentoForm } from "@/components/as/vagas/CancelarVagaModal";
@@ -249,7 +251,12 @@ function origemDoValor(origem: AsOrigemDoValor): string | null {
 }
 
 function rotuloDaVaga(v: VagaListItem): string {
-  return v.codigo ?? v.nomeDivulgacao ?? "sem código";
+  /* O NÚMERO DO ATS ENTRA ANTES DO "sem código" (08/10/2026): a vaga que o Digai cria não tem nem
+     código nem nome, e a frase de acessibilidade dizia "Abrir a gestão da vaga sem código" nas 13
+     linhas de produção. Com ele, a frase identifica a vaga. Último recurso segue sendo honesto. */
+  const c = codigoDaVagaNaTela(v);
+  if (c.tipo === "CODIGO") return c.texto;
+  return v.nomeDivulgacao ?? (c.tipo === "ATS" ? c.texto : "sem código");
 }
 
 /**
@@ -1665,7 +1672,9 @@ export default function CentralDeVagasPage() {
        */
       if (termo.trim()) {
         const alvo = textoBuscavel([
-          v.codigo ?? "não informado",
+          // A BUSCA ACHA O QUE A CÉLULA ESCREVE, e a célula agora escreve o número do ATS na vaga
+          // sem `codigo`: digitar "3498580" acha a vaga que o Digai criou.
+          textoDoCodigoDaVaga(v),
           v.nomeDivulgacao ?? "não informado",
           v.clienteNome ?? "não informado",
           v.cargoNome ?? "não informado",
@@ -2037,7 +2046,19 @@ export default function CentralDeVagasPage() {
    */
   const colunasOrdenaveis = useMemo<ColOrd<VagaListItem>[]>(
     () => [
-      { chave: "codigo", tipo: "texto", valor: (v) => v.codigo },
+      // ORDENA PELO QUE A CÉLULA ESCREVE, e por isso a vaga sem `codigo` não cai mais toda no fim:
+      // ela tem o número do ATS à vista, e ordenar por um nulo que a tela não mostra mais faria a
+      // seta discordar da coluna.
+      // Sem nenhum dos dois números, o valor segue NULO, e o `useOrdenacao` continua mandando essa
+      // linha para o fim nas duas direções, como sempre fez.
+      {
+        chave: "codigo",
+        tipo: "texto",
+        valor: (v) => {
+          const c = codigoDaVagaNaTela(v);
+          return c.tipo === "AUSENTE" ? null : c.texto;
+        },
+      },
       { chave: "vaga", tipo: "texto", valor: (v) => v.nomeDivulgacao },
       { chave: "cliente", tipo: "texto", valor: (v) => v.clienteNome },
       // Vínculo ordena pelo RÓTULO, e não pelo catálogo: a lista de vínculos não é um fluxo, é um
@@ -2858,8 +2879,14 @@ export default function CentralDeVagasPage() {
                         dividir o espaço com a seta de ordenação (§A.29); sem o `nowrap`, um código
                         com hífen ("PS-2026-001") partia em duas linhas no meio do número. Com ele,
                         a coluna pede a largura de que precisa e a tabela tira a folga de quem tem. */}
-                    <td className="whitespace-nowrap text-center font-mono text-[12.5px]">
-                      {v.codigo ?? "não informado"}
+                    {/* ─ SEM `codigo`, A CÉLULA MOSTRA O NÚMERO DA VAGA NO ATS (08/10/2026) ───
+                        A vaga que a ingestão do Digai cria nasce só com o número do Pandapé, então
+                        `codigo` é nulo e a linha aparecia sem número nenhum: 13 vagas assim em
+                        produção, com 223 candidaturas penduradas. O prefixo "ATS" é o que impede
+                        confundir o id do ATS com o código de processo seletivo do EA. A régua mora
+                        em `lib/as-vaga-codigo`, que a busca e a ordenação desta tela também leem. */}
+                    <td className="whitespace-nowrap text-center">
+                      <CodigoDaVaga vaga={v} />
                     </td>
                     <td className="font-semibold">{v.nomeDivulgacao ?? "não informado"}</td>
                     <td className="text-center">{v.clienteNome ?? "não informado"}</td>

@@ -517,14 +517,41 @@ describe("o índice declarado chega de fato ao banco", () => {
         "em homologação nem em produção. O arquivo precisa de entrada própria no journal.",
     ).toBeDefined();
 
-    const maiorDosOutros = Math.max(
-      ...journal.entries.filter((e) => e.tag !== tag).map((e) => e.when),
-    );
+    /*
+     * ─ A COMPARAÇÃO É CONTRA AS ENTRADAS ANTERIORES, NUNCA CONTRA O JOURNAL INTEIRO (08/10/2026) ─
+     *
+     * ┌─ POR QUE A PRIMEIRA REDAÇÃO FICAVA VERMELHA CONTRA UM REPOSITÓRIO CORRETO ────────────────┐
+     * │ Ela comparava o `when` desta migration com o MÁXIMO de todas as outras, ou seja exigia que  │
+     * │ ela fosse a migration MAIS NOVA DO PROJETO. Isso só é verdade enquanto ninguém cria a       │
+     * │ seguinte. A `0152` (o espelho do status do ATS na vaga) nasceu, corretamente, com `when`    │
+     * │ acima, e este caso passou a acusar um defeito que não existe, mandando "consertar" o certo  │
+     * │ abaixando a mais nova, que é exatamente o erro que ele existe para impedir.                 │
+     * │                                                                                             │
+     * │ NÃO "CONSERTAR" DE VOLTA comparando com o journal inteiro: a regra é esta, e o gêmeo desta  │
+     * │ asserção (`src/db/uq-numero-pandape.backend.spec.ts`) já foi corrigido do mesmo jeito.      │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * A PROPRIEDADE REAL É DE ORDEM: o drizzle aplica na ordem do journal e compara o `when` de cada
+     * entrada com a maior JÁ APLICADA, então o que não pode acontecer é uma entrada ter `when`
+     * abaixo de alguma ANTERIOR a ela (`idx` menor). O que vem DEPOIS é irrelevante, porque quando
+     * ela chegar esta já terá rodado. Assim a trava vale para sempre, sem a frente seguinte ser
+     * obrigada a reabrir este arquivo.
+     *
+     * A `0086_frente_ifractal` (`when` 1787321660928, abaixo da `0085`, 1787321663927) é dívida
+     * ANTIGA e fica FORA desta medida de propósito: as duas são de fevereiro, já rodaram em
+     * produção, não têm efeito prático hoje, e mexer no `when` de migration APLICADA é reescrever o
+     * passado do banco. Mesmo tratamento nominal que a `0134` já recebeu. Registrado, não consertado.
+     */
+    const anteriores = journal.entries
+      .filter((e) => e.idx < (minha?.idx ?? 0))
+      .map((e) => e.when);
+    const maiorAnterior = anteriores.length > 0 ? Math.max(...anteriores) : 0;
     expect(
       minha?.when ?? 0,
-      `A migration \`${tag}\` tem \`when\` abaixo da marca d'água do journal (${maiorDosOutros}). ` +
-        "Nesse estado o drizzle a PULA em silêncio: o deploy fica verde e o índice não nasce.",
-    ).toBeGreaterThan(maiorDosOutros);
+      `A migration \`${tag}\` tem \`when\` abaixo de alguma ANTERIOR a ela no journal ` +
+        `(${maiorAnterior}). Nesse estado o drizzle a PULA em silêncio: o deploy fica verde e o ` +
+        "índice não nasce.",
+    ).toBeGreaterThan(maiorAnterior);
   });
 
   it("o índice está DECLARADO no schema drizzle, senão o próximo `generate` o derruba", () => {

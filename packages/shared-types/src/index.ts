@@ -2526,6 +2526,17 @@ export interface VagaListItem {
    * no dia da ponte, casar a vaga do EA com a do ATS sem ter de perguntar de novo.
    */
   idVacancyPandape: string | null;
+  /**
+   * O STATUS DA VAGA NO ATS, numero cru do fornecedor (`vagas.status_pandape`).
+   *
+   * Existe porque o Digai cria vaga-espelho para pendurar candidatura, e as que o rastreio alcanca
+   * estao TODAS ENCERRADAS no Pandape: sem este campo, o time ve uma vaga comum e nao sabe que ha
+   * gente pendurada em algo que ja acabou. Medido em 08/10/2026 contra a API real.
+   *
+   * NUNCA traduza aqui: o rotulo e `rotuloDoStatusDoPandape`, e numero desconhecido vira
+   * "Status N No ATS" em vez de rotulo inventado.
+   */
+  statusPandape?: number | null;
   natureza: VagaNatureza | null;
   vinculo: VagaVinculo | null;
   status: VagaStatus;
@@ -3330,7 +3341,13 @@ export interface AsCandidatoFicha {
   nome: string;
   cpf: string | null;
   email: string | null;
+  /** O telefone PRINCIPAL (o primeiro). Mantido para toda tela já validada seguir lendo um escalar. */
   telefone: string | null;
+  /**
+   * TODOS os telefones do candidato; `telefone` é o primeiro deles (espelho). Vazio quando não há.
+   * O import por currículo preenche N; planilha e cadastro manual preenchem no máximo um.
+   */
+  telefones: string[];
   dataNascimento: string | null;
   cidade: string | null;
   uf: string | null;
@@ -4810,6 +4827,19 @@ export interface LinhaDoPainelPortal {
    * coluna passaria a descrever uma entrega que não é a que está de pé.
    */
   origemEnvio: OrigemDeEnvioDoLink | null;
+  /**
+   * A ORIGEM DA ADMISSÃO, distinta da origem do ENVIO acima. "ATRACAO_SELECAO" quando a admissão tem
+   * candidatura do funil A&S ligada (existe linha em `as_candidaturas` com este `admissao_id`);
+   * "MANUAL" para todo o resto. É o que a tag colorida da coluna Origem mostra, ao lado do rótulo de
+   * envio.
+   */
+  origemAdmissao: "ATRACAO_SELECAO" | "MANUAL";
+  /**
+   * O NOME do usuário que clicou "enviar para admissão" no funil A&S (de `as_candidatura_etapas`,
+   * situação ENVIADO_PARA_ADMISSAO, o mais recente). `null` quando a admissão não veio pelo funil
+   * (Pandapé, manual), e a tela escreve "não informado". NÃO é o responsável pela vaga.
+   */
+  consultorQueEnviou: string | null;
 }
 
 /** A página da lista. Teto no servidor: a base tem milhares de admissões. */
@@ -5533,6 +5563,86 @@ export interface ResultadoImportCandidato {
   }[];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Importação de candidatos por CURRÍCULO (.pdf e .docx) com extração de VALOR por IA (Central de
+// Candidatos, A&S). Reusa a MESMA linha Vertex/Gemini (auditar_documento/portal_extracao), o MESMO
+// modal e o MESMO caminho de cadastro da planilha. O que muda: currículo NÃO tem colunas, então a
+// de-para vira revisão de VALOR (campo → valor que a IA leu, editável). Telefone é LISTA: o currículo
+// pode trazer N e todos são cadastrados (decisão do diretor). Vocabulário backend↔frontend; dono:
+// coordenador (§A.39).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Campos ESCALARES que a IA tenta ler do currículo. Telefone vai à parte, como lista. */
+export const CAMPOS_ESCALARES_CURRICULO = [
+  "nome",
+  "cpf",
+  "email",
+  "nascimento",
+  "cidade",
+  "uf",
+] as const;
+export type CampoEscalarCurriculo = (typeof CAMPOS_ESCALARES_CURRICULO)[number];
+
+/**
+ * O candidato que a IA extraiu de UM currículo, já no formato que o time revisa e edita. Campo não
+ * lido vem "" (vazio = a resposta certa, a IA não inventa, §A.6). `telefones` vem [] quando não achou.
+ */
+export interface CandidatoCurriculo {
+  nome: string;
+  cpf: string;
+  email: string;
+  /** TODOS os telefones que o currículo trouxer; o primeiro vira o `telefone` principal. */
+  telefones: string[];
+  /** ISO (YYYY-MM-DD) ou "" quando não lido. */
+  nascimento: string;
+  cidade: string;
+  uf: string;
+}
+
+/** Confiança por campo, para a tela sinalizar o que a IA leu com pouca certeza. */
+export type ConfiancaCamposCurriculo = Partial<
+  Record<CampoEscalarCurriculo | "telefones", ConfiancaImport>
+>;
+
+/** A prévia de UM currículo do lote: o arquivo, o que a IA leu e a confiança por campo. */
+export interface ItemPreviaCurriculo {
+  /** Índice estável do arquivo no lote, para casar a revisão com o resultado. */
+  indice: number;
+  /** Nome do arquivo enviado (não é PII; na prova versionada é sintético, §A.43). */
+  arquivo: string;
+  candidato: CandidatoCurriculo;
+  confianca: ConfiancaCamposCurriculo;
+  /** Aviso quando a IA não conseguiu ler o arquivo (formato, vazio, corrompido): item segue editável. */
+  erroLeitura?: string;
+}
+
+/** A prévia do LOTE inteiro: um item por currículo enviado (§A.6: nunca o binário, só o que foi lido). */
+export interface PreviaImportCurriculo {
+  itens: ItemPreviaCurriculo[];
+}
+
+/** O que o time confirma após revisar/editar: os candidatos finais + o cenário (reusa SEM_VAGA/COM_VAGA). */
+export interface AplicarImportCurriculo {
+  cenario: CenarioImportCandidato;
+  vagaId?: string;
+  candidatos: CandidatoCurriculo[];
+}
+
+/** Resultado por currículo e agregado. Reusa a contagem/relatório da planilha. §A.6: só o nome. */
+export interface ResultadoImportCurriculo {
+  contagem: ContagemImportCandidato;
+  importados: number;
+  reaproveitados: number;
+  vinculados: number;
+  ignorados: number;
+  linhas: {
+    indice: number;
+    nome: string;
+    status: StatusLinhaImportCandidato;
+    motivo?: string;
+  }[];
+}
+
 /**
  * ─ A FILA DE DIVERGENCIAS DA INGESTAO: o vocabulario compartilhado ──────────────────────────────
  *
@@ -5740,6 +5850,210 @@ export const ORIGEM_DA_PROPOSTA_LABEL: Record<OrigemDaPropostaDeCliente, string>
   PLANILHA_ID_VAGA: "Pelo Código Da Vaga",
   PLANILHA_REQUISICAO: "Pela Requisição Anterior",
 };
+
+/*
+ * ┌─ O CLIENTE DAS VAGAS EM REVISÃO: A LINHA É UM NOME, NUNCA UMA VAGA ──────────────────────────┐
+ * │ Medido em 08/10/2026: 95 nomes de cliente resolvem 290 vagas (média 3,05 vagas por nome). A  │
+ * │ decisão é sempre "este nome da planilha é este cliente do EA", e repeti-la por vaga não       │
+ * │ acrescenta informação: as vagas do mesmo nome não têm nada que as discrimine. Pior, abre a    │
+ * │ porta para duas respostas diferentes ao MESMO nome, e o carimbo de confirmação é por nome.    │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+/*
+ * ┌─ O STATUS DA VAGA NO PANDAPE: NUMERO CRU NO BANCO, ROTULO SO AQUI ─────────────────────────┐
+ * │ `vagas.status_pandape` guarda o numero que o ATS devolve, sem CHECK e sem traducao: o        │
+ * │ vocabulario e do fornecedor e um valor novo nao pode derrubar a ingestao. O rotulo mora aqui │
+ * │ porque e decisao de PRODUTO, nao de integracao.                                              │
+ * │                                                                                              │
+ * │ MEDIDO EM 08/10/2026 contra a API real (6.944 vagas): status 3 = 6.408, status 2 = 507,      │
+ * │ status 1 = 29. O significado saiu de cruzamento, nao de documentacao: das que o EA conhece   │
+ * │ em status 3, VINTE E UMA estao FECHADA no EA e a planilha diz FECHADO ou ENTREGUE.           │
+ * │                                                                                              │
+ * │ POR QUE ISSO APARECE NA TELA: as vagas que o Digai cria em branco e que o rastreio alcanca   │
+ * │ estao TODAS em status 3, ou seja o Digai segue mandando candidato para vaga ENCERRADA no     │
+ * │ ATS. Sem o status na linha, o time ve uma vaga comum e nao sabe que ha gente pendurada em    │
+ * │ algo que ja acabou.                                                                          │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const STATUS_DA_VAGA_NO_PANDAPE_LABEL: Record<number, string> = {
+  1: "Não Publicada",
+  2: "Ativa No ATS",
+  3: "Encerrada No ATS",
+};
+
+/** Numero desconhecido nao vira rotulo inventado: mostra o numero, que e a verdade que se tem. */
+export function rotuloDoStatusDoPandape(status: number | null | undefined): string | null {
+  if (status === null || status === undefined) return null;
+  return STATUS_DA_VAGA_NO_PANDAPE_LABEL[status] ?? `Status ${status} No ATS`;
+}
+
+export const BALDES_DO_CLIENTE_DA_FILA = [
+  /** Nome idêntico ao do cliente, depois de normalizar. Um código só. */
+  "EXATO",
+  /** O nome da planilha é prefixo do nome do cliente. Um código só, inferência mais fraca. */
+  "PREFIXO",
+  /** Vários clientes combinam. O CNPJ é o que desempata a unidade (decisão do diretor). */
+  "AMBIGUO",
+  /** Tem nome na planilha e nenhum cliente combina. */
+  "SEM_PALPITE",
+  /**
+   * A VAGA NÃO ESTÁ NA PLANILHA, então não tem nome e não agrega. Medido: 170 vagas, 56% da fila
+   * visível, e os outros quatro baldes cobrem só 134. Nenhuma tela de de/para resolve estas: ou o
+   * nome chega na planilha, ou uma pessoa escolhe o cliente vaga por vaga.
+   */
+  "FORA_DA_PLANILHA",
+] as const;
+export type BaldeDoClienteDaFila = (typeof BALDES_DO_CLIENTE_DA_FILA)[number];
+
+/** EXATO e PREFIXO são o mesmo balde PARA O DIRETOR, e nota diferente para a régua do lote. */
+export const BALDE_DO_CLIENTE_DA_FILA_LABEL: Record<BaldeDoClienteDaFila, string> = {
+  EXATO: "Casou Um Só",
+  PREFIXO: "Casou Um Só",
+  AMBIGUO: "Casou Vários",
+  SEM_PALPITE: "Não Casou",
+  FORA_DA_PLANILHA: "Fora Da Planilha",
+};
+
+/** Um cliente oferecido como resposta. O CNPJ é o que desempata a unidade. */
+export interface ClienteCandidatoDaFila {
+  codCliente: string;
+  razaoSocial: string;
+  nomeOperacao: string | null;
+  cnpj: string | null;
+  ativo: boolean;
+}
+
+/** Uma vaga atingida pela decisão. Leitura, para o diretor ver o que atinge antes de confirmar. */
+export interface VagaAtingidaPelaConfirmacao {
+  vagaId: string;
+  codigoDaVaga: string | null;
+  idVacancyPandape: string | null;
+  nomeDivulgacao: string | null;
+  dataAbertura: string | null;
+  dataLimite: string | null;
+  /** A planilha traz esta vaga como encerrada, então a fila de revisão NÃO a mostra hoje. */
+  escondidaPelaPlanilha: boolean;
+}
+
+export interface NomeDeClienteDaFilaItem {
+  /** O nome como a planilha o escreve. É a CHAVE da linha e do lote. */
+  nomeCliente: string;
+  balde: BaldeDoClienteDaFila;
+  /** O palpite gravado no de/para, quando existe e resolve um código só. */
+  clienteSugerido: ClienteCandidatoDaFila | null;
+  /** RECALCULADO na hora, nunca materializado: 2 a 7 opções, média 3,1 (medido). */
+  candidatos: ClienteCandidatoDaFila[];
+  /*
+   * ┌─ A TAG QUE IMPEDE O ERRO DO GERDAU, E ELA É O CORAÇÃO DESTA TELA ─────────────────────────┐
+   * │ A normalização do casamento DESCARTA o que está entre parênteses e o sufixo depois do      │
+   * │ hífen, que é exatamente o token que distingue a UNIDADE. Medido: "Gerdau (Cumbica)",       │
+   * │ "(Cotia)", "(Brasília)", "(Porto Alegre)" e "(Contagem - BH)" todas colapsam para "gerdau" │
+   * │ e casam EXATO no único cliente cuja operação também colapsa, 54899 ARAÇARIGUAMA. São 24    │
+   * │ vagas, 15 no cliente ERRADO, com CNPJ errado, na nota que MENOS pede conferência. O        │
+   * │ catálogo tem 13 Gerdau, uma por unidade, cada uma com o seu CNPJ.                          │
+   * │                                                                                            │
+   * │ Verdadeiro aqui, a linha NUNCA entra no lote em massa: ela exige clique próprio. O CNPJ na │
+   * │ tela não resolve sozinho, porque num lote de 98 ninguém confere 98 CNPJs, e é justamente o  │
+   * │ lote que foi pedido. A normalização NÃO é tocada nesta frente: ela serve 95 nomes e é       │
+   * │ consumida pela varredura e pela ingestão (§A.26).                                           │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  anotacaoDescartada: boolean;
+  /*
+   * ┌─ A VERDADE INDEPENDENTE: O QUE GENTE DE VERDADE JA ESCOLHEU PARA ESTE NOME ───────────────┐
+   * │ O palpite do motor e a unica informacao que a tela teria, e ele erra. Esta lista e a       │
+   * │ SEGUNDA fonte: os clientes que pessoas ja gravaram nas vagas existentes deste mesmo nome.  │
+   * │                                                                                            │
+   * │ Medido em producao, e em 3 dos 95 nomes ela contradiz o motor:                              │
+   * │   "Gerdau (Cumbica)" o motor diz 54899, e gente ja pos 50769 em 4 vagas. Motor ERRADO.      │
+   * │   "Obramax" gente dividiu em DOIS, 54341 e 56196. "Proparts" em DOIS, 51726 e 55396.        │
+   * │                                                                                            │
+   * │ POR ISSO O CARIMBO E POR LINHA, NUNCA POR NOME: o nome NAO e funcao do cliente. Carimbar   │
+   * │ por nome forcaria um codigo so em Obramax (29 vagas) contra duas decisoes humanas ja        │
+   * │ gravadas. Nome com mais de uma escolha humana fica FORA do lote em massa.                   │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  escolhasHumanas: { codCliente: string; vagas: number }[];
+  vagas: VagaAtingidaPelaConfirmacao[];
+  /** Vagas no universo visível da fila. É o número da coluna. */
+  vagasNaFila: number;
+  /** Vagas que a planilha fechou e a fila esconde hoje. */
+  vagasEscondidasPelaPlanilha: number;
+  /** Linhas do de/para que a confirmação deste nome vai carimbar. */
+  linhasDoDePara: number;
+  /** Alguma linha deste nome está DESLIGADA. Confirmar NÃO religa: são duas decisões. */
+  temLinhaDesligada: boolean;
+}
+
+export interface KpisDaFilaDeCliente {
+  nomes: number;
+  vagas: number;
+  casouUmSo: number;
+  casouVarios: number;
+  naoCasou: number;
+  foraDaPlanilha: number;
+  comAnotacaoDescartada: number;
+  /** Nomes em que pessoas ja gravaram DOIS clientes diferentes (Obramax, Proparts). */
+  comDoisClientesEscolhidos: number;
+  /**
+   * Nomes em que a escolha humana EXISTE, e UMA, e **discorda** do palpite do motor. E a classe do
+   * `Gerdau (Cumbica)`, e e a mais perigosa das cinco: o palpite tem nota alta e esta errado.
+   */
+  comPalpiteContraditado: number;
+}
+
+export interface FilaDeClienteDaVagaPagina {
+  itens: NomeDeClienteDaFilaItem[];
+  kpis: KpisDaFilaDeCliente;
+  /** As vagas SEM nome nenhum. Não agregam por nome: são contagem mais lista. */
+  foraDaPlanilha: VagaAtingidaPelaConfirmacao[];
+}
+
+export interface OpcoesDaFilaDeCliente {
+  nomes: string[];
+  clientes: ClienteCandidatoDaFila[];
+  baldes: BaldeDoClienteDaFila[];
+}
+
+/** Um item do lote. O AUTOR nunca vem no corpo: vem da sessão, porque autoria é trilha. */
+export interface ConfirmarClienteDaFilaItem {
+  nomeCliente: string;
+  codCliente: string;
+}
+
+export interface ConfirmarClienteEmLoteBody {
+  itens: ConfirmarClienteDaFilaItem[];
+}
+
+export interface ResultadoDaConfirmacaoEmLote {
+  nomeCliente: string;
+  resultado:
+    | "CONFIRMADO"
+    | "JA_CONFIRMADO"
+    | "NOME_NAO_ESTA_NA_FILA"
+    | "CLIENTE_FORA_DO_CADASTRO"
+    | "RECUSADO_ANOTACAO_DESCARTADA"
+    /** O nome tem MAIS DE UM cliente na escolha humana (Obramax, Proparts): so pessoa resolve. */
+    | "RECUSADO_NOME_COM_DOIS_CLIENTES"
+    /** A escolha humana e UMA e DISCORDA do palpite: o palpite tem nota alta e esta errado. */
+    | "RECUSADO_PALPITE_CONTRADITADO"
+    /** A nota e PREFIXO: inferencia mais fraca, nunca entra em lote cego. */
+    | "RECUSADO_PREFIXO"
+    /** O MESMO codigo de cliente recebe mais de um nome de planilha (os 6 Gerdau em 54899). */
+    | "RECUSADO_CODIGO_COM_VARIOS_NOMES"
+    /** O balde e AMBIGUO ou SEM_PALPITE: decisao individual, fora do lote. */
+    | "RECUSADO_BALDE_INDIVIDUAL"
+    /** O codigo escolhido nao e candidato deste nome, nem escolha humana dele. */
+    | "RECUSADO_CODIGO_NAO_E_CANDIDATO";
+  linhasDoDeParaCarimbadas: number;
+  vagasQueGanharamCliente: number;
+  vagasQueJaTinhamCliente: number;
+}
+
+export interface ConfirmacaoEmLoteResposta {
+  porNome: ResultadoDaConfirmacaoEmLote[];
+  totalVagasQueGanharamCliente: number;
+}
 
 /**
  * POR QUE UMA LINHA DA PLANILHA NÃO VIROU PROPOSTA. Código fechado, e vira CONTAGEM no resumo do

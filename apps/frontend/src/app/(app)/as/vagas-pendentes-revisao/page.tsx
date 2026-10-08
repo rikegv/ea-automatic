@@ -16,6 +16,13 @@ import { cn } from "@/lib/cn";
 import { cnpjDigitos, formatarCnpj } from "@/lib/cnpj";
 import { dataBr, dataHoraBr, mensagemDoErro } from "@/lib/as-candidatos";
 import { TrilhaDaVaga, type Opcoes } from "@/components/as/vagas/TrilhaDaVaga";
+import { CodigoDaVaga } from "@/components/as/vagas/CodigoDaVaga";
+import {
+  AVISO_DA_VAGA_ENCERRADA_NO_ATS,
+  codigoDaVagaNaTela,
+  textoDoCodigoDaVaga,
+  vagaEncerradaNoAts,
+} from "@/lib/as-vaga-codigo";
 import { useLinhasServico } from "@/lib/as-linhas-servico";
 import { useSegmentos } from "@/lib/as-segmentos";
 import { useStatusVaga } from "@/lib/as-status-vaga";
@@ -272,7 +279,9 @@ export default function VagasPendentesDeRevisaoPage() {
     const q = busca.trim().toLowerCase();
     if (!q) return linhas;
     return linhas.filter((v) =>
-      [v.codigo, v.nomeDivulgacao, v.cargoNome, v.clienteNome]
+      // A BUSCA ACHA O QUE A CÉLULA ESCREVE: sem `codigo`, a célula escreve o número do ATS, então
+      // digitar "3498580" acha a vaga que o Digai criou em branco.
+      [textoDoCodigoDaVaga(v), v.nomeDivulgacao, v.cargoNome, v.clienteNome]
         .filter(Boolean)
         .some((t) => (t as string).toLowerCase().includes(q)),
     );
@@ -280,7 +289,16 @@ export default function VagasPendentesDeRevisaoPage() {
 
   const colunas = useMemo<ColOrd<VagaEmRevisao>[]>(() => {
     const base: ColOrd<VagaEmRevisao>[] = [
-      { chave: "codigo", tipo: "texto", valor: (v) => v.codigo },
+      // ORDENA PELO QUE A CÉLULA ESCREVE (o número do ATS quando falta o `codigo`); sem nenhum dos
+      // dois o valor segue NULO, e o `useOrdenacao` manda a linha para o fim como sempre fez.
+      {
+        chave: "codigo",
+        tipo: "texto",
+        valor: (v) => {
+          const c = codigoDaVagaNaTela(v);
+          return c.tipo === "AUSENTE" ? null : c.texto;
+        },
+      },
       { chave: "vaga", tipo: "texto", valor: (v) => v.nomeDivulgacao },
       { chave: "cargo", tipo: "texto", valor: (v) => v.cargoNome },
       { chave: "cliente", tipo: "texto", valor: (v) => v.clienteNome },
@@ -305,6 +323,9 @@ export default function VagasPendentesDeRevisaoPage() {
   const ord = useOrdenacao(colunas, filtradas);
 
   const semCliente = pendentes.filter((v) => !v.codCliente).length;
+  /* QUANTAS DESTA FILA JÁ ACABARAM NO ATS. Conta sobre as PENDENTES, e não sobre a aba visível: o
+     aviso fala do trabalho que espera revisão, que é o que a tela promete. */
+  const encerradasNoAts = pendentes.filter((v) => vagaEncerradaNoAts(v.statusPandape)).length;
 
   return (
     <>
@@ -336,6 +357,25 @@ export default function VagasPendentesDeRevisaoPage() {
           </Button>
         </div>
       </div>
+
+      {/* ─ O AVISO DA VAGA QUE JÁ ACABOU NO ATS (08/10/2026) ─────────────────────────────────────
+          POR QUE ELE EXISTE: as vagas que o rastreio alcança estão todas ENCERRADAS no ATS, e o
+          Digai segue mandando candidato para elas. A tag na linha diz qual vaga é; esta frase diz
+          o que isso significa, sem depender de alguém passar o mouse na tag.
+
+          SÓ APARECE QUANDO HÁ ALGUMA: a fila sem vaga encerrada não ganha aviso sobre nada. É frase
+          de apoio, então a maiúscula é só na primeira palavra (§A.24). */}
+      {!carregando && encerradasNoAts > 0 && (
+        <p className="mb-4 flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[rgba(214,158,46,0.1)] px-3 py-2 text-[12.5px] text-warn-2">
+          <Icon name="alert" className="mt-[2px] h-3.5 w-3.5 flex-none" />
+          <span>
+            {encerradasNoAts === 1
+              ? "1 vaga desta fila está encerrada no ATS. "
+              : `${encerradasNoAts} vagas desta fila estão encerradas no ATS. `}
+            {AVISO_DA_VAGA_ENCERRADA_NO_ATS}
+          </span>
+        </p>
+      )}
 
       {erro && (
         <div className="mb-4 rounded-xl border border-[rgba(220,38,38,0.35)] bg-[rgba(220,38,38,0.1)] px-3 py-2 text-sm text-danger">
@@ -452,8 +492,14 @@ export default function VagasPendentesDeRevisaoPage() {
                   const marca = marcaDaPropostaNaFila(v);
                   return (
                     <tr key={v.id}>
-                      <td className="whitespace-nowrap font-mono text-[12.5px]">
-                        {v.codigo ?? "não informado"}
+                      {/* ─ SEM `codigo`, A CÉLULA MOSTRA O NÚMERO DA VAGA NO ATS (08/10/2026) ──
+                          A vaga que a ingestão do Digai cria nasce só com o número do Pandapé
+                          (`partnerJobId`, o único campo de vaga do contrato dele), então `codigo` é
+                          nulo e esta coluna aparecia sem número: 13 vagas assim em produção, com
+                          223 candidaturas penduradas. O prefixo "ATS" é o que impede ler o id do
+                          ATS como se fosse código de processo seletivo do EA. */}
+                      <td className="whitespace-nowrap">
+                        <CodigoDaVaga vaga={v} />
                       </td>
                       <td className="font-semibold">{v.nomeDivulgacao ?? "não informado"}</td>
                       <td className="text-center">{v.cargoNome ?? "não informado"}</td>
@@ -687,7 +733,8 @@ function CorrigirLiberacaoModal({
         </p>
 
         <dl className="mt-4 grid grid-cols-2 gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
-          <Campo rotulo="Vaga" valor={vaga.codigo} />
+          {/* O MESMO texto da coluna: o número do ATS quando a vaga não tem código do EA. */}
+          <Campo rotulo="Vaga" valor={textoDoCodigoDaVaga(vaga)} />
           <Campo rotulo="Nome da vaga" valor={vaga.nomeDivulgacao} />
           <Campo rotulo="Cliente atual" valor={vaga.clienteNome} />
           <Campo rotulo="Candidatos em processo" valor={String(vaga.ocupacao?.emSelecao ?? 0)} />

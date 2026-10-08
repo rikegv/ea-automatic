@@ -169,7 +169,20 @@ export interface PandapeVacancy {
   job?: string;
   city?: string;
   description?: string;
-  status?: string;
+  /**
+   * O STATUS DA VAGA NO ATS, E ELE CHEGA COMO **NÚMERO** (medido na lista real em 08/10/2026):
+   * `3` = ENCERRADA (6.408 vagas), `2` = ativa (507), `1` em 29. Estava declarado só como texto, e o
+   * tipo afirmava uma coisa e o dado era outra: comparar com `"3"` nunca casaria, e o indicador de
+   * vaga encerrada nasceria vazio em produção sem nada ficar vermelho. As DUAS formas ficam no tipo
+   * porque o vocabulário é do fornecedor e não se normaliza aqui; quem consome converte.
+   */
+  status?: number | string;
+  /**
+   * QUANTAS POSIÇÕES A VAGA ABRIU (`numberVacancies`), e a API a devolve: ela faltava na interface, e
+   * campo que o tipo não tem só se consome com um `as`, que é exatamente onde `numberVacancy`,
+   * `vacancies` ou `numVacancies` passariam a compilar devolvendo indefinido para sempre.
+   */
+  numberVacancies?: number;
   tags?: string[];
   /* de/para EA (remap follow-up) — NÃO vêm da vaga real */
   cargoNome?: string;

@@ -717,7 +717,7 @@ describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por po
    * POR QUE NÃO SE MEDE ISTO CONTRA O BANCO: a base pode estar limpa hoje e continuar limpa até o
    * primeiro caminho novo. O que prova a invariante é o conjunto de portas, e é ele que é pinado.
    */
-  it("SÓ SEIS ARQUIVOS escrevem na tabela `vagas`, e cada um tem a sua resposta escrita aqui", () => {
+  it("SÓ NOVE ARQUIVOS escrevem na tabela `vagas`, e cada um tem a sua resposta escrita aqui", () => {
     const raiz = join(__dirname, "..", "..");
     const arquivos: string[] = [];
     const varrer = (dir: string) => {
@@ -748,6 +748,49 @@ describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por po
       // no Drive. Há teste de fonte provando a lista FECHADA de escritores da proposta e a ausência
       // de leitores fora da tela de revisão (`as/depara-cliente/depara-cliente.escritores` e
       // `as/ingestao-pandape/depara-cliente.fonte-e-inercia`).
+      /*
+       * ─ A FILA DE CLIENTE DAS VAGAS EM REVISÃO (08/10/2026) ───────────────────────────────────
+       *
+       * ESTA É A PRIMEIRA PORTA FORA DO `VagasService` QUE ESCREVE `cod_cliente`, e a resposta à
+       * pergunta desta seção é "NÃO ALCANÇA PAPEL DE PROCESSO":
+       *   . ela NÃO escreve `status` (nem `status_manual_*`), então não é porta de ENTRADA em papel
+       *     nenhum: a vaga confirmada continua em REVISÃO, agora com cliente. Quem a tira da fila
+       *     continua sendo a liberação, uma por vez, com a régua dos onze obrigatórios;
+       *   . ela só escreve `cod_cliente` ONDE ESTAVA NULO (`cod_cliente is null` no `where`), então
+       *     ela não pode trocar o cliente de uma vaga que uma pessoa já resolveu;
+       *   . ela não INVENTA cliente: o código é conferido contra o catálogo E contra os candidatos
+       *     daquele nome, e sete recusas rodam no servidor antes de qualquer escrita;
+       *   . a trilha vai em `vaga_cliente_correcoes`, a partdo do `returning` do `update`, com autor
+       *     de SESSÃO. `as_vaga_status_eventos` não é tocada (é um dos relógios do expurgo).
+       *
+       * O CAMINHO INVERSO É O QUE IMPORTA AQUI: ela só AUMENTA o conjunto de vagas COM cliente, que
+       * é o lado seguro da invariante desta seção. Ela nunca esvazia a coluna.
+       */
+      "as/depara-cliente/fila-de-cliente.service.ts",
+      /*
+       * ─ O RASTREIO DA VAGA-ESPELHO DO DIGAI (08/10/2026), E A RESPOSTA É "NÃO ALCANÇA" ────────
+       *
+       * A vaga que a ingestão do Digai cria nascia só com o número do Pandapé (medido em produção:
+       * 13 vagas em branco, com 223 candidaturas dentro). Este arquivo a ENCHE, de duas fontes, e a
+       * resposta à pergunta desta seção é "não alcança papel de processo":
+       *   . ele NÃO escreve `status` (nem `status_manual_*`, nem `encerrada_em`, nem `recusada_em`),
+       *     então não é porta de ENTRADA em papel nenhum: a vaga continua em REVISÃO, agora com
+       *     título, cidade e posições. Quem a tira da fila continua sendo a liberação;
+       *   . ele NÃO escreve `cod_cliente`: o Pandapé não devolve cliente na vaga, e inventar um
+       *     continua proibido (§A.5). A vaga segue marcada para vínculo manual;
+       *   . ele só escreve ONDE A COLUNA ESTÁ NULA (`coalesce` no `set` e `is null` no `where`), e
+       *     só em vaga `recusada_em is null` E em papel REVISAO, lido do catálogo;
+       *   . ele NÃO toca `atualizado_em` nem candidatura nenhuma (há teste de fonte e de instrução).
+       *
+       * A COLUNA NOVA DELE É `status_pandape` (migration 0152): o espelho do STATUS DA VAGA NO ATS,
+       * que é dado só dele, e não o `status` do EA.
+       *
+       * ELE É O TERCEIRO ESCRITOR DE `posicoes_oficiais`, e isso está declarado para o diretor
+       * decidir: a coluna é lida por `domain/candidatura.ts` (capacidade da vaga) e por
+       * `as/ingestao-pandape/ingestao-divergencias`. Ele não REESCREVE (as três travas acima), mas
+       * passa a PREENCHER vaga que estava nula, e isso muda a contagem de quanto cabe na vaga.
+       */
+      "as/digai/digai-vaga-rastreio.service.ts",
       "as/ingestao-pandape/ingestao-depara-cliente.service.ts",
       // A INGESTÃO. Reabre a vaga espelhada restaurando o status de antes do encerramento, SEM
       // olhar o cliente. Segura hoje porque o status guardado é o da própria vaga (que estava em

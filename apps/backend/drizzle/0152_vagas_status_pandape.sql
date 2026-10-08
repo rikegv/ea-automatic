@@ -1,0 +1,33 @@
+-- O STATUS DA VAGA NO PANDAPE, ESPELHADO NA VAGA DO EA (08/10/2026).
+--
+-- PARA QUE: a vaga-espelho que a ingestao do Digai cria nascia so com o numero do Pandape, e a tela
+-- precisa dizer que ha candidatura pendurada em vaga ENCERRADA no ATS. Medido em producao em
+-- 08/10/2026: 13 vagas em branco, 223 candidaturas dentro, e as 7 alcancaveis na lista do Pandape
+-- estao TODAS em status 3.
+--
+-- ┌─ POR QUE COLUNA, E NAO DERIVACAO NA LEITURA ──────────────────────────────────────────────────┐
+-- │ A API v1 do Pandape NAO tem `Vacancy/Get?idVacancy`. Saber o status de UMA vaga custa listar   │
+-- │ as 6.944 (9,8 MB, medido). Derivar na leitura faria cada abertura de tela gastar essa          │
+-- │ listagem, numa cota de 1.000 requisicoes por 5 minutos COMPARTILHADA com o webhook que         │
+-- │ alimenta a folha (sec. A.5). O valor e espelhado uma vez, pela ingestao, e a tela le o banco.   │
+-- └────────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ `integer` NULAVEL, SEM CHECK E SEM TRADUCAO ─────────────────────────────────────────────────┐
+-- │ O vocabulario e do FORNECEDOR (medido: 3 = encerrada com 6.408 vagas, 2 = ativa com 507,       │
+-- │ 1 com 29) e pode crescer sem aviso: um CHECK transformaria valor novo em queda de ingestao.    │
+-- │ NULO e "o ATS ainda nao disse", que e o estado de toda vaga que nao esta na lista dele (vaga   │
+-- │ manual, vaga da carga historica). Sem DEFAULT, pelo mesmo motivo: zero nao e ausencia.          │
+-- │ Nao se grava rotulo traduzido: rotulo errado mente na tela, numero cru no maximo nao e          │
+-- │ reconhecido.                                                                                    │
+-- └────────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- NAO E O `vagas.status` DO EA (FK para `as_vaga_status`): aquele e o nosso papel na esteira de
+-- vagas e quem o move e gente. Este e o espelho do ATS, e o unico escritor dele e o rastreio da
+-- ingestao (`as/digai/digai-vaga-rastreio.service.ts`).
+--
+-- ADITIVA E IDEMPOTENTE: so `ADD COLUMN IF NOT EXISTS`. Nada e apagado, renomeado nem recebe valor
+-- em linha existente (sec. A.27). SEM BACKFILL: escrever um status nas 546 vagas de hoje afirmaria
+-- um estado do ATS que ninguem leu. Quem preenche e a volta seguinte da ingestao.
+--
+-- Sec. A.6: a coluna guarda o estado de uma VAGA no ATS. Nenhum dado pessoal.
+ALTER TABLE "vagas" ADD COLUMN IF NOT EXISTS "status_pandape" integer;

@@ -1065,6 +1065,13 @@
       "when": 1790646018719,
       "tag": "0151_uq_vagas_id_vacancy_pandape_coluna_crua",
       "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1790646019719,
+      "tag": "0152_vagas_status_pandape",
+      "breakpoints": true
     }
   ]
 }

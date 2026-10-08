@@ -327,12 +327,44 @@ describe("o schema declarado concorda com o DDL aplicado", () => {
 
     const conserto = journal.entries.find((e) => e.tag.startsWith("0151_"));
     expect(conserto, "a 0151 não tem entrada no journal, então o Drizzle nem a vê").toBeTruthy();
-    const outras = journal.entries.filter((e) => e !== conserto).map((e) => e.when);
+    /*
+     * ─ A COMPARAÇÃO É CONTRA AS ENTRADAS ANTERIORES, E NÃO CONTRA O JOURNAL INTEIRO (08/10/2026) ─
+     *
+     * ┌─ POR QUE A PRIMEIRA REDAÇÃO FICAVA VERMELHA CONTRA UM REPOSITÓRIO CORRETO ────────────────┐
+     * │ Ela exigia que a 0151 fosse a MAIOR entrada do journal, e isso só é verdade enquanto ela é  │
+     * │ a ÚLTIMA migration do projeto. A migration seguinte (a 0152, do espelho do status do ATS na │
+     * │ vaga) nasceu, corretamente, com `when` acima do dela, e este caso acusou um defeito que não │
+     * │ existe: mandava "consertar" a 0151 abaixando a 0152, que é exatamente o erro que ele existe │
+     * │ para impedir. Teste que manda consertar o certo é o pior defeito que um teste pode ter.     │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * A PROPRIEDADE REAL É DE ORDEM, e ela continua medida inteira: o drizzle aplica na ordem do
+     * journal e compara o `when` de cada uma com a maior JÁ APLICADA, então o que não pode acontecer
+     * é uma entrada ter `when` abaixo de alguma ANTERIOR a ela. O que vem depois é irrelevante: ela
+     * já terá rodado. Com a comparação contra o journal inteiro, a frente seguinte era obrigada a
+     * reabrir esta asserção; com a comparação contra as anteriores, a trava vale para sempre.
+     */
+    const anteriores = journal.entries
+      .filter((e) => e.idx < (conserto as { idx: number }).idx)
+      .map((e) => e.when);
     expect(
       (conserto as { when: number }).when,
-      "o `when` da 0151 não é o maior do journal: ela seria pulada em silêncio e produção ficaria " +
-        "com o índice de expressão da 0150",
-    ).toBeGreaterThan(Math.max(...outras));
+      "o `when` da 0151 está abaixo de alguma migration ANTERIOR a ela: ela seria pulada em " +
+        "silêncio e produção ficaria com o índice de expressão da 0150",
+    ).toBeGreaterThan(Math.max(...anteriores));
+    /*
+     * ─ A GENERALIZAÇÃO PARA O JOURNAL INTEIRO FOI TENTADA, E ELA ACHOU DÍVIDA ANTIGA ────────────
+     *
+     * Asserir "o `when` cresce junto com o `idx`" em TODAS as entradas fica VERMELHO contra o
+     * repositório de hoje: a `0086_frente_ifractal` tem `when` 1787321660928, ABAIXO da
+     * `0085_as_reentrada_em_vaga_encerrada` (1787321663927). É inversão de ORIGEM (as duas são de
+     * fevereiro e já estão aplicadas há meses), e não efeito de frente nenhuma em curso.
+     *
+     * NÃO SE CONSERTA AQUI, e por isso a asserção não fica: mexer no `when` de migration APLICADA é
+     * reescrever o passado do banco (as duas já rodaram em produção, e o drizzle não as roda de
+     * novo), o que não foi pedido por OST nenhuma (§A.14/§A.31) e não tem efeito prático hoje. O
+     * achado está registrado para o coordenador decidir se vira frente própria.
+     */
     expect(
       new Set(journal.entries.map((e) => e.idx)).size,
       "há `idx` repetido no journal",
