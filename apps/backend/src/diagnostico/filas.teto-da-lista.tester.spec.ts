@@ -90,9 +90,19 @@ function filaFake(total: number) {
     lidos += fatia.length;
     return fatia;
   });
+  // DELAYED agora é lido JUNTO com FAILED (Promise.all), com a MESMA faixa. Esta fila não tem job
+  // atrasado, então o `getDelayed` honra a faixa sobre uma lista vazia e soma zero hash a `lidos`:
+  // se um dia alguém listar atrasados sem respeitar o teto, a asserção de hashes lidos pega.
+  const atrasados: JobFake[] = [];
+  const getDelayed = vi.fn(async (inicio = 0, fim = -1) => {
+    const fatia = atrasados.slice(inicio, fim < 0 ? undefined : fim + 1);
+    lidos += fatia.length;
+    return fatia;
+  });
   return {
     getJobCounts: vi.fn(async () => ({ active: 0, waiting: 0, failed: total, delayed: 0 })),
     getFailed,
+    getDelayed,
     /** Quantos hashes o Redis teria devolvido neste caminho. Zero = nem chamou. */
     lidos: () => lidos,
     chamadas: () => getFailed.mock.calls.length,

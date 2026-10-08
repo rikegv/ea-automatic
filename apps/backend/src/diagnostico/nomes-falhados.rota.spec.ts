@@ -58,6 +58,9 @@ function filaComFalhados(ids: string[]) {
     getFailed: vi.fn(async (inicio = 0, fim = -1) =>
       jobs.slice(inicio, fim < 0 ? undefined : fim + 1),
     ),
+    // `alvosPandapeFalhados` agora soma failed + delayed. Esta fila não tem atrasado, mas o método
+    // PRECISA existir, senão a leitura lança e a busca por nome volta vazia.
+    getDelayed: vi.fn(async () => [] as typeof jobs),
   };
 }
 
