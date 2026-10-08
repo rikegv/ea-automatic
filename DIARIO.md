@@ -20960,3 +20960,78 @@ DEPLOY (A.49): commit ec2ea83 (recorte nominal, so os 28 arquivos de Vagas; prop
 MEDIDO EM PRODUCAO POS-SYNC (scheduler, 5 min pos-boot): espelho `PLANILHA_A_S` 924 linhas, status ABERTO 16 / ENTREGUE 17 / FECHADO 339 / CANCELADO 250 / sem-status-legivel 302. Fila de revisao caiu de 487 PENDENTE_REVISAO para ~149 (so ABERTO/ENTREGUE). 0 recusadas. Endpoints F4 respondem 401 sem auth (wired + guard). Artefato servido confirmado (fail-open e vaga_recusa_eventos no dist; JANELA_INICIAL e o indicador no chunk da pagina da vaga).
 
 PENDE validacao visual do Rike em PRODUCAO (A.13, autorizada subir direto pois a homolog nao tem volume de vaga): abrir o Ver Candidatos numa vaga grande (ex. codigo 3525607, 1.739 candidaturas, na fila filtrada; ou 3659357 ABERTA, 1.064, na Central de Vagas) e confirmar abertura rapida sem travar; a tela do Liberar Vaga so com as ~149; o botao Recusar e a aba Recusadas. DIARIO.md nao commitado nesta sessao: convive com a entrada nao-commitada da sessao do Portal (A.14, nao commito entrada de outra sessao).
+
+## 2026-10-08 — Digai: a vaga-espelho deixa de nascer em branco, e a órfã ganha número e saída
+
+**O problema, medido em produção:** o Digai cria uma vaga para pendurar a candidatura, e ela nascia
+só com o número do Pandapé (`digai-repositorio.ts:427`): sem código, sem nome, sem cargo, sem datas.
+**13 vagas em branco com 226 candidaturas de 226 pessoas reais.** Na tela aparecem vazias porque a
+coluna que a tela mostra como número é `vagas.codigo`, e ele está nulo nessas 13.
+
+**NÃO era defeito de gravação, e essa foi a primeira correção de premissa.** O contrato do Digai tem
+OITO campos e só um é de vaga (`userId, partnerJobId, firstname, lastname, cpf, email, phoneNumber,
+appliedAt`): não vem título, nem cargo, nem cliente. O branco era tudo o que existia para gravar.
+**E o espelho JÁ casava com a vaga do Pandapé** pelo `partnerJobId` (que É o número da vaga, no
+código): só cria quando não existe. Logo o conserto não era casar, era ENRIQUECER.
+
+**Cobertura medida das 13:** 1 só pela planilha, 1 só pelo Pandapé, **6 pelos dois**, e **5 por
+nenhum** (`3498580`, `3500236`, `3517382`, `3586617`, `3696629`), que não têm nome em lugar nenhum
+do sistema e saem pela mão.
+
+**A API do Pandapé, medida ao vivo (1 requisição):** `GET /v1/Vacancy/List` devolve **6.944 vagas,
+9,8 MB**, com `idVacancy, job, city, numberVacancies, status, publishedDate`. O `job` é o nome da
+vaga. **A v1 não tem busca por id**, então `getVacancy` lista tudo e filtra em memória.
+
+**`status = 3` é ENCERRADA**, medido por cruzamento (das que o EA conhece em status 3, 21 estão
+FECHADA no EA). **As 7 alcançáveis estão TODAS em status 3: o Digai segue mandando candidato para
+vaga encerrada.** Por isso a tag na linha é aviso, não enfeite.
+
+**O que subiu (`be8de22` + `a0c0a7b`, produção servindo `05d3906`):**
+- pré-preenchimento pela planilha por **reuso puro** (`resolverERegistrar`, já público, já dispara);
+- rastreio no Pandapé (nome, cidade, posições) com **cache de janela**;
+- `vagas.status_pandape` (migration **0152**, aditiva e nulável) e a tag **"Encerrada No ATS"**;
+- a célula nunca fantasma: faltando código, mostra `ATS <número>`, nas DUAS telas, e **a busca e a
+  ordenação passaram a ler o mesmo texto que a célula escreve**.
+
+**O furo que o `tester` achou e que valia a frente:** o cache só abria a janela DEPOIS de uma leitura
+bem-sucedida. Com a lista falhando, **13 vagas viravam 13 listagens de 9,8 MB (128 MB)**, e isso
+acontece exatamente quando o ATS está recusando por cota, que é a cota compartilhada com o webhook
+que alimenta a folha. Agora a janela é carimbada NA ENTRADA: **1 chamada por ciclo nos três
+desfechos**, provado.
+
+**AS 226 PESSOAS SÃO INTOCADAS**, por banco e por teste: a FK `as_candidaturas -> vagas` é RESTRICT,
+e há 8 testes com canário provando que nenhuma instrução emitida cita `as_candidaturas`.
+
+**A saída manual JÁ existia e não foi tocada**, e aqui o passo a passo que a fábrica deu ao diretor
+estava ERRADO: não é pela engrenagem (`acoesDaVaga` só oferece "Editar vaga" para vaga em processo,
+e `PENDENTE_REVISAO` está fora de propósito, com o motivo escrito no código). O caminho é o
+**"Revisar vaga" da fila de revisão**, que aparece em toda linha pendente e grava com "Salvar sem
+liberar". Agora há teste asserindo o botão, para ninguém o condicionar depois.
+
+**EU QUEBREI A MAIN POR ~12 MINUTOS (`bd506c2`..`05d3906`), e a lição é do recorte.** Produção não
+caiu: o `publicar-producao.sh` **builda antes de trocar** (§A.49, garantia 5), então a falha parou no
+build. Os dois erros vieram da mesma raiz: **montei o recorte a partir do WORKING TREE** e removi só
+o que eu **conhecia** de outras frentes. Ficou um `import` de arquivo não commitado por outra sessão
+(TS2307), e o `shared-types` inteiro levou um `telefones: string[]` **obrigatório** de outra frente
+cujo produtor, na main, não preenche (TS2741). **"Tipo não tem efeito em runtime" é verdade sobre
+runtime e FALSA sobre compilação.** O recorte certo é o inverso: partir do **commit base** e
+acrescentar nominalmente só o seu. Registrado em memória.
+
+**O recorte cirúrgico (4 arquivos por blob) evitou quatro danos concretos:** a coluna de PII
+`as_candidatos.telefones` e a migration `0153` (frente cuja própria guarda fail-closed de LGPD está
+vermelha), a coluna `meta` do Alto Volume, e o registro do `FilaDeClienteDaVagaService` sem o serviço
+(que **derrubaria o boot**).
+
+**ACHADO DE HIGIENE, e ele saiu de recusar "pré-existente" sem prova:** 3 vermelhos passavam no
+`origin/main` pristino e falhavam no tree compartilhado. A causa era a coluna `telefones` de outra
+frente, com a guarda D1 recusando. O dono apareceu depois (sessão do import de currículo por IA),
+foi avisado e consertou com prova comportamental, sem afrouxar a guarda.
+
+**PENDENTE, do diretor:** (1) autorizar o enriquecimento das 13 que já existem, porque o conserto
+vale para o FUTURO e o ritmo medido é **4 candidaturas em 24h** nas 13, com 7 delas encerradas no
+ATS; (2) o formato das screenshots de produção (§A.46: título de vaga do Pandapé já chegou com nome
+de gente dentro); (3) as 13 ficarem com `posicoes_oficiais = 1`, que é o DEFAULT do banco e não nulo,
+então a trava "só preenche o que está nulo" impede o número real do ATS de entrar.
+
+**Esta frente é o TERCEIRO escritor de `posicoes_oficiais`**, lida por `domain/candidatura` e por
+`ingestao-divergencias`. Declarado no código, com os leitores nomeados.
