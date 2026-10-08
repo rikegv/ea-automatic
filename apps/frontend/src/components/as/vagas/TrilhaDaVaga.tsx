@@ -1680,6 +1680,10 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       disabled={travados.has("codCliente")}
                       placeholder="Selecionar cliente"
                       ariaLabel="Cliente da vaga"
+                      /* SÓ NA LIBERAR VAGA (modo liberacao): o CNPJ no fim da linha é informação a
+                         LER, então herda a cor do nome (legível no escuro). Os demais modos e as
+                         outras telas de Combobox seguem com o hint cinza padrão. */
+                      hintForte={ehLiberacao}
                     />
                   </CampoSelect>
 
