@@ -114,9 +114,77 @@ export class PortalEnvioService {
     autorId: string,
     origem: OrigemDeEnvioDoLink,
   ): Promise<ResultadoDoEnvioDoLink> {
+    /*
+     * O RECORTE DO FLUXO 2 (PANDAPÉ DIRETO), E SÓ NO AUTOMÁTICO ─────────────────────────────────
+     *
+     * O gancho da LIBERAÇÃO (`AdmissoesService.liberar`/`liberarEmLote`) chama este método com
+     * `AUTOMATICO` para TODA admissão liberada. A admissão que nasceu pelo webhook do Pandapé SEM
+     * passar pelo funil (o "fluxo 2") NÃO usa o Portal: ela entrega documento pela própria liberação
+     * admissional. Emitir link automático para ela chamaria o candidato para uma coleta que aquele
+     * fluxo não tem. A trava mora AQUI, no choke point dos DOIS ganchos, para `liberar` e
+     * `liberarEmLote` ficarem cobertos num lugar só.
+     *
+     * O CRITÉRIO É IDÊNTICO AO FILTRO DO GERENCIADOR (`SO_FLUXO_DO_FUNIL_DE_AS`,
+     * `portal-painel.service.ts`): PERMANECE quem tem candidatura de A&S (EXISTE linha em
+     * `as_candidaturas`) OU origem <> 'PANDAPE'. O fluxo 2 é o par exato "origem = 'PANDAPE' E sem
+     * candidatura", e é só ele que esta guarda barra.
+     *
+     * SÓ O AUTOMÁTICO É AFETADO. O `MANUAL` (consultor clicando no Gerenciador) e o
+     * `AUTOATENDIMENTO` (acesso por e-mail) passam direto: lá quem pede o link é um humano que
+     * decidiu, e a régua do fluxo 2 não se aplica. A batelada de A&S (`enviarParaCandidaturas`, que
+     * também usa `AUTOMATICO`) nunca é barrada aqui: por definição aquelas admissões têm candidatura.
+     *
+     * BEST-EFFORT: devolve a recusa SEM lançar, então a liberação (que já trata o retorno e só loga)
+     * não quebra. §A.6: o log leva só o CÓDIGO fixo do motivo, nunca e-mail, CPF, nome ou id.
+     */
+    if (origem === "AUTOMATICO" && (await this.ehFluxoDoisSemPortal(admissaoId))) {
+      this.log.warn("link do portal nao emitido: fluxo 2 (pandape direto, sem portal) [FLUXO_SEM_PORTAL]");
+      return {
+        enviado: false,
+        // O catálogo `MOTIVOS_DE_RECUSA_DE_ENVIO` vive em `shared-types`, que é do coordenador
+        // (§A.39), e um código dedicado (`FLUXO_SEM_PORTAL`) quebraria dois `Record` fechados no
+        // frontend. Como a recusa AUTOMÁTICA só é LOGADA pelos ganchos (nunca chega à tela), o
+        // `null` basta aqui e o código vai para o log acima. O código dedicado fica PROPOSTO na
+        // entrega, não embutido por conta própria.
+        motivo: null,
+        canal: CANAL,
+        origem,
+        // §A.6: não se resolve o destinatário (nem se lê o e-mail) para um fluxo que não emite.
+        destinoMascarado: null,
+        enviadoEm: null,
+        expiraEm: null,
+      };
+    }
+
     const destinatario = await this.destinatarioDaAdmissao(admissaoId);
     if (!destinatario) throw new NotFoundException("Admissão não encontrada");
     return this.entregar(destinatario, autorId, origem);
+  }
+
+  /**
+   * É FLUXO 2 (PANDAPÉ DIRETO, SEM PORTAL)? Uma consulta, lendo só `origem` e a EXISTÊNCIA de
+   * candidatura, sem N+1 e sem PII (§A.6).
+   *
+   * É a negação EXATA de `SO_FLUXO_DO_FUNIL_DE_AS` (o filtro do Gerenciador): barra o par
+   * "origem = 'PANDAPE' E NÃO existe `as_candidaturas` ligada". Admissão inexistente devolve `false`
+   * (linha ausente), e o fluxo segue para `destinatarioDaAdmissao`, que lança `NotFound` como hoje:
+   * esta guarda não muda esse caminho.
+   */
+  private async ehFluxoDoisSemPortal(admissaoId: string): Promise<boolean> {
+    const [linha] = await this.db
+      .select({
+        bloqueia: sql<boolean>`(
+          ${admissoes.origem} = 'PANDAPE'
+          and not exists (
+            select 1 from ${asCandidaturas}
+            where ${asCandidaturas.admissaoId} = ${admissoes.id}
+          )
+        )`,
+      })
+      .from(admissoes)
+      .where(eq(admissoes.id, admissaoId))
+      .limit(1);
+    return linha?.bloqueia ?? false;
   }
 
   /**
