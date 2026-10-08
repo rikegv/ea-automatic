@@ -69,7 +69,21 @@ export function identificadorDoLink(l: LinhaComJtiOpcional): string | null {
  * │ há link vivo para bloquear, e a resposta certa é não oferecer o botão.                       │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export type LinhaComJtiOpcional = LinhaDoPainelPortal & { linkJti?: string | null };
+export type LinhaComJtiOpcional = LinhaDoPainelPortal & {
+  linkJti?: string | null;
+  /**
+   * CONTRATO FIXADO PELO COORDENADOR, consumido aqui enquanto o backend o acrescenta à linha em
+   * `shared-types` (dono do arquivo é o coordenador, §A.39). Opcional de propósito, só para
+   * atravessar a janela em que as duas camadas sobem em paralelo: quando o campo passar a vir do
+   * servidor como obrigatório, a interseção resolve para obrigatório e nada aqui muda.
+   *
+   * ORIGEM DA ADMISSÃO (de ONDE a admissão veio), distinta da `origemEnvio` (por qual CANAL o link
+   * foi enviado): ver `tagDaOrigemAdmissao` e a nota da coluna Origem na tela.
+   */
+  origemAdmissao?: OrigemDaAdmissaoPortal | null;
+  /** Quem clicou "enviar para admissão" (o consultor do envio), NÃO o responsável pela vaga. */
+  consultorQueEnviou?: string | null;
+};
 
 export const rotaBloquear = (id: string) => `/portal/links/${id}/bloquear`;
 export const rotaDesbloquear = (id: string) => `/portal/links/${id}/desbloquear`;
@@ -302,6 +316,54 @@ export function rotuloDaOrigem(o: string | null | undefined): string {
   return ROTULO_DA_ORIGEM[o] ?? o;
 }
 
+// ── A origem da ADMISSÃO ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * A ORIGEM DA ADMISSÃO é coisa DIFERENTE da origem do ENVIO, e as duas convivem na coluna Origem.
+ *
+ * ┌─ A CONFUSÃO "MANUAL" x "MANUAL", desfeita de vez pelo rótulo "Admissão Plataforma" ──────────┐
+ * │ `origemEnvio = "Manual"` é o RH que ENVIOU o link à mão pelo Gerenciador (um CANAL de envio). │
+ * │ `origemAdmissao = "MANUAL"` é a admissão que NÃO veio de Atração e Seleção (de ONDE ela       │
+ * │ nasceu). São perguntas diferentes, e antes dividiam a mesma palavra na mesma coluna. Agora a  │
+ * │ tag da admissão é rotulada "Admissão Plataforma" (o VALOR técnico segue `"MANUAL"`), então a  │
+ * │ coluna mostra "Admissão Plataforma" x "Envio: Manual": a ambiguidade de palavra sumiu.        │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * CONTRATO FIXADO PELO COORDENADOR: exatamente dois valores. O tipo mora aqui enquanto o backend o
+ * leva ao `shared-types` (§A.39).
+ */
+export type OrigemDaAdmissaoPortal = "ATRACAO_SELECAO" | "MANUAL";
+
+export interface TagDaOrigemAdmissao {
+  label: string;
+  tone: TomDoLink;
+}
+
+/**
+ * Cores DISTINTAS, no padrão do design system (§A.12): "Atração E Seleção" em azul (`in`, canal do
+ * sistema de recrutamento) e "Admissão Plataforma" em neutro (`nt`, lançada pela plataforma, valor
+ * técnico `"MANUAL"`). Rótulos em Title Case (§A.24).
+ */
+export const ROTULO_DA_ORIGEM_ADMISSAO: Record<OrigemDaAdmissaoPortal, TagDaOrigemAdmissao> = {
+  ATRACAO_SELECAO: { label: "Atração E Seleção", tone: "in" },
+  // O VALOR TÉCNICO continua `"MANUAL"` (de ONDE a admissão veio: fora de Atração e Seleção), só o
+  // RÓTULO exibido muda para "Admissão Plataforma" (§A.24). Com isso some a colisão de palavra que
+  // esta separação existia para desfazer: a tag da admissão ("Admissão Plataforma") não repete mais
+  // o "Manual" do canal de ENVIO ("Envio: Manual"), que é outra pergunta na mesma coluna.
+  MANUAL: { label: "Admissão Plataforma", tone: "nt" },
+};
+
+/**
+ * A tag da coluna e do modal. Valor fora do catálogo (ou ausente na janela de deploy em paralelo)
+ * cai em "não informado" neutro (§A.11), nunca traço e nunca código cru.
+ */
+export function tagDaOrigemAdmissao(o: string | null | undefined): TagDaOrigemAdmissao {
+  if (o && Object.prototype.hasOwnProperty.call(ROTULO_DA_ORIGEM_ADMISSAO, o)) {
+    return ROTULO_DA_ORIGEM_ADMISSAO[o as OrigemDaAdmissaoPortal];
+  }
+  return { label: "não informado", tone: "nt" };
+}
+
 // ── A consulta ──────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -454,9 +516,10 @@ export interface CampoDoDetalhe {
   tom?: TomDoLink;
 }
 
-export function camposDoDetalhe(l: LinhaDoPainelPortal): CampoDoDetalhe[] {
+export function camposDoDetalhe(l: LinhaComJtiOpcional): CampoDoDetalhe[] {
   const sit = situacaoDaLinha(l);
   const link = linkDaLinha(l.estadoLink);
+  const origem = tagDaOrigemAdmissao(l.origemAdmissao);
   return [
     { rotulo: "Cliente", valor: l.cliente || "não informado" },
     { rotulo: "Cargo", valor: l.cargo || "não informado" },
@@ -473,6 +536,13 @@ export function camposDoDetalhe(l: LinhaDoPainelPortal): CampoDoDetalhe[] {
     // entregues pelo consultor via Esteira, e o carimbo é do PORTAL.
     { rotulo: "Último Acesso", valor: formatarDataHora(l.ultimoAcessoEm) },
     { rotulo: "Estado Do Link", valor: link.label, tom: link.tone },
+    // A ORIGEM DO ENVIO (o CANAL) e a ORIGEM DA ADMISSÃO (de ONDE ela veio) são linhas distintas de
+    // propósito (ver `tagDaOrigemAdmissao`). A origem da admissão é etiqueta, com o mesmo rótulo e
+    // cor da tag da lista ("Admissão Plataforma" para o valor `"MANUAL"`).
     { rotulo: "Origem Do Envio", valor: rotuloDaOrigem(l.origemEnvio) },
+    { rotulo: "Origem", valor: origem.label, tom: origem.tone },
+    // §A.6: é o nome de um USUÁRIO interno (quem clicou "enviar para admissão"), não dado do
+    // candidato. Ausente vira "não informado" (§A.11).
+    { rotulo: "Consultor Que Enviou", valor: l.consultorQueEnviou || "não informado" },
   ];
 }
