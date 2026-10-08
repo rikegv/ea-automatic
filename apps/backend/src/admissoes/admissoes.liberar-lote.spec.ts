@@ -48,7 +48,7 @@ interface Cenario {
 }
 
 /** Fake do Drizzle: só o que o `liberarEmLote` toca. Conta as transações efetivamente abertas. */
-function montar(cen: Cenario) {
+function montar(cen: Cenario, portalEnvio?: unknown) {
   const porId = new Map(cen.admissoes.map((a) => [a.id as string, a]));
   const inseridos: Row[] = [];
   let transacoes = 0;
@@ -100,13 +100,27 @@ function montar(cen: Cenario) {
     return idCorrente;
   }
   const fila = { enfileirarPullDocumentos: vi.fn().mockResolvedValue(true) };
-  const service = new AdmissoesService(db as never, fila as never);
+  // O `portalEnvio` entra na QUARTA posição do construtor (@Optional), exatamente como o Nest injeta
+  // e como o spec do gancho individual faz. Sem ele (caso 4), o ramo `if (this.portalEnvio)` nunca
+  // roda e o lote funciona igual, que é o padrão de todos os demais testes deste arquivo.
+  const service = new AdmissoesService(db as never, fila as never, undefined, portalEnvio as never);
+  // Logger vira coletor: alimenta as asserções de §A.6 do gancho e silencia o warn do catch do laço.
+  const logs: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (service as any).logger = {
+    warn: (m: unknown) => logs.push(String(m)),
+    error: (m: unknown) => logs.push(String(m)),
+    log: () => {},
+    debug: () => {},
+    verbose: () => {},
+  };
   // Envolve o findFirst para saber qual id o laço pede a cada volta: a ordem é a dos ids enviados.
   return {
     service,
     fila,
     inseridos,
     atualizados,
+    logs,
     contarTransacoes: () => transacoes,
     setIdCorrente: (id: string) => {
       idCorrente = id;
@@ -378,5 +392,153 @@ describe("AdmissoesService.liberarEmLote", () => {
     const ctx = montar({ admissoes: [aguardando("a1")], regua: REGUA_OK, clienteExiste: false });
     await expect(rodarLote(ctx, ["a1"])).rejects.toThrow(/Cliente não encontrado/);
     expect(ctx.contarTransacoes()).toBe(0);
+  });
+});
+
+/**
+ * ─ O GANCHO DO ENVIO DO LINK, AGORA LIGADO NA LIBERAÇÃO EM LOTE (`tester` §A.38/§A.40) ──────────
+ *
+ * Irmão do `admissoes.gancho-envio-liberacao.tester.spec.ts` (que cobre o `liberar` individual).
+ * O serviço REAL roda contra um dublê de `PortalEnvioService` e o que se prova é o requisito, não o
+ * texto. O gancho vive DEPOIS do laço de liberação e ANTES do `return { liberadas, falhas }`, e para
+ * CADA admissão de `liberadas` chama `enviarParaAdmissao(admissaoId, user.id, "AUTOMATICO")`, dentro
+ * de `if (this.portalEnvio)`, best-effort (try/catch, §A.6 sem PII).
+ *
+ * §A.6: todo CPF/nome que circula é sintético (CPF_VALIDO de família reservada, verificador válido).
+ */
+describe("liberarEmLote: o gancho do envio do link do Portal", () => {
+  it("1) N liberadas → enviarParaAdmissao N vezes, uma por admissaoId, origem AUTOMATICO e autor user.id", async () => {
+    const ids = ["a1", "a2", "a3"];
+    const portal = { enviarParaAdmissao: vi.fn().mockResolvedValue({ enviado: true }) };
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK }, portal);
+
+    const r = await rodarLote(ctx, ids);
+
+    expect(r.liberadas.map((l) => l.admissaoId)).toEqual(["a1", "a2", "a3"]);
+    expect(r.falhas).toHaveLength(0);
+    // Exatamente N, uma por admissaoId de `liberadas`, com a assinatura (admissaoId, autor, origem).
+    expect(portal.enviarParaAdmissao).toHaveBeenCalledTimes(3);
+    expect(portal.enviarParaAdmissao).toHaveBeenNthCalledWith(1, "a1", USER.id, "AUTOMATICO");
+    expect(portal.enviarParaAdmissao).toHaveBeenNthCalledWith(2, "a2", USER.id, "AUTOMATICO");
+    expect(portal.enviarParaAdmissao).toHaveBeenNthCalledWith(3, "a3", USER.id, "AUTOMATICO");
+    // Nenhum id fora de `liberadas` foi enviado.
+    const enviados = portal.enviarParaAdmissao.mock.calls.map((c) => c[0]).sort();
+    expect(enviados).toEqual(["a1", "a2", "a3"]);
+    // Toda chamada carrega AUTOMATICO + o autor; nunca MANUAL nem outro autor.
+    for (const chamada of portal.enviarParaAdmissao.mock.calls) {
+      expect(chamada[1]).toBe(USER.id);
+      expect(chamada[2]).toBe("AUTOMATICO");
+    }
+  });
+
+  it("2) admissão que FALHOU a liberação (entra em falhas) NÃO recebe envio", async () => {
+    const ids = ["a1", "a2", "a3"];
+    const portal = { enviarParaAdmissao: vi.fn().mockResolvedValue({ enviado: true }) };
+    // a2 já saiu da fila (EM_ADMISSAO): falha a liberação e cai em `falhas`, não em `liberadas`.
+    const ctx = montar(
+      {
+        admissoes: [
+          aguardando("a1"),
+          { ...aguardando("a2"), farolGlobal: "EM_ADMISSAO" },
+          aguardando("a3"),
+        ],
+        regua: REGUA_OK,
+      },
+      portal,
+    );
+
+    const r = await rodarLote(ctx, ids);
+
+    expect(r.liberadas.map((l) => l.admissaoId)).toEqual(["a1", "a3"]);
+    expect(r.falhas).toHaveLength(1);
+    // O envio dispara SÓ para as liberadas: a2 não é passada a enviarParaAdmissao.
+    expect(portal.enviarParaAdmissao).toHaveBeenCalledTimes(2);
+    const enviados = portal.enviarParaAdmissao.mock.calls.map((c) => c[0]);
+    expect(enviados).not.toContain("a2");
+    expect(enviados.sort()).toEqual(["a1", "a3"]);
+  });
+
+  it("3a) BEST-EFFORT: um envio que LANÇA não muda liberadas/falhas nem derruba o lote", async () => {
+    const ids = ["a1", "a2", "a3"];
+    // O do meio lança; os vizinhos resolvem. Se o throw derrubasse o lote, `rodarLote` rejeitaria.
+    const portal = {
+      enviarParaAdmissao: vi
+        .fn()
+        .mockResolvedValueOnce({ enviado: true })
+        .mockRejectedValueOnce(new Error("correio fora do ar"))
+        .mockResolvedValueOnce({ enviado: true }),
+    };
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK }, portal);
+
+    const r = await rodarLote(ctx, ids);
+
+    // O resultado do lote é o MESMO: as 3 liberadas, zero falha, apesar do envio do meio ter lançado.
+    expect(r.liberadas.map((l) => l.admissaoId)).toEqual(["a1", "a2", "a3"]);
+    expect(r.falhas).toHaveLength(0);
+    // As demais SEGUIRAM depois do throw: a3 foi tentada mesmo com a2 lançando.
+    expect(portal.enviarParaAdmissao).toHaveBeenCalledTimes(3);
+  });
+
+  it("3b) BEST-EFFORT: envio que devolve enviado:false não vira falha do lote", async () => {
+    const ids = ["a1", "a2"];
+    const portal = {
+      enviarParaAdmissao: vi.fn().mockResolvedValue({ enviado: false, motivo: "SEM_DESTINATARIO" }),
+    };
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK }, portal);
+
+    const r = await rodarLote(ctx, ids);
+
+    expect(r.liberadas).toHaveLength(2);
+    expect(r.falhas).toHaveLength(0);
+    expect(portal.enviarParaAdmissao).toHaveBeenCalledTimes(2);
+  });
+
+  it("4) sem portalEnvio injetado (@Optional), o lote funciona igual e não envia nada", async () => {
+    const ids = ["a1", "a2"];
+    // Construído SEM o dublê (segundo argumento ausente): o ramo `if (this.portalEnvio)` nem existe
+    // no caminho. A não-emissão é por AUSÊNCIA de dependência, como o caso (e) do spec individual.
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK });
+
+    const r = await rodarLote(ctx, ids);
+
+    expect(r.liberadas).toHaveLength(2);
+    expect(r.falhas).toHaveLength(0);
+    // Nascimento intacto: as frentes nasceram, então a liberação rodou por inteiro sem o gancho.
+    expect(ctx.inseridos.filter((x) => x.tipo === "AUDITORIA")).toHaveLength(2);
+  });
+
+  it("5) §A.6: na recusa o log leva só o CÓDIGO do motivo, nunca CPF nem nome de pessoa", async () => {
+    const portal = {
+      enviarParaAdmissao: vi.fn().mockResolvedValue({ enviado: false, motivo: "SEM_DESTINATARIO" }),
+    };
+    const ctx = montar({ admissoes: [aguardando("a1")], regua: REGUA_OK }, portal);
+
+    await rodarLote(ctx, ["a1"]);
+
+    const log = ctx.logs.join("\n");
+    expect(log).toContain("SEM_DESTINATARIO"); // o código do motivo pode sair
+    expect(log).not.toContain(CPF_VALIDO); // CPF nunca
+    expect(log).not.toContain("Candidato Teste"); // nome da pessoa nunca
+  });
+
+  it("5) §A.6: no erro inesperado sai só o NOME do erro, nunca a mensagem (que pode trazer link/token)", async () => {
+    const portal = {
+      // A mensagem do erro carrega, de propósito, link + token + CPF: nada disso pode ir ao log.
+      enviarParaAdmissao: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(`token=abc123 https://portal/x cpf=${CPF_VALIDO} fulano@exemplo.test`),
+        ),
+    };
+    const ctx = montar({ admissoes: [aguardando("a1")], regua: REGUA_OK }, portal);
+
+    await rodarLote(ctx, ["a1"]);
+
+    const log = ctx.logs.join("\n");
+    expect(log).toContain("Error"); // só o name do erro
+    expect(log).not.toContain("token=abc123");
+    expect(log).not.toContain("https://portal/x");
+    expect(log).not.toContain(CPF_VALIDO);
+    expect(log).not.toContain("fulano@exemplo.test");
   });
 });

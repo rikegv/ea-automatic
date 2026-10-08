@@ -1921,6 +1921,27 @@ export class AdmissoesService {
       }
     }
 
+    /*
+     * O AVISO AO CANDIDATO NO LOTE, mesmo gancho do individual (`liberar`), agora ligado para a
+     * liberação em massa (Alto Volume). Dispara SÓ para as que de fato foram liberadas (`liberadas`),
+     * FORA das transações por admissão, uma a uma. BEST-EFFORT: falha de envio NÃO entra no relatório
+     * de liberação nem derruba o lote (a liberação é o fato, o envio é o aviso, §A.5). O lote tem teto
+     * de LOTE_LIBERACAO_MAX, então o número de envios é limitado. §A.6: o log não leva e-mail, link,
+     * token, CPF nem id de pessoa; em recusa sai só o código do motivo, no inesperado só o nome do erro.
+     */
+    if (this.portalEnvio) {
+      for (const { admissaoId } of liberadas) {
+        try {
+          const envio = await this.portalEnvio.enviarParaAdmissao(admissaoId, user.id, "AUTOMATICO");
+          if (!envio.enviado && envio.motivo) {
+            this.logger.warn(`link do portal nao saiu na liberacao em lote: ${envio.motivo}`);
+          }
+        } catch (erro) {
+          this.logger.error(`falha inesperada ao enviar o link do portal na liberacao em lote: ${(erro as Error).name}`);
+        }
+      }
+    }
+
     return { liberadas, falhas };
   }
 
