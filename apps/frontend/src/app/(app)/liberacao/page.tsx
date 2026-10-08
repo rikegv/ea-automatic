@@ -32,6 +32,7 @@ import {
 import { criarPrecisaValor } from "@/lib/beneficios";
 import { caixaAlta } from "@/lib/nome";
 import { resolverPrePreenchimento } from "@/lib/pre-preenchimento-liberacao";
+import { cnpjDigitos, rotuloCliente } from "@/lib/rotulo-cliente-liberacao";
 import {
   projetosDoCliente,
   sugerirProjetoPorPeriodo,
@@ -144,6 +145,8 @@ interface Cliente {
   razaoSocial: string;
   // Nome operacional (fantasia): o time reconhece o cliente por ele, não pela razão social.
   nomeOperacao: string | null;
+  // CNPJ do cliente (já vem do GET /admin/clientes). Identifica a opção no seletor junto ao nome.
+  cnpj: string | null;
   // Escala sugerida do cliente (o valor pré-preenche; as opções vêm do catálogo, independentes).
   escalaPadrao: string | null;
 }
@@ -199,14 +202,6 @@ function filtrarBusca<T extends { candidatoNome: string; candidatoCpf: string }>
       it.candidatoNome.toLowerCase().includes(q) ||
       (qDigitos.length > 0 && it.candidatoCpf.replace(/\D/g, "").includes(qDigitos)),
   );
-}
-/**
- * Rótulo do cliente no seletor: "código · nome operacional" (o time reconhece por ele). Sem nome
- * operacional, cai para "código · razão social". A razão social NÃO entra quando há nome operacional
- * (é longa e polui).
- */
-function rotuloCliente(c: Cliente): string {
-  return `${c.codCliente} · ${c.nomeOperacao ?? c.razaoSocial}`;
 }
 /**
  * Memória de pacote por (cliente + cargo), §A.17 etapa 4. MESMA rota do wizard e do modal individual,
@@ -1873,7 +1868,12 @@ export default function LiberacaoPage() {
                 searchable
                 menuFit
                 className={corCliente ? BORDA_SELECT[corCliente] : undefined}
-                options={clientes.map((c) => ({ value: c.codCliente, label: rotuloCliente(c) }))}
+                options={clientes.map((c) => ({
+                  value: c.codCliente,
+                  label: rotuloCliente(c),
+                  // Busca pelo CNPJ só com dígitos, além do rótulo (nome + CNPJ formatado).
+                  busca: cnpjDigitos(c.cnpj),
+                }))}
               />
             </label>
             <label className="grid gap-1.5">
@@ -2515,7 +2515,12 @@ export default function LiberacaoPage() {
                 ariaLabel="Cliente do lote"
                 searchable
                 menuFit
-                options={clientes.map((c) => ({ value: c.codCliente, label: rotuloCliente(c) }))}
+                options={clientes.map((c) => ({
+                  value: c.codCliente,
+                  label: rotuloCliente(c),
+                  // Busca pelo CNPJ só com dígitos, além do rótulo (nome + CNPJ formatado).
+                  busca: cnpjDigitos(c.cnpj),
+                }))}
               />
             </label>
             <label className="grid gap-1.5">
