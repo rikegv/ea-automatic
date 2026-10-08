@@ -16,12 +16,15 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
   admissoes,
+  asCandidaturas,
+  asCandidaturaEtapas,
   candidatos,
   cargos,
   clientes,
   portalLinks,
   portalPendenciasNoTime,
   portalTermoAceite,
+  usuarios,
 } from "../db/schema";
 import {
   ORIGENS_DE_ENVIO_DO_LINK,
@@ -143,6 +146,29 @@ export interface LinhaDoPainelPortal {
    * porta nenhuma sozinho, e que a rota de revogar já recebe hoje.
    */
   linkJti: string | null;
+  /**
+   * DE ONDE A ADMISSÃO VEIO: `ATRACAO_SELECAO` quando existe candidatura de A&S ligada a ela
+   * (uma linha em `as_candidaturas` com `admissao_id` igual ao `id` da admissão), `MANUAL` caso
+   * contrário (admissão criada à mão ou nascida pelo webhook do Pandapé, sem passar pelo funil).
+   *
+   * É DERIVADO DA EXISTÊNCIA DA LIGAÇÃO, não de uma coluna nova: a resposta é binária e sai da
+   * presença da linha, no mesmo molde do `noTime` e do `termosAceitos`.
+   */
+  origemAdmissao: "ATRACAO_SELECAO" | "MANUAL";
+  /**
+   * O NOME do consultor que clicou "enviar para admissão" no funil de A&S, ou `null`.
+   *
+   * Sai de `as_candidatura_etapas.por_id` (join `usuarios`) no evento `ENVIADO_PARA_ADMISSAO` da
+   * candidatura ligada à admissão, pela MAIS RECENTE por `ocorrido_em`. É o autor JÁ GRAVADO hoje,
+   * nada passa a ser escrito por esta frente.
+   *
+   * `null` NÃO É ERRO: é a admissão que não veio pelo funil (Pandapé ou cadastro manual), e a tela
+   * escreve "não informado" (§A.11). NÃO se inventa autor retroativo.
+   *
+   * §A.6: o nome é de USUÁRIO INTERNO, legítimo nesta tela interna autenticada, como o nome do
+   * candidato já é. Nenhum CPF, e-mail ou id de pessoa do candidato entra aqui.
+   */
+  consultorQueEnviou: string | null;
 }
 
 export interface PaginaDoPainelPortal {
@@ -171,6 +197,31 @@ export const FAROIS_FORA_DO_PAINEL = [
   "AGUARDANDO_LIBERACAO",
   "LIBERACAO_RECUSADA",
 ] as const;
+
+/**
+ * A ADMISSÃO APARECE SSE TEM PELO MENOS UM LINK VIVO (não-revogado), EM CÓDIGO (decisão do diretor, 2B).
+ *
+ * O Gerenciador do Portal lista quem tem link vivo para a operação trabalhar, e nada mais. A admissão
+ * cujo ÚNICO link já foi revogado sai da lista e dos cinco cards; a que tem ao menos um link
+ * não-revogado permanece, QUALQUER que seja a origem (Pandapé ou funil de A&S). Como o declínio
+ * (§A.16) e o antigo recorte por origem, a exclusão é garantida AQUI, no servidor, na cláusula WHERE
+ * do recorte compartilhado, nunca por filtro de tela. É recorte READ-only: nada é apagado.
+ *
+ * NÃO FILTRA MAIS POR ORIGEM (substitui o antigo `SO_FLUXO_DO_FUNIL_DE_AS`): a trava P1 já impede o
+ * Fluxo 2 (admissional direto do Pandapé) de GANHAR link, então "tem link vivo" já exclui, por
+ * construção, a pré-admissão que nunca deveria receber link, sem precisar olhar a origem. Isso traz
+ * de volta a PANDAPE legítima sem candidatura que o filtro por origem derrubava, e tira as admissões
+ * cujo único link já está revogado.
+ *
+ * É um EXISTS correlacionado por `admissao_id`, com a linha interna ALIADA (`pl`) para não colidir
+ * com o `portal_links` do FROM externo das consultas que o usam. §A.6: a condição lê só `admissao_id`
+ * e `revogado_em`, sem PII.
+ */
+const TEM_LINK_VIVO: SQL = sql`exists (
+  select 1 from ${portalLinks} pl
+  where pl.admissao_id = ${admissoes.id}
+    and pl.revogado_em is null
+)`;
 
 /**
  * O QUE A LISTA ACEITA. TUDO MÚLTIPLO (§A.28), menos a busca por nome e as pontas de intervalo.
@@ -364,6 +415,7 @@ export class PortalPainelService {
       .where(
         and(
           notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+          TEM_LINK_VIVO,
           inArray(portalLinks.admissaoId, derivados.ids),
           ...condicoes,
         ),
@@ -383,6 +435,7 @@ export class PortalPainelService {
       .where(
         and(
           notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+          TEM_LINK_VIVO,
           inArray(portalLinks.admissaoId, derivados.ids),
           ...condicoes,
         ),
@@ -404,7 +457,16 @@ export class PortalPainelService {
 
     // OS MAPAS JÁ FORAM CALCULADOS no recorte inteiro (`idsQuePassam`) e são REUSADOS aqui: pedir
     // a régua de novo, só para a página, seria a segunda ida ao banco pelo mesmo número.
-    const cabecalhos = await this.cabecalhos(ids);
+    //
+    // A ORIGEM E O CONSULTOR entram como consultas EM LOTE pelos ids da página (`inArray` cada, nunca
+    // N+1), no mesmo molde de `cabecalhos`/`admissoesNoTime`/`termosAceitos`. O LIBERADOR é o fallback
+    // do consultor (ver `consultorQueEnviou` abaixo): mais uma consulta em lote, não N+1.
+    const [cabecalhos, comCandidaturaAS, consultores, liberadores] = await Promise.all([
+      this.cabecalhos(ids),
+      this.admissoesComCandidaturaAS(ids),
+      this.consultorQueEnviouMap(ids),
+      this.liberadorDoLinkVigenteMap(ids),
+    ]);
 
     const itens: LinhaDoPainelPortal[] = pagina.map((linha) => {
       const cabecalho = cabecalhos.get(linha.admissaoId);
@@ -429,6 +491,16 @@ export class PortalPainelService {
         // campo. Link antigo (anterior à migration 0122) vem nulo, e isso não é erro.
         origemEnvio: derivados.estados.get(linha.admissaoId)?.origem ?? null,
         linkJti: derivados.estados.get(linha.admissaoId)?.jti ?? null,
+        // DE ONDE A ADMISSÃO VEIO: tem candidatura de A&S ligada (`ATRACAO_SELECAO`) ou não
+        // (`MANUAL`). Presença da linha, não coluna nova.
+        origemAdmissao: comCandidaturaAS.has(linha.admissaoId) ? "ATRACAO_SELECAO" : "MANUAL",
+        // QUEM ENVIOU PELO FUNIL, já gravado em `as_candidatura_etapas`. O AUTOR DO FUNIL VENCE quando
+        // existe; na AUSÊNCIA dele (admissão sem saída do funil, ex.: PANDAPE sem candidatura que a
+        // regra nova passou a incluir), cai no LIBERADOR do link vigente (`portal_links.criado_por_id`).
+        // Só quando não há nem um nem outro é `null`, e a tela escreve "não informado"; nunca se inventa
+        // autor. O `??` encadeado é o tie-break explícito pedido: funil primeiro, liberador como fallback.
+        consultorQueEnviou:
+          consultores.get(linha.admissaoId) ?? liberadores.get(linha.admissaoId) ?? null,
       };
     });
 
@@ -464,7 +536,12 @@ export class PortalPainelService {
       .innerJoin(admissoes, eq(admissoes.id, portalLinks.admissaoId))
       .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
       .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
-      .where(notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]));
+      .where(
+        and(
+          notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+          TEM_LINK_VIVO,
+        ),
+      );
 
     const clientesMap = new Map<string, string>();
     const cargosMap = new Map<string, string>();
@@ -739,7 +816,13 @@ export class PortalPainelService {
       .from(portalLinks)
       .innerJoin(admissoes, eq(admissoes.id, portalLinks.admissaoId))
       .innerJoin(candidatos, LIGA_CANDIDATO)
-      .where(and(notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]), ...condicoes))
+      .where(
+        and(
+          notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+          TEM_LINK_VIVO,
+          ...condicoes,
+        ),
+      )
       .groupBy(portalLinks.admissaoId);
   }
 
@@ -784,6 +867,109 @@ export class PortalPainelService {
       .from(portalTermoAceite)
       .where(inArray(portalTermoAceite.admissaoId, ids));
     return new Set(linhas.map((l) => l.admissaoId));
+  }
+
+  /**
+   * QUAIS ADMISSÕES DA PÁGINA TÊM CANDIDATURA DE A&S LIGADA, EM LOTE.
+   *
+   * A existência da linha é a resposta: a admissão com candidatura veio da Atração & Seleção
+   * (`ATRACAO_SELECAO`); sem linha, é `MANUAL` (cadastro à mão ou webhook do Pandapé, que não passa
+   * pelo funil). Um `inArray` só sobre os ids da página, NUNCA N+1, no molde de `termosAceitos`.
+   *
+   * §A.6: lê só `admissao_id`, sem PII. `admissao_id` é anulável na tabela, mas o `inArray` já exclui
+   * o nulo (nenhum id da página é nulo); o filtro de tipo é cinto e suspensório.
+   */
+  private async admissoesComCandidaturaAS(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const linhas = await this.db
+      .selectDistinct({ admissaoId: asCandidaturas.admissaoId })
+      .from(asCandidaturas)
+      .where(inArray(asCandidaturas.admissaoId, ids));
+    return new Set(linhas.map((l) => l.admissaoId).filter((id): id is string => id !== null));
+  }
+
+  /**
+   * O NOME DO CONSULTOR QUE ENVIOU CADA ADMISSÃO PARA A ADMISSÃO, EM LOTE.
+   *
+   * O autor sai de `as_candidatura_etapas.por_id` no evento `ENVIADO_PARA_ADMISSAO`, pela candidatura
+   * ligada à admissão, e é LIDO, nunca escrito por esta frente (ele já é gravado pelo funil hoje).
+   *
+   * UM `inArray` SÓ, NUNCA N+1: a consulta junta `as_candidaturas` -> `as_candidatura_etapas` (do
+   * evento) -> `usuarios` (do nome), ordenada por `ocorrido_em` desc, e o primeiro a aparecer por
+   * admissão é o MAIS RECENTE (molde do desempate de `estadoDoLinkVigente`). O `innerJoin` com
+   * `usuarios` já descarta a etapa cujo `por_id` é nulo (set null na saída do usuário).
+   *
+   * §A.6: projeta só o NOME do usuário INTERNO, legítimo nesta tela interna autenticada (o mesmo
+   * recorte do nome do candidato e do autor do aceite). Nenhum CPF, e-mail ou id de pessoa.
+   */
+  private async consultorQueEnviouMap(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const linhas = await this.db
+      .select({
+        admissaoId: asCandidaturas.admissaoId,
+        nome: usuarios.nome,
+      })
+      .from(asCandidaturas)
+      .innerJoin(
+        asCandidaturaEtapas,
+        and(
+          eq(asCandidaturaEtapas.candidaturaId, asCandidaturas.id),
+          eq(asCandidaturaEtapas.situacao, "ENVIADO_PARA_ADMISSAO"),
+        ),
+      )
+      .innerJoin(usuarios, eq(usuarios.id, asCandidaturaEtapas.porId))
+      .where(inArray(asCandidaturas.admissaoId, ids))
+      .orderBy(desc(asCandidaturaEtapas.ocorridoEm));
+
+    const map = new Map<string, string>();
+    for (const l of linhas) {
+      // O PRIMEIRO A APARECER É O MAIS RECENTE (ordem desc acima): se houver mais de um evento
+      // ENVIADO_PARA_ADMISSAO para a mesma candidatura, fica o último.
+      if (l.admissaoId && !map.has(l.admissaoId)) map.set(l.admissaoId, l.nome);
+    }
+    return map;
+  }
+
+  /**
+   * O NOME DO LIBERADOR DO LINK VIGENTE, EM LOTE: o FALLBACK do "Consultor Que Enviou".
+   *
+   * A admissão que NÃO passou pelo funil de A&S (ex.: PANDAPE sem candidatura, que a regra do link
+   * vivo passou a incluir) não tem autor de saída do funil, e a coluna ficava "não informado". O
+   * diretor pediu que, nesse caso, apareça QUEM LIBEROU a admissão: o `criado_por_id` do link, que é
+   * quem emitiu o link do portal naquele gancho.
+   *
+   * VIGENTE É O MAIS RECENTE NÃO-REVOGADO, a mesma noção de `estadoDoLinkVigente`, e o fallback só
+   * existe porque a regra nova (`TEM_LINK_VIVO`) garante que toda admissão listada TEM ao menos um
+   * link não-revogado. O desempate é por `criado_em` desc, pegando o PRIMEIRO por admissão, no molde
+   * exato de `consultorQueEnviouMap`.
+   *
+   * O TIE-BREAK COM O FUNIL mora em `listar` (`consultores.get(id) ?? liberadores.get(id)`): o autor
+   * do funil VENCE, o liberador é SÓ fallback. Aqui não se decide precedência, só se resolve o nome.
+   *
+   * §A.6: projeta só o `admissao_id` e o NOME do usuário INTERNO (o liberador), legítimo nesta tela
+   * interna autenticada, o mesmo recorte do consultor e do candidato. NÃO projeta o id do link nem o
+   * token, e nenhum CPF, e-mail ou id de pessoa. O `innerJoin` com `usuarios` descarta a linha cujo
+   * `criado_por_id` tenha ficado órfão.
+   */
+  private async liberadorDoLinkVigenteMap(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const linhas = await this.db
+      .select({
+        admissaoId: portalLinks.admissaoId,
+        nome: usuarios.nome,
+      })
+      .from(portalLinks)
+      .innerJoin(usuarios, eq(usuarios.id, portalLinks.criadoPorId))
+      .where(and(inArray(portalLinks.admissaoId, ids), sql`${portalLinks.revogadoEm} is null`))
+      .orderBy(desc(portalLinks.criadoEm));
+
+    const map = new Map<string, string>();
+    // O PRIMEIRO A APARECER É O VIGENTE (ordem desc por `criado_em` acima): entre os não-revogados de
+    // uma mesma admissão, fica o mais recente, que é o link com que a operação trabalha hoje.
+    for (const l of linhas) {
+      if (!map.has(l.admissaoId)) map.set(l.admissaoId, l.nome);
+    }
+    return map;
   }
 
   /**

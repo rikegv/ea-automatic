@@ -59,6 +59,7 @@ import {
   rotuloDaOrigem,
   semRegua,
   situacaoDaLinha,
+  tagDaOrigemAdmissao,
   tituloDoProgresso,
   type CardId,
   type LinhaComJtiOpcional,
@@ -1232,10 +1233,22 @@ export default function PortalLinksPage() {
                         <Pill tone={link.tone}>{link.label}</Pill>
                       </td>
 
-                      {/* ORIGEM DO ENVIO. Link emitido antes desta frente não tem origem, e isso
-                          NÃO é defeito: a célula diz "não informado" (§A.11), nunca traço. */}
-                      <td className="text-center text-[12.5px] text-dim">
-                        {rotuloDaOrigem(l.origemEnvio)}
+                      {/* ORIGEM: a tag colorida é a ORIGEM DA ADMISSÃO (de ONDE ela veio: Atração E
+                          Seleção ou Manual), e abaixo, com a legenda "Envio:", fica a ORIGEM DO
+                          ENVIO que já existia (por qual CANAL o link saiu). As duas usam a palavra
+                          "Manual" para coisas diferentes, por isso a tag (admissão) é pill colorido
+                          e o canal vem rotulado: ver `tagDaOrigemAdmissao`. Link antigo sem origem
+                          de envio diz "não informado" (§A.11), nunca traço. */}
+                      <td className="text-[12.5px] text-dim">
+                        <div className="flex flex-col items-center gap-1">
+                          {(() => {
+                            const og = tagDaOrigemAdmissao(l.origemAdmissao);
+                            return <Pill tone={og.tone}>{og.label}</Pill>;
+                          })()}
+                          <span className="text-[11px] text-faint">
+                            Envio: {rotuloDaOrigem(l.origemEnvio)}
+                          </span>
+                        </div>
                       </td>
 
                       <td>

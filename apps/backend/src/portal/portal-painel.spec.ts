@@ -13,11 +13,18 @@ import {
   recorteDaPagina,
   type FatoDaAdmissaoNoPainel,
 } from "../domain/portal-painel";
-import { portalPendenciasNoTime, portalTermoAceite } from "../db/schema";
+import {
+  asCandidaturas,
+  portalLinks,
+  portalPendenciasNoTime,
+  portalTermoAceite,
+  usuarios,
+} from "../db/schema";
 import { PortalPainelController } from "./portal-painel.controller";
 import {
   AGUARDANDO_ACEITE_DO_TERMO,
   FAROIS_FORA_DO_PAINEL,
+  type LinhaDoPainelPortal,
   PortalPainelService,
   SEM_DOCUMENTO_PENDENTE,
 } from "./portal-painel.service";
@@ -579,9 +586,50 @@ function banco(dados: {
   termosAceitos?: string[];
   /** O que a consulta do CATÁLOGO (§A.37) devolveria: pares distintos do recorte. */
   catalogo?: { codCliente: string; cliente: string; cargoId: string; cargo: string }[];
+  /**
+   * QUEM TEM LINHA EM `as_candidaturas` ligada (admissão vinda do funil de A&S). Vira
+   * `origemAdmissao="ATRACAO_SELECAO"`; ausente é `MANUAL` (cadastro à mão ou webhook do Pandapé).
+   *
+   * MODELADO SEPARADO do `noTime` e do `termosAceitos` de propósito: a consulta
+   * `admissoesComCandidaturaAS` projeta só `admissaoId`, como as outras duas, e o fake as distingue
+   * pela COLUNA de origem (`asCandidaturas.admissaoId` vs. as de termo/queda), não pela forma da
+   * projeção. Sem isso, as três colidiriam na mesma lista.
+   */
+  candidaturasAS?: string[];
+  /**
+   * OS EVENTOS `ENVIADO_PARA_ADMISSAO` do funil: quem clicou "enviar para admissão", com o carimbo.
+   *
+   * O `consultor` é o NOME DE USUÁRIO (`as_candidatura_etapas.por_id` -> `usuarios.nome`), e nos
+   * testes ele é DISTINTO do nome do candidato de propósito: o fake anterior devolvia o nome do
+   * candidato para esta consulta (artefato do mock), e a §A.6 e o requisito exigem que saia o
+   * consultor, nunca a pessoa admitida. O `ocorridoEm` existe para provar o desempate: a consulta do
+   * serviço ordena por `ocorrido_em` desc e pega a MAIS RECENTE por admissão.
+   */
+  enviosParaAdmissao?: { admissaoId: string; consultor: string; ocorridoEm: Date }[];
+  /**
+   * O LIBERADOR DO LINK VIGENTE (`portal_links.criado_por_id` -> `usuarios.nome`), por admissão: o
+   * FALLBACK do "Consultor Que Enviou". Só é consultado quando NÃO há evento de saída do funil; o
+   * autor do funil vence. Ausente é "nenhum liberador", e aí o consultor cai em `null`.
+   */
+  liberadores?: { admissaoId: string; nome: string }[];
 }) {
   const links = dados.links;
-  const admissoesComLink = [...new Set(links.map((l) => l.admissaoId))];
+  /**
+   * O RECORTE `TEM_LINK_VIVO`, REPLICADO DO SQL DE PRODUÇÃO (decisão 2B do diretor).
+   *
+   * Produção recorta no `where` com um EXISTS correlacionado por `admissao_id` sobre `portal_links`
+   * com `revogado_em is null`, e essa cláusula NÃO é um `inArray(portalLinks.admissaoId, ...)`:
+   * `idsExigidos` (que só enxerga o recorte derivado) não a vê. Um fake que montasse as linhas
+   * prontas daria VERDE para um serviço que esquecesse o recorte, e a admissão só-revogada
+   * reapareceria na lista e nos cards só na tela. Aqui o fake HONRA o recorte no próprio universo de
+   * admissões com link: a admissão PERMANECE se tem pelo menos um link não-revogado
+   * (`revogadoEm == null`); some quando TODOS os seus links estão revogados. Assim, "some da
+   * lista/cards/catálogo" é comportamento, não tautologia: revogar o único link a tira, dar um link
+   * vivo a traz de volta. §A.6: lê só `admissao_id` e `revogado_em`, sem PII.
+   */
+  const temLinkVivo = (admissaoId: string) =>
+    links.some((l) => l.admissaoId === admissaoId && (l.revogadoEm ?? null) === null);
+  const admissoesComLink = [...new Set(links.map((l) => l.admissaoId))].filter(temLinkVivo);
 
   const resolver = (projecao?: Record<string, unknown>, condicao?: unknown): unknown[] => {
     const chaves = Object.keys(projecao ?? {});
@@ -627,6 +675,23 @@ function banco(dados: {
         })
         .sort((a, b) => b.encaminhadoEm.getTime() - a.encaminhadoEm.getTime());
     }
+    // AS DUAS CONSULTAS QUE PROJETAM `usuarios.nome`: o CONSULTOR do funil (`asCandidaturas.admissaoId`)
+    // e o LIBERADOR do link vigente (`portalLinks.admissaoId`, o fallback). As duas também projetam
+    // `nome`, como a de cabeçalho, então a distinção é pela COLUNA do `nome` (aqui `usuarios.nome`, lá
+    // `candidatos.nome`) e depois pela COLUNA do `admissaoId` (qual tabela). Sem isso o consultor
+    // sairia com o NOME DO CANDIDATO (o artefato do mock), e a §A.6 proíbe. Vem ANTES do `tem("nome")`.
+    if (projecao?.nome === usuarios.nome) {
+      // O LIBERADOR: `{ admissaoId: portalLinks.admissaoId, nome: usuarios.nome }`. Modelado como uma
+      // linha por admissão (o serviço já escolhe o vigente mais recente), default vazio.
+      if (projecao?.admissaoId === portalLinks.admissaoId) {
+        return (dados.liberadores ?? []).map((l) => ({ admissaoId: l.admissaoId, nome: l.nome }));
+      }
+      // O CONSULTOR DO FUNIL. A ordem desc por `ocorrido_em` é modelada aqui porque o `orderBy` do
+      // proxy é no-op; o serviço pega o PRIMEIRO por admissão (o mais recente).
+      return [...(dados.enviosParaAdmissao ?? [])]
+        .sort((a, b) => b.ocorridoEm.getTime() - a.ocorridoEm.getTime())
+        .map((e) => ({ admissaoId: e.admissaoId, nome: e.consultor }));
+    }
     if (tem("nome")) return dados.cabecalhos ?? [];
     if (tem("expiraEm")) return links;
     // AS DUAS CONSULTAS QUE PROJETAM SÓ `admissaoId` (a queda para o time e o aceite do termo) são
@@ -639,6 +704,13 @@ function banco(dados: {
     }
     if (projecao?.admissaoId === portalPendenciasNoTime.admissaoId) {
       return (dados.noTime ?? []).map((admissaoId) => ({ admissaoId }));
+    }
+    // A EXISTÊNCIA DA CANDIDATURA DE A&S (`admissoesComCandidaturaAS`): também projeta só
+    // `admissaoId`, e a TERCEIRA a entrar na mesma régua de distinção por tabela. A coluna de origem
+    // é `asCandidaturas.admissaoId`, distinta das duas acima. É a presença da linha que decide
+    // `origemAdmissao`, no molde do `termosAceitos`/`noTime`.
+    if (projecao?.admissaoId === asCandidaturas.admissaoId) {
+      return (dados.candidaturasAS ?? []).map((admissaoId) => ({ admissaoId }));
     }
     return [];
   };
@@ -830,6 +902,14 @@ describe("a lista, ponta a ponta contra o banco de mentirinha", () => {
         // ELA JÁ ACEITOU O TERMO: assim a coluna "documento atual" sai da RÉGUA (o próximo
         // pendente), e não do gate "Aguardando Aceite Do Termo". O gate tem bloco próprio.
         termosAceitos: ["adm-9"],
+        // VEIO DO FUNIL DE A&S, e quem enviou foi a Consultora Fulana: a linha completa carrega
+        // `origemAdmissao="ATRACAO_SELECAO"` e `consultorQueEnviou` = NOME DO USUÁRIO, distinto do
+        // candidato ("Candidato Sintético"). É a prova, na própria linha canônica, de que o campo não
+        // ecoa o nome da pessoa admitida (o artefato do mock que o autor do backend apontou).
+        candidaturasAS: ["adm-9"],
+        enviosParaAdmissao: [
+          { admissaoId: "adm-9", consultor: "Consultora Fulana", ocorridoEm: relativo(-3_000) },
+        ],
       }),
       regua({
         progresso: { "adm-9": { entregues: 7, total: 10 } },
@@ -859,7 +939,15 @@ describe("a lista, ponta a ponta contra o banco de mentirinha", () => {
       // O `jti` da LINHA vigente, que é o que a tela manda de volta em revogar, bloquear e
       // desbloquear. O banco de mentirinha não projeta `id`, então aqui ele é nulo.
       linkJti: null,
+      // DE ONDE A ADMISSÃO VEIO: tem candidatura de A&S ligada (presença da linha), então
+      // `ATRACAO_SELECAO`.
+      origemAdmissao: "ATRACAO_SELECAO",
+      // QUEM ENVIOU PELO FUNIL: o NOME DO USUÁRIO, nunca o do candidato. Este é o campo que o fake
+      // anterior preenchia com "Candidato Sintético" por casar a consulta pela forma da projeção.
+      consultorQueEnviou: "Consultora Fulana",
     });
+    // A GARANTIA EXPLÍCITA CONTRA O ARTEFATO: o consultor NÃO é o nome do candidato.
+    expect(pagina.itens[0].consultorQueEnviou).not.toBe("Candidato Sintético");
   });
 
   it("a linha NÃO carrega campo nenhum da Sala De Segurança", async () => {
@@ -905,6 +993,146 @@ describe("a lista, ponta a ponta contra o banco de mentirinha", () => {
     const pagina = await s.listar({ tamanho: "5000" });
     expect(pagina.tamanho).toBe(PAGINA_MAXIMA_PAINEL);
     expect(pagina.itens).toEqual([]);
+  });
+});
+
+// ══ A ORIGEM DA ADMISSÃO E O CONSULTOR QUE ENVIOU (§A.47, funil de A&S) ══════════════════════
+
+/**
+ * OS DOIS CAMPOS NOVOS, PROVADOS PELO COMPORTAMENTO DA DERIVAÇÃO, e não só pela forma da linha.
+ *
+ * `origemAdmissao` SAI DA EXISTÊNCIA de `as_candidaturas` ligada à admissão (`ATRACAO_SELECAO`), ou
+ * `MANUAL` quando não há (cadastro à mão ou webhook do Pandapé). `consultorQueEnviou` sai do evento
+ * `ENVIADO_PARA_ADMISSAO` em `as_candidatura_etapas`, pelo NOME DO USUÁRIO (`por_id` -> `usuarios`),
+ * o MAIS RECENTE por `ocorrido_em`. Nenhum dos dois é escrito por esta frente: os dois são LIDOS.
+ *
+ * §A.6: `consultorQueEnviou` é nome de USUÁRIO INTERNO (legítimo nesta tela interna autenticada,
+ * como o nome do candidato já é), NUNCA o nome, CPF, e-mail ou nascimento do candidato. O fake modela
+ * o consultor com `por_id` de um usuário DISTINTO do candidato justamente para que trocá-los apareça.
+ */
+describe("a origem da admissão e o consultor que enviou", () => {
+  // Candidato "Candidato Alvo" (o nome que a linha mostra na coluna NOME) e consultor "Rec. Beltrano"
+  // (o nome que a coluna do consultor mostra): dois nomes DISTINTOS, para que a confusão apareça.
+  const CAB = [
+    { admissaoId: "veio-as", nome: "Candidato Alvo", cargo: "Aux", cliente: "Loja 1" },
+    { admissaoId: "veio-manual", nome: "Candidato Beta", cargo: "Aux", cliente: "Loja 1" },
+  ];
+  const LINKS = [
+    { admissaoId: "veio-as", criadoEm: relativo(-20_000), expiraEm: relativo(3_600_000) },
+    { admissaoId: "veio-manual", criadoEm: relativo(-10_000), expiraEm: relativo(3_600_000) },
+  ];
+  const linhaDe = (p: { itens: LinhaDoPainelPortal[] }, id: string) =>
+    p.itens.find((i) => i.admissaoId === id);
+
+  /** (a) Com candidatura de A&S e etapa de envio por um usuário X: origem ATRACAO_SELECAO e o nome de X. */
+  it("admissão COM candidatura e envio por um usuário devolve ATRACAO_SELECAO e o NOME do consultor", async () => {
+    const s = new PortalPainelService(
+      banco({
+        links: LINKS,
+        cabecalhos: CAB,
+        candidaturasAS: ["veio-as"],
+        enviosParaAdmissao: [
+          { admissaoId: "veio-as", consultor: "Rec. Beltrano", ocorridoEm: relativo(-5_000) },
+        ],
+      }),
+      regua({}),
+    );
+    const linha = linhaDe(await s.listar({}), "veio-as");
+    expect(linha?.origemAdmissao).toBe("ATRACAO_SELECAO");
+    expect(linha?.consultorQueEnviou).toBe("Rec. Beltrano");
+    // E NÃO o nome do candidato: é o artefato do mock que esta cobertura existe para travar.
+    expect(linha?.consultorQueEnviou).not.toBe("Candidato Alvo");
+  });
+
+  /** (b) Sem candidatura (Pandapé/manual): origem MANUAL e consultor nulo. */
+  it("admissão SEM candidatura devolve MANUAL e consultor nulo", async () => {
+    const s = new PortalPainelService(
+      banco({ links: LINKS, cabecalhos: CAB, candidaturasAS: ["veio-as"] }),
+      regua({}),
+    );
+    const linha = linhaDe(await s.listar({}), "veio-manual");
+    expect(linha?.origemAdmissao).toBe("MANUAL");
+    expect(linha?.consultorQueEnviou).toBeNull();
+  });
+
+  /**
+   * (c) MAIS DE UMA etapa ENVIADO_PARA_ADMISSAO para a mesma admissão: fica a MAIS RECENTE por
+   * `ocorrido_em`. O serviço ordena desc e pega o primeiro por admissão; o fake devolve as linhas já
+   * ordenadas (o `orderBy` do proxy é no-op), então este caso prova o desempate do serviço.
+   */
+  it("com dois envios, o consultor é o do evento MAIS RECENTE", async () => {
+    const s = new PortalPainelService(
+      banco({
+        links: LINKS,
+        cabecalhos: CAB,
+        candidaturasAS: ["veio-as"],
+        enviosParaAdmissao: [
+          { admissaoId: "veio-as", consultor: "Consultor Antigo", ocorridoEm: relativo(-30_000) },
+          { admissaoId: "veio-as", consultor: "Consultor Recente", ocorridoEm: relativo(-2_000) },
+        ],
+      }),
+      regua({}),
+    );
+    const linha = linhaDe(await s.listar({}), "veio-as");
+    expect(linha?.consultorQueEnviou).toBe("Consultor Recente");
+  });
+
+  /**
+   * O DESEMPATE DEPENDE DO `ORDER BY` DA CONSULTA, e o banco de mentirinha o MODELA (pré-ordena desc),
+   * então o caso acima prova a dedup em memória do serviço DADA a ordem do banco, não que o banco é
+   * pedido em ordem. Esta asserção estrutural fecha a fresta: sem o `desc(ocorridoEm)`, a ordem viria
+   * arbitrária do Postgres e o "mais recente" deixaria de ser determinístico, no molde de como este
+   * arquivo já trava a agregação e o desempate do link vigente.
+   */
+  it("a consulta do consultor pede o evento em ordem decrescente por `ocorrido_em`", () => {
+    expect(CODIGO_SERVICO).toMatch(/desc\(asCandidaturaEtapas\.ocorridoEm\)/);
+    expect(CODIGO_SERVICO).toContain('eq(asCandidaturaEtapas.situacao, "ENVIADO_PARA_ADMISSAO")');
+  });
+
+  /**
+   * A CANDIDATURA DECIDE A ORIGEM, O ENVIO DECIDE O CONSULTOR, e eles são INDEPENDENTES: uma
+   * candidatura sem evento de envio gravado (caso de borda) é ATRACAO_SELECAO com consultor nulo, e
+   * não inventa autor retroativo (§A.3 regra 8).
+   */
+  it("candidatura sem evento de envio é ATRACAO_SELECAO com consultor nulo, sem inventar autor", async () => {
+    const s = new PortalPainelService(
+      banco({ links: LINKS, cabecalhos: CAB, candidaturasAS: ["veio-as"] }),
+      regua({}),
+    );
+    const linha = linhaDe(await s.listar({}), "veio-as");
+    expect(linha?.origemAdmissao).toBe("ATRACAO_SELECAO");
+    expect(linha?.consultorQueEnviou).toBeNull();
+  });
+
+  /**
+   * §A.6: os campos novos NÃO abrem porta para PII do candidato. A linha serializada não carrega CPF,
+   * e-mail, nascimento, nem o NOME DO CANDIDATO no campo do consultor. A asserção olha o objeto que
+   * SAI, no molde das varreduras de PII que o arquivo já faz.
+   */
+  it("os campos novos não trazem CPF, e-mail nem o nome do candidato para a linha", async () => {
+    const s = new PortalPainelService(
+      banco({
+        links: LINKS,
+        cabecalhos: CAB,
+        candidaturasAS: ["veio-as"],
+        enviosParaAdmissao: [
+          { admissaoId: "veio-as", consultor: "Rec. Beltrano", ocorridoEm: relativo(-5_000) },
+        ],
+      }),
+      regua({}),
+    );
+    const linha = linhaDe(await s.listar({}), "veio-as");
+    // O consultor é nome de usuário, não do candidato, e o candidato NÃO vaza pelo campo novo.
+    expect(linha?.consultorQueEnviou).toBe("Rec. Beltrano");
+    expect(linha?.consultorQueEnviou).not.toBe("Candidato Alvo");
+    // A linha não ganha campo de CPF/e-mail/nascimento por causa dos dois campos novos.
+    for (const proibido of ["cpf", "email", "dataNascimento", "nascimento", "candidatoCpf"]) {
+      expect(Object.keys(linha ?? {})).not.toContain(proibido);
+    }
+    // E o objeto inteiro, serializado, não carrega marcador de CPF (11 dígitos) nem arroba de e-mail.
+    const serializado = JSON.stringify(linha);
+    expect(serializado).not.toMatch(/\d{11}/);
+    expect(serializado).not.toContain("@");
   });
 });
 
@@ -1618,6 +1846,185 @@ describe("a coluna de ORIGEM do envio (§A.37: coluna, filtro e catálogo juntos
     );
     const catalogo = await s.catalogoDeFiltros();
     expect(catalogo.origens.map((o) => o.valor)).not.toContain(SEM_ORIGEM_DE_ENVIO);
+  });
+});
+
+// ══ A ADMISSÃO APARECE SSE TEM LINK VIVO (NÃO-REVOGADO), EM CÓDIGO (decisão 2B do diretor) ════════
+
+/**
+ * O GERENCIADOR DO PORTAL LISTA QUEM TEM LINK VIVO, E NADA MAIS. A admissão cujo ÚNICO link já foi
+ * revogado não é trabalho desta tela: não aparece na lista, não conta em NENHUM dos cinco cards e não
+ * vaza para o catálogo. A que tem ao menos um link não-revogado permanece, QUALQUER que seja a origem
+ * (Pandapé ou funil). A exclusão é no servidor (`TEM_LINK_VIVO`), nunca por filtro de tela, no mesmo
+ * molde do declínio (§A.16).
+ *
+ * SUBSTITUI O ANTIGO RECORTE POR ORIGEM (`SO_FLUXO_DO_FUNIL_DE_AS`): a trava P1 já impede o Fluxo 2
+ * (Pandapé direto) de GANHAR link, então "tem link vivo" já exclui a pré-admissão que nunca deveria
+ * recebê-lo, e TRAZ DE VOLTA a PANDAPE legítima sem candidatura que o filtro por origem derrubava.
+ *
+ * O FAKE REPLICA O RECORTE DO SQL DE PRODUÇÃO (ver `banco()`): sem isso, as linhas viriam prontas e a
+ * asserção "some da lista/cards/catálogo" seria tautológica. O cenário cruza (link vivo / só revogado)
+ * com (sem / com candidatura de A&S), todas acessadas, com termo aceito e em andamento (régua 2/10),
+ * para que o único que mude entre elas seja o estado do link e a candidatura. A só-revogada recebe um
+ * documento ÚNICO ("Título De Eleitor") para que a prova do catálogo seja a AUSÊNCIA desse valor.
+ *
+ * §A.6: o cenário é identificador técnico, contagem e carimbo; o único nome é de candidato SINTÉTICO
+ * e não há CPF em lugar nenhum.
+ */
+const REVOGADO = { ...VIVO, revogadoEm: relativo(-5_000) };
+
+const CENARIO_LINK_VIVO = () =>
+  new PortalPainelService(
+    banco({
+      links: [
+        // SÓ-REVOGADA: único link revogado -> SOME. É a PANDAPE sem candidatura que o filtro por
+        // origem tirava; agora sai pelo motivo certo (link morto), não pela origem.
+        { ...REVOGADO, id: "l-sr", admissaoId: "so-revogado", primeiroAcessoEm: relativo(-9_000), ultimoAcessoEm: relativo(-9_000) },
+        // PANDAPE SEM CANDIDATURA, COM LINK VIVO -> PERMANECE. A correção do 2B: o filtro antigo a
+        // derrubava por origem; agora ela fica, porque tem link vivo. origemAdmissao MANUAL.
+        { ...VIVO, id: "l-pv", admissaoId: "pandape-vivo", primeiroAcessoEm: relativo(-8_000), ultimoAcessoEm: relativo(-8_000) },
+        // MANUAL COM LINK VIVO -> PERMANECE.
+        { ...VIVO, id: "l-mv", admissaoId: "manual-vivo", primeiroAcessoEm: relativo(-7_000), ultimoAcessoEm: relativo(-7_000) },
+        // COM CANDIDATURA E LINK VIVO -> PERMANECE, origemAdmissao ATRACAO_SELECAO.
+        { ...VIVO, id: "l-cv", admissaoId: "com-cand-vivo", primeiroAcessoEm: relativo(-6_000), ultimoAcessoEm: relativo(-6_000) },
+      ],
+      cabecalhos: [
+        { admissaoId: "so-revogado", nome: "Sintético SR", cargo: "Aux", cliente: "Loja 1" },
+        { admissaoId: "pandape-vivo", nome: "Sintético PV", cargo: "Aux", cliente: "Loja 1" },
+        { admissaoId: "manual-vivo", nome: "Sintético MV", cargo: "Aux", cliente: "Loja 1" },
+        { admissaoId: "com-cand-vivo", nome: "Sintético CV", cargo: "Aux", cliente: "Loja 1" },
+      ],
+      // A CANDIDATURA DE A&S decide só `origemAdmissao`, não mais a visibilidade.
+      candidaturasAS: ["com-cand-vivo"],
+      termosAceitos: ["so-revogado", "pandape-vivo", "manual-vivo", "com-cand-vivo"],
+    }),
+    regua({
+      progresso: {
+        "so-revogado": { entregues: 2, total: 10 },
+        "pandape-vivo": { entregues: 2, total: 10 },
+        "manual-vivo": { entregues: 2, total: 10 },
+        "com-cand-vivo": { entregues: 2, total: 10 },
+      },
+      proximo: {
+        "so-revogado": "Título De Eleitor",
+        "pandape-vivo": "Carteira De Identidade",
+        "manual-vivo": "Carteira De Identidade",
+        "com-cand-vivo": "Carteira De Identidade",
+      },
+    }),
+  );
+
+describe("a admissão aparece sse tem link vivo (não-revogado), em código (2B)", () => {
+  /** (1) Só-revogada: sai da LISTA, dos CINCO CONTADORES e do CATÁLOGO. */
+  it("(1) admissão com o ÚNICO link revogado some da lista, dos cinco contadores e do catálogo", async () => {
+    const s = CENARIO_LINK_VIVO();
+
+    // LISTA: a só-revogada não aparece; as três com link vivo, sim.
+    const itens = (await s.listar({})).itens.map((i) => i.admissaoId).sort();
+    expect(itens).not.toContain("so-revogado");
+    expect(itens).toEqual(["com-cand-vivo", "manual-vivo", "pandape-vivo"]);
+    expect((await s.listar({})).total).toBe(3);
+
+    // OS CINCO CONTADORES: 3, não 4. A só-revogada não entra em nenhum.
+    const funil = await s.resumo();
+    expect(funil.encaminhados).toBe(3);
+    expect(funil.acessaram).toBe(3);
+    expect(funil.naoAcessaram).toBe(0);
+    expect(funil.concluiram).toBe(0);
+    expect(funil.intervencaoHumana).toBe(0);
+
+    // O CATÁLOGO: o documento ÚNICO da só-revogada não vaza; o das que permanecem, sim. O catálogo de
+    // documento sai do recorte de `encaminhados()`, o MESMO que a lista e os cards usam, então a
+    // exclusão o alcança por construção.
+    const catalogo = await s.catalogoDeFiltros();
+    const docs = catalogo.documentos.map((d) => d.valor);
+    expect(docs).not.toContain("Título De Eleitor");
+    expect(docs).toContain("Carteira De Identidade");
+  });
+
+  /**
+   * (2) PANDAPE SEM candidatura, COM link vivo: PERMANECE. É a correção do 2B em si: o filtro antigo
+   * por origem a derrubava; agora ela fica, porque tem link vivo. origemAdmissao MANUAL (sem candidatura).
+   */
+  it("(2) PANDAPE sem candidatura, com link vivo, PERMANECE (correção 2B): origemAdmissao MANUAL", async () => {
+    const linha = (await CENARIO_LINK_VIVO().listar({})).itens.find((i) => i.admissaoId === "pandape-vivo");
+    expect(linha, "a PANDAPE legítima com link vivo não pode mais cair por origem").toBeTruthy();
+    expect(linha?.origemAdmissao).toBe("MANUAL");
+  });
+
+  /** (3) MANUAL com link vivo: PERMANECE, origemAdmissao MANUAL. */
+  it("(3) MANUAL com link vivo PERMANECE, origemAdmissao MANUAL", async () => {
+    const linha = (await CENARIO_LINK_VIVO().listar({})).itens.find((i) => i.admissaoId === "manual-vivo");
+    expect(linha).toBeTruthy();
+    expect(linha?.origemAdmissao).toBe("MANUAL");
+  });
+
+  /** (4) Com candidatura e link vivo: PERMANECE, e deriva ATRACAO_SELECAO pela existência da linha. */
+  it("(4) com candidatura A&S e link vivo PERMANECE, origemAdmissao ATRACAO_SELECAO", async () => {
+    const linha = (await CENARIO_LINK_VIVO().listar({})).itens.find((i) => i.admissaoId === "com-cand-vivo");
+    expect(linha).toBeTruthy();
+    expect(linha?.origemAdmissao).toBe("ATRACAO_SELECAO");
+  });
+
+  /**
+   * A PROVA DE QUE NÃO É TAUTOLOGIA, lado A: sozinha, a só-revogada some POR INTEIRO. Se o fake não
+   * honrasse o recorte, esta linha apareceria e o funil contaria 1.
+   */
+  it("sozinha, a admissão só-revogada some por inteiro: lista vazia e funil zerado", async () => {
+    const s = new PortalPainelService(
+      banco({
+        links: [{ ...REVOGADO, id: "l-sr", admissaoId: "so-revogado", primeiroAcessoEm: relativo(-9_000), ultimoAcessoEm: relativo(-9_000) }],
+        cabecalhos: [{ admissaoId: "so-revogado", nome: "Sintético SR", cargo: "Aux", cliente: "Loja 1" }],
+        termosAceitos: ["so-revogado"],
+      }),
+      regua({ progresso: { "so-revogado": { entregues: 2, total: 10 } }, proximo: { "so-revogado": "Carteira De Identidade" } }),
+    );
+    expect((await s.listar({})).itens).toHaveLength(0);
+    expect((await s.listar({})).total).toBe(0);
+    expect(await s.resumo()).toMatchObject({ encaminhados: 0, acessaram: 0, concluiram: 0 });
+  });
+
+  /**
+   * A PROVA DE QUE NÃO É TAUTOLOGIA, lado B: a exclusão é pelo ESTADO DO LINK, não pelo id. A MESMA
+   * admissão, ao ganhar um link vivo ao lado do revogado, VOLTA para a lista e para o funil. É isto
+   * que separa "o fake replica o SQL" de "o fake conhece o nome da excluída".
+   */
+  it("dar um link vivo à MESMA admissão a traz de volta: a exclusão é pelo estado do link, não pelo id", async () => {
+    const s = new PortalPainelService(
+      banco({
+        links: [
+          { ...REVOGADO, id: "l-sr", admissaoId: "so-revogado", primeiroAcessoEm: relativo(-9_000), ultimoAcessoEm: relativo(-9_000) },
+          { ...VIVO, id: "l-novo", admissaoId: "so-revogado" },
+        ],
+        cabecalhos: [{ admissaoId: "so-revogado", nome: "Sintético SR", cargo: "Aux", cliente: "Loja 1" }],
+        termosAceitos: ["so-revogado"],
+      }),
+      regua({ progresso: { "so-revogado": { entregues: 2, total: 10 } }, proximo: { "so-revogado": "Carteira De Identidade" } }),
+    );
+    const linha = (await s.listar({})).itens.find((i) => i.admissaoId === "so-revogado");
+    expect(linha, "com um link vivo ao lado do revogado, a admissão volta ao painel").toBeTruthy();
+    expect((await s.resumo()).encaminhados).toBe(1);
+  });
+
+  /**
+   * O RECORTE RECORTA NAS QUATRO CONSULTAS DO UNIVERSO: o recorte de `encaminhados()` (lista, cards e
+   * catálogo de documento/origem), o TOTAL da lista, a PÁGINA e o CATÁLOGO de cliente/cargo. Uma delas
+   * sem o filtro faria a só-revogada reaparecer por uma das pontas, no mesmo molde do farol (§A.16).
+   */
+  it("o recorte TEM_LINK_VIVO recorta nas QUATRO consultas do universo", () => {
+    const usos = (CODIGO_SERVICO.match(/TEM_LINK_VIVO,/g) ?? []).length;
+    expect(usos).toBe(4);
+  });
+
+  /** §A.6: o recorte lê SÓ `admissao_id` e `revogado_em`, sem tocar nome, CPF, e-mail ou qualquer PII. */
+  it("§A.6: o recorte TEM_LINK_VIVO lê só admissao_id e revogado_em, sem PII", () => {
+    const inicio = CODIGO_SERVICO.indexOf("const TEM_LINK_VIVO");
+    expect(inicio).toBeGreaterThan(0);
+    const bloco = CODIGO_SERVICO.slice(inicio, CODIGO_SERVICO.indexOf("`;", inicio) + 2);
+    expect(bloco).toContain("admissao_id");
+    expect(bloco).toContain("revogado_em");
+    expect(bloco).toContain("admissoes.id");
+    expect(bloco).not.toMatch(/cpf|nome|email|nascimento|\bip\b/i);
   });
 });
 
