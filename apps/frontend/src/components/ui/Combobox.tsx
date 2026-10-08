@@ -70,6 +70,13 @@ interface ComboboxBase {
   invalido?: boolean;
   /** Mostra o botão de limpar quando há escolha. */
   limpavel?: boolean;
+  /**
+   * HINT NO TOM DO RÓTULO (opt-in). Por padrão o `hint` (texto do fim da linha) é `text-faint`, de
+   * propósito, para a maioria dos seletores. Quando o hint carrega informação que o usuário precisa
+   * LER (o CNPJ do cliente na Liberar Vaga), o cinza some no tema escuro; com `hintForte` ele passa a
+   * herdar a cor do rótulo (nome), legível nos dois temas. Aditivo: quem não liga segue com o cinza.
+   */
+  hintForte?: boolean;
 }
 
 type ComboboxSingle = ComboboxBase & {
@@ -169,6 +176,7 @@ export function Combobox(props: ComboboxProps) {
     searchable,
     invalido = false,
     limpavel = false,
+    hintForte = false,
   } = props;
   const multiple = props.multiple === true;
   const selecionados = useMemo<string[]>(
@@ -427,7 +435,11 @@ export function Combobox(props: ComboboxProps) {
               />
             )}
             <span className="truncate">{unico?.label ?? placeholder}</span>
-            {unico?.hint && <span className="flex-none text-[12.5px] text-faint">{unico.hint}</span>}
+            {unico?.hint && (
+              <span className={cn("flex-none text-[12.5px]", !hintForte && "text-faint")}>
+                {unico.hint}
+              </span>
+            )}
           </span>
         )}
 
@@ -544,7 +556,12 @@ export function Combobox(props: ComboboxProps) {
                       )}
                       <span className="truncate">{o.label}</span>
                       {o.hint && (
-                        <span className="ml-auto flex-none pl-2 text-[12px] text-faint">
+                        <span
+                          className={cn(
+                            "ml-auto flex-none pl-2 text-[12px]",
+                            !hintForte && "text-faint",
+                          )}
+                        >
                           {o.hint}
                         </span>
                       )}

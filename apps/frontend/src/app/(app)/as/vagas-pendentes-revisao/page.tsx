@@ -13,6 +13,7 @@ import { Combobox } from "@/components/ui/Combobox";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
+import { cnpjDigitos, formatarCnpj } from "@/lib/cnpj";
 import { dataBr, dataHoraBr, mensagemDoErro } from "@/lib/as-candidatos";
 import { TrilhaDaVaga, type Opcoes } from "@/components/as/vagas/TrilhaDaVaga";
 import { useLinhasServico } from "@/lib/as-linhas-servico";
@@ -243,26 +244,18 @@ export default function VagasPendentesDeRevisaoPage() {
    * achando por ele.
    */
   const optClientes = useMemo(() => {
+    // O CNPJ FICA SEMPRE NO FIM DA LINHA (o `hint` do Combobox, mesmo lugar de antes): padroniza o
+    // que até aqui variava entre CNPJ, código e vazio conforme o nome do cliente repetia ou não. O
+    // layout do seletor não muda, só o valor do hint passa a ser o CNPJ de todos. Sem CNPJ, mostra
+    // "Não Cadastrado". A busca casa por nome (rótulo), CNPJ formatado (hint) e CNPJ só dígitos +
+    // código (busca), então digitar "12345678000190" acha o "12.345.678/0001-90" sem a pontuação.
     const clientes: OpcaoCliente[] = opcoes.clientes;
-    const porNome = new Map<string, number>();
-    const porNomeCnpj = new Map<string, number>();
-    for (const c of clientes) {
-      porNome.set(c.rotulo, (porNome.get(c.rotulo) ?? 0) + 1);
-      porNomeCnpj.set(
-        `${c.rotulo}|${c.cnpj ?? ""}`,
-        (porNomeCnpj.get(`${c.rotulo}|${c.cnpj ?? ""}`) ?? 0) + 1,
-      );
-    }
-    return clientes.map((c) => {
-      const nomeRepetido = (porNome.get(c.rotulo) ?? 0) > 1;
-      const cnpjDesempata = !!c.cnpj && (porNomeCnpj.get(`${c.rotulo}|${c.cnpj}`) ?? 0) === 1;
-      return {
-        value: c.codCliente,
-        label: c.rotulo,
-        hint: nomeRepetido ? (cnpjDesempata ? (c.cnpj as string) : c.codCliente) : undefined,
-        busca: c.codCliente,
-      };
-    });
+    return clientes.map((c) => ({
+      value: c.codCliente,
+      label: c.rotulo,
+      hint: formatarCnpj(c.cnpj),
+      busca: `${cnpjDigitos(c.cnpj)} ${c.codCliente}`.trim(),
+    }));
   }, [opcoes.clientes]);
 
   /** A lista de cargos como a trilha a consome. Mesma derivação da Central de Vagas. */
