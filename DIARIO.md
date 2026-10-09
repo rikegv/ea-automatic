@@ -21158,3 +21158,40 @@ velho de "recusar sem CPF") e foram reescritos. Prova visual das 4 cenas em
 patch de UM hunk só (PREFIXO_CPF_PROVISORIO + ehCpfProvisorio), deixando fora o WIP da frente de de/para
 de cliente da fila e dos campos de origem/consultor de outra sessão. `portal-painel...tester.spec.ts`,
 `PropostaDeClienteDaPlanilha.tsx`, `docs/` e `deploy-local.sh` ficaram de fora por serem de outras frentes.
+
+## 2026-10-09 — Vaga por NOME + CÓDIGO no seletor da importação de candidato (Central de Vagas)
+
+**O que entrou.** No modal "Importar Candidatos" (`ImportarCandidatosModal.tsx`, cenário "Com Vaga"), o
+seletor da vaga passou a **exibir o código da vaga** como apoio ao lado do nome e a **achar a vaga pelo
+nome OU pelo código**, no mesmo padrão visual do CNPJ do cliente. Antes a busca por código já funcionava
+(campo `busca` oculto), faltava só EXIBIR o código, que o `Select` não suporta (só rótulo).
+
+**Como (recorte §A.14/§A.26).** UM arquivo, 3 edits: importa o `Combobox`, a opção ganha
+`hint: nome ? (v.codigo ?? undefined) : undefined`, e o campo troca `Select`→`Combobox` com `hintForte`
+(código legível no escuro). Reuso do padrão CNPJ (Combobox+hint da Liberar Vaga/vagas-pendentes-revisao;
+os irmãos `TrocarVagaModal`/`AlocarCandidatoModal` já usam Combobox+hint no mesmo folder). **NENHUM
+componente compartilhado tocado** (`Select.tsx`/`Combobox.tsx` intactos), então o §A.26 "avisar antes" não
+disparou. **Não muda o que é vinculado:** o submit manda `vagaId = vaga.id`; é só exibição e busca.
+
+**Commit e deploy.** `git add` nominal só de `ImportarCandidatosModal.tsx`, commit **`2bb07bc`** em cima do
+`origin/main` por worktree limpo (§A.49, o tree da sessão estava sujo com muitas outras frentes). Push
+fast-forward `59b7f58..2bb07bc`. `scripts/publicar-producao.sh` buildou do `origin/main` pristino e trocou
+os artefatos: **health OK (backend 3011/api/health 200 em 17s, frontend 3010/login 200)**. Produção
+servindo `2bb07bc`; backup/rollback em `ea-release-portal/*.bak-20261009-204407` (commit anterior c28d8e0).
+
+**Gate (§A.21/§A.25).** typecheck frontend RC=0, eslint RC=0, prettier ok, specs do modal 8/8
+(`ImportarCandidatosModal.curriculo` + `.espera-e-assinatura`). A suíte completa teve 1 falha
+PRÉ-EXISTENTE de outra frente (`portal/EntradaSemLink.spec.tsx`, portal sujo no tree de outra sessão),
+fora do meu arquivo e fora do meu commit. O build de produção (next build) do `origin/main` compilou
+`/as/candidatos` sem erro, que é o gate do artefato que subiu.
+
+**Validação do diretor (§A.13/§A.25).** Prova visual em `~/ost-central-vagas-codigo-prints/out` (4 cenas:
+lista com nome+código, duas "SIMULADO Vendedor Interno" separadas só por SIM-992041/SIM-992040; busca
+"992041"→1 vaga certa; busca por nome "Manutencao"→1; gatilho com a vaga escolhida mostrando nome+código).
+Validado na tela pelo diretor ("Aprovado pode subir").
+
+**Nota de infra (não corrigida, decisão do diretor).** `subir-preview.sh` roda todo preview do MESMO
+`apps/frontend` → todos compartilham UM `.next` → previews concorrentes se corrompem (os :3122 do Rike e
+:3124 caíram 404 com um terceiro :3126 no ar). Contorno desta frente: preview isolado em :3130 de uma
+cópia do frontend com `.next` próprio e `node_modules` symlinkado. Vale isolar o `.next` por preview no
+script um dia.
