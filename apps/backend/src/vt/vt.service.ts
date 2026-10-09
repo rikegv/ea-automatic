@@ -19,6 +19,9 @@ import { DRIZZLE } from "../db/drizzle.module";
 import {
   admissoes,
   candidatos,
+  clienteLojas,
+  clientes,
+  dadosVagaFolha,
   formularioVtConducoes,
   formulariosVt,
   tarifasTransporte,
@@ -141,7 +144,48 @@ export class VtService {
       { secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"), expiresIn: SESSAO_TTL },
     );
 
-    return { token, nome: candidato.nome };
+    // Endereço do LOCAL DE TRABALHO (não é dado do candidato): a tela mostra para o candidato traçar
+    // a rota e pedir o VT. `null` quando nenhuma fonte tem endereço (a tela esconde o bloco).
+    const localTrabalho = await this.resolverLocalTrabalho(admissao);
+
+    return { token, nome: candidato.nome, localTrabalho };
+  }
+
+  /**
+   * Endereço do local de trabalho da admissão, pela fonte mais específica que tiver endereço (§A.3):
+   * 1) UNIDADE: a loja da admissão (`cliente_lojas.endereco`), quando a admissão está numa loja;
+   * 2) VAGA: o endereço de folha do anexo `dados_vaga_folha`, pré-preenchido do padrão do cliente;
+   * 3) CLIENTE: o `endereco_padrao` do cliente, última fonte cadastrada.
+   * Nenhuma delas é PII do candidato (§A.6): é o endereço de onde ele vai trabalhar.
+   */
+  private async resolverLocalTrabalho(admissao: {
+    id: string;
+    lojaId: string | null;
+    codCliente: string | null;
+  }): Promise<string | null> {
+    if (admissao.lojaId) {
+      const loja = await this.db.query.clienteLojas.findFirst({
+        where: eq(clienteLojas.id, admissao.lojaId),
+      });
+      const end = loja?.endereco?.trim();
+      if (end) return end;
+    }
+
+    const folha = await this.db.query.dadosVagaFolha.findFirst({
+      where: eq(dadosVagaFolha.admissaoId, admissao.id),
+    });
+    const endFolha = folha?.endereco?.trim();
+    if (endFolha) return endFolha;
+
+    if (admissao.codCliente) {
+      const cliente = await this.db.query.clientes.findFirst({
+        where: eq(clientes.codCliente, admissao.codCliente),
+      });
+      const endCliente = cliente?.enderecoPadrao?.trim();
+      if (endCliente) return endCliente;
+    }
+
+    return null;
   }
 
   /** Tarifas ativas que alimentam a sugestão de valor por (cidade + tipo de transporte). */

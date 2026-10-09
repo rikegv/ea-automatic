@@ -115,6 +115,10 @@ export default function FormularioVtPage() {
   // Etapa A: identificação. Etapa B: formulário.
   const [token, setToken] = useState<string | null>(null);
   const [nome, setNome] = useState("");
+  // Endereço do local de trabalho (vem do backend na identificação). `null` = nenhuma fonte tem
+  // endereço: a tela não mostra o bloco, só um aviso curto.
+  const [localTrabalho, setLocalTrabalho] = useState<string | null>(null);
+  const [enderecoCopiado, setEnderecoCopiado] = useState(false);
 
   const [cpf, setCpf] = useState("");
   const [dataNascimento, setDataNascimento] = useState("");
@@ -154,12 +158,16 @@ export default function FormularioVtPage() {
     setErroId(null);
     setIdentificando(true);
     try {
-      const r = await apiFetch<{ token: string; nome: string }>("/vt/identificar", {
-        method: "POST",
-        body: { cpf: cpf.replace(/\D/g, ""), dataNascimento },
-      });
+      const r = await apiFetch<{ token: string; nome: string; localTrabalho: string | null }>(
+        "/vt/identificar",
+        {
+          method: "POST",
+          body: { cpf: cpf.replace(/\D/g, ""), dataNascimento },
+        },
+      );
       setToken(r.token);
       setNome(r.nome);
+      setLocalTrabalho(r.localTrabalho);
     } catch (err) {
       setErroId(
         err instanceof Error
@@ -372,6 +380,19 @@ export default function FormularioVtPage() {
     }
   }
 
+  /** Copia o endereço do local de trabalho para o candidato colar no app de rota. */
+  async function copiarEndereco() {
+    if (!localTrabalho) return;
+    try {
+      await navigator.clipboard.writeText(localTrabalho);
+      setEnderecoCopiado(true);
+      setTimeout(() => setEnderecoCopiado(false), 2000);
+    } catch {
+      // Clipboard bloqueado (contexto sem https, permissão negada): o endereço segue visível
+      // na tela para o candidato copiar à mão, então não há erro a mostrar.
+    }
+  }
+
   // ── Render: etapa A (centralizada na tela) ────────────────────────────────
   if (!token) {
     return (
@@ -471,6 +492,39 @@ export default function FormularioVtPage() {
         </h1>
         <p className="mt-1 text-xs leading-relaxed text-slate-500">{nome}</p>
       </header>
+
+      {/* Endereço do LOCAL DE TRABALHO (§A.17): o candidato copia para traçar a rota. Quando nenhuma
+          fonte tem endereço, mostra só um aviso curto em vez de quebrar a tela. */}
+      {localTrabalho ? (
+        <div className="mb-6 rounded-2xl border border-[#22B0DB]/25 bg-[#22B0DB]/[0.06] p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#1D8FB4]">
+                Endereço Do Local De Trabalho
+              </p>
+              <p className="mt-1.5 select-all break-words text-sm font-semibold leading-relaxed text-slate-800">
+                {localTrabalho}
+              </p>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                Use este endereço para traçar a sua rota e preencher as conduções abaixo.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={copiarEndereco}
+              aria-label="Copiar o endereço do local de trabalho"
+              className="shrink-0 rounded-lg border border-[#22B0DB]/40 bg-white px-3 py-2 text-[11px] font-bold text-[#1D8FB4] transition hover:bg-[#22B0DB]/10 active:scale-[0.97]"
+            >
+              {enderecoCopiado ? "Copiado" : "Copiar"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="mb-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[11px] leading-relaxed text-slate-500">
+          O endereço do local de trabalho ainda não está cadastrado. Se precisar dele para traçar a
+          rota, procure o RH.
+        </p>
+      )}
 
       <Secao titulo="Seu endereço">
         <Campo rotulo="CEP">
