@@ -21051,3 +21051,47 @@ então a trava "só preenche o que está nulo" impede o número real do ATS de e
 
 **Esta frente é o TERCEIRO escritor de `posicoes_oficiais`**, lida por `domain/candidatura` e por
 `ingestao-divergencias`. Declarado no código, com os leitores nomeados.
+
+---
+
+## 2026-10-09 — Central do Candidato: import de currículo por IA (PDF e Word) EM PRODUÇÃO
+
+Frente nova: importar candidato por **currículo .pdf/.docx** na Central de Candidatos, ao lado do
+import por planilha (intocado). Reusa a MESMA linha Vertex/Gemini (`auditar_documento`/`portal_extracao`),
+o MESMO modal e o MESMO caminho de cadastro; como currículo não tem colunas, a de-para vira **revisão
+de VALOR** editável (campo → valor lido). **Telefone virou LISTA** (`as_candidatos.telefones text[]`,
+`telefone = telefones[0]` espelho): N telefones por candidato. Campo ausente em branco, não bloqueia.
+Lote de vários. `.docx` via `python-docx`. **Nenhuma credencial nova** (mesma SA `ea-v2-automatic`).
+
+**Fábrica distribuída (§A.39):** coordenador escreveu o contrato `shared-types`; ia (ai-service
+`/curriculo/extrair`), backend (rotas `importar-curriculo/previa|aplicar`, migração 0153, multi-telefone)
+e frontend (ramo no `ImportarCandidatosModal`, passo de revisão) em paralelo; depois seguranca + tester.
+
+**Auditorias (§A.38):** `seguranca` **APROVADO** (log sem PII, binário efêmero/zerado, teto+allowlist,
+RBAC pelo MenuGuard, expurgo zera `telefones`, X-Internal-Token). `tester` cobriu R1-R6 e pegou um
+**bloqueio de gate** (guarda D1 da `fundacao.expurgo-identidades` exigia registrar a coluna nova): a
+sessão de Vagas rodou a suíte cheia e achou; registrado com prova comportamental, sem afrouxar a guarda.
+Uma super-proteção que o coordenador tinha metido (predicado a mais na cicatrização, quebrava furo-3)
+foi **revertida**.
+
+**Prova visual (§A.13):** ambiente ISOLADO temporário (worktree limpo do main + só esta frente, DB e
+portas próprios), extração **real Vertex/Gemini** dos 4 currículos sintéticos (CPF família 999, e-mail
+`.invalid`): PDF e Word lidos, 2 com DOIS telefones, 1 sem e-mail (em branco), 1 sem cidade (UF "não
+informado"). **Validado pelo diretor.** O 3120 foi deixado de lado de propósito: a ea-homolog está com
+WIP vivo de várias sessões e, por divergência de base (main-nova 66 atrás), subir ali misturaria código;
+o diretor optou pelo ambiente isolado (§A.32, com aval).
+
+**Recorte (§A.14):** `git add` nominal, só os 31 arquivos da frente; os compartilhados (`shared-types`,
+`tables.ts`, `as.module.ts`) entraram por `git apply --cached` SÓ dos meus hunks, sem arrastar o WIP das
+outras sessões no tree. Commit `877efa4` no `origin/main` (rebase limpo sobre os 19 commits que entraram
+no meio; build re-verificado em worktree limpo).
+
+**Publicado (§A.49):** migração 0153 aplicada na produção (`ea_automatic`): coluna `telefones` +
+backfill de **86.150** candidatos (`telefones = [telefone]`). Produção serve `877efa4`
+(`publicar-producao.sh`, health backend/frontend 200, backup de rollback). ai-service de prod reiniciado:
+`/curriculo/extrair` no ar (venv já com `python-docx`), health 200. Rotas novas respondem 401 (guard),
+não 404. Detalhe completo em `docs/MAPA-IMPORT-CURRICULO-IA.md`.
+
+**Propostas registradas (§A.31, fora do escopo):** (1) ATS (DIGAI/Pandapé) gravam só o `telefone`
+escalar por SQL cru, então candidato vindo delas nasce com `telefones=[]`; alinhar é frente própria.
+(2) o modal de edição de candidato edita um telefone só.
