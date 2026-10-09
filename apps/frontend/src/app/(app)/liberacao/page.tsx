@@ -1032,7 +1032,11 @@ export default function LiberacaoPage() {
    * antes de contaminar régua, Drive, kit e assinatura. A autoridade é o backend (que barra a chamada
    * direta); aqui a trava é para o consultor ver o motivo antes de clicar.
    */
-  const cpfAlvoInvalido = Boolean(alvo && !isValidCpf(alvo.candidatoCpf));
+  // CPF AUSENTE (marcador PROVISÓRIO, "CPF Pendente") NÃO bloqueia: libera e entra na esteira, e o CPF
+  // real chega depois pelo portal. Só o CPF REAL com dígito errado (erro de digitação) continua
+  // bloqueado aqui. `cpfAlvoInvalido` segue significando "CPF real inválido", que é o que trava a tela.
+  const cpfAlvoPendente = Boolean(alvo && ehCpfProvisorio(alvo.candidatoCpf));
+  const cpfAlvoInvalido = Boolean(alvo && !cpfAlvoPendente && !isValidCpf(alvo.candidatoCpf));
   /**
    * "Outros" marcado no EPI exige dizer QUAL é o item (o backend recusa sem isso). Não é regra nova:
    * é a mesma do benefício que exige valor, o que foi escolhido tem de ficar completo.
@@ -1346,12 +1350,13 @@ export default function LiberacaoPage() {
   const selecionadasObjs = rows.filter((r) => selecionados.includes(r.admissaoId));
   const loteDuplicatas = selecionadasObjs.filter((r) => r.possivelDuplicata);
   // CPF inválido (item 9, Frente A): sai do lote pelo mesmo mecanismo da duplicata. Uma linha errada
-  // não derruba as outras N, e o nome dela aparece no modal para o Master saber quem corrigir.
+  // não derruba as outras N, e o nome dela aparece no modal para o Master saber quem corrigir. CPF
+  // AUSENTE (marcador PROVISÓRIO) NÃO é inválido: entra no lote e é liberado como CPF Pendente.
   const loteCpfInvalido = selecionadasObjs.filter(
-    (r) => !r.possivelDuplicata && !isValidCpf(r.candidatoCpf),
+    (r) => !r.possivelDuplicata && !ehCpfProvisorio(r.candidatoCpf) && !isValidCpf(r.candidatoCpf),
   );
   const loteSelecionadasOk = selecionadasObjs.filter(
-    (r) => !r.possivelDuplicata && isValidCpf(r.candidatoCpf),
+    (r) => !r.possivelDuplicata && (ehCpfProvisorio(r.candidatoCpf) || isValidCpf(r.candidatoCpf)),
   );
   // ── ALTO VOLUME (onda 2), LOTE. Mesmas quatro regras do individual, sobre o cliente do lote. ──
   const loteAvProjetos = useMemo(

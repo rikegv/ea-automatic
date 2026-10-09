@@ -37,6 +37,9 @@ type Row = Record<string, unknown>;
  */
 const CPF_VALIDO = "52998224725";
 const CPF_INVALIDO = "52998224726";
+// CPF AUSENTE: marcador PROVISÓRIO ("CPF Pendente"), 11 chars começando com PROV. `isValidCpf` o
+// reprova (sem 11 dígitos) e `ehCpfProvisorio` o reconhece: ele LIBERA, diferente do CPF_INVALIDO.
+const CPF_PENDENTE = "PROV0ABCDEF";
 
 interface Cenario {
   /** `null` = admissão sem origem Pandapé (nada a puxar). Ausente = veio do Pandapé. */
@@ -336,6 +339,22 @@ describe("AdmissoesService.liberarEmLote", () => {
     expect(r.falhas).toHaveLength(1);
     expect(r.falhas[0].motivo).toContain("dígito verificador");
     expect(ctx.contarTransacoes()).toBe(1); // a do CPF errado nem abriu transação
+  });
+
+  it("pré-admissão com CPF AUSENTE (marcador PROVISÓRIO) É liberada como CPF Pendente", async () => {
+    // Continuidade do 66a0302: o marcador PROV é "CPF Pendente", NÃO "CPF inválido". Quem foi enviado
+    // sem CPF entra na esteira; o CPF real chega depois pelo portal (corrigirCpf). Diferente do CPF
+    // real com dígito errado (teste acima), que segue barrado por ser erro de digitação.
+    const ids = ["a1", "a2"];
+    const ctx = montar({
+      admissoes: [aguardando("a1"), { ...aguardando("a2"), candidatoCpf: CPF_PENDENTE }],
+      regua: REGUA_OK,
+    });
+    const r = await rodarLote(ctx, ids);
+
+    expect(r.liberadas.map((l) => l.admissaoId)).toEqual(["a1", "a2"]);
+    expect(r.falhas).toHaveLength(0);
+    expect(ctx.contarTransacoes()).toBe(2); // a do marcador TAMBÉM nasceu na esteira
   });
 
   it("par sem régua documental barra o lote inteiro, antes de qualquer transação", async () => {

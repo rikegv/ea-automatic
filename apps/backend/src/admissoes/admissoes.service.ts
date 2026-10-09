@@ -1223,8 +1223,20 @@ export class AdmissoesService {
     if (adm.farolGlobal !== "AGUARDANDO_LIBERACAO") {
       throw new ConflictException("Esta admissão não está aguardando liberação.");
     }
-    if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
-    await this.travarDuplicidadeDeCpf(adm.id, adm.candidatoCpf, dto.aceiteDuplicidade);
+    // CPF AUSENTE (marcador PROVISÓRIO, "CPF Pendente") LIBERA e entra na esteira: o CPF real chega
+    // depois pelo portal e reaponta via `corrigirCpf` (ator SISTEMA, já existente). Só o CPF REAL com
+    // dígito verificador errado (erro de digitação, não ausência) continua barrado aqui. Mesmo
+    // mecanismo do 66a0302: `ehCpfProvisorio` é a FONTE ÚNICA do marcador, sem caminho paralelo.
+    const cpfPendenteNaLiberacao = ehCpfProvisorio(adm.candidatoCpf);
+    if (!cpfPendenteNaLiberacao && !isValidCpf(adm.candidatoCpf)) {
+      throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
+    }
+    // Dedup por CPF não se aplica a quem AINDA NÃO TEM CPF: o marcador é único por candidato e a
+    // reconciliação do duplicado acontece quando o CPF real chega (`corrigirCpf`). Sem CPF, não há o
+    // que deduplicar, e `normalizeCpf` degradaria o marcador. Com CPF real, a trava segue inteira.
+    if (!cpfPendenteNaLiberacao) {
+      await this.travarDuplicidadeDeCpf(adm.id, adm.candidatoCpf, dto.aceiteDuplicidade);
+    }
     // UNIFORME (OST Onda 3, item 1): a RESPOSTA é obrigatória para liberar individualmente. Ter
     // uniforme não bloqueia nada; não ter respondido, sim. A trava mora aqui, e NÃO no miolo
     // compartilhado, porque o LOTE segue a regra dos demais campos (o que vai em branco vira
@@ -1942,9 +1954,12 @@ export class AdmissoesService {
             "Possível duplicata: precisa ser liberada individualmente, não em massa.",
           );
         }
-        // MESMA trava do individual, por linha: uma pré-admissão com CPF inválido não derruba o lote
-        // inteiro, ela falha sozinha e aparece nominalmente no relatório final.
-        if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
+        // MESMA régua do individual, por linha: CPF ausente (marcador PROVISÓRIO) PASSA e entra na
+        // esteira como CPF Pendente; só o CPF REAL com dígito errado segue barrado, e aí a linha falha
+        // sozinha (sem derrubar o lote) e aparece nominalmente no relatório final.
+        if (!ehCpfProvisorio(adm.candidatoCpf) && !isValidCpf(adm.candidatoCpf)) {
+          throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
+        }
 
         // LOJA POR LINHA (Q9): cada admissão recebe a SUA loja. A validação é por linha e fica
         // DENTRO do try de propósito: loja errada numa pessoa derruba só aquela linha, que aparece
