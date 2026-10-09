@@ -22,6 +22,7 @@ import {
 import { apiFetch, apiUpload } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { Combobox } from "@/components/ui/Combobox";
 import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
 import { Select } from "@/components/ui/Select";
@@ -156,12 +157,19 @@ export function ImportarCandidatosModal({
 
   const optVagas = useMemo(
     () =>
-      vagasAbertas.map((v) => ({
-        value: v.id,
-        label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome",
-        // A busca acha também pelo código do processo e pelo cliente, sem poluir o rótulo (§A.35).
-        busca: [v.codigo, v.clienteNome, v.cargoNome].filter(Boolean).join(" "),
-      })),
+      vagasAbertas.map((v) => {
+        const nome = v.nomeDivulgacao ?? null;
+        return {
+          value: v.id,
+          label: nome ?? v.codigo ?? "Vaga sem nome",
+          // Código da vaga como informação secundária ao lado do nome, no mesmo padrão do CNPJ do
+          // cliente (§A.35): só vira hint quando há nome, para não repetir o código quando ele já é
+          // o próprio rótulo da vaga em rascunho sem nome.
+          hint: nome ? (v.codigo ?? undefined) : undefined,
+          // A busca acha também pelo código do processo e pelo cliente, sem poluir o rótulo (§A.35).
+          busca: [v.codigo, v.clienteNome, v.cargoNome].filter(Boolean).join(" "),
+        };
+      }),
     [vagasAbertas],
   );
 
@@ -645,14 +653,18 @@ export function ImportarCandidatosModal({
           {cenario === "COM_VAGA" && (
             <label className="grid gap-1">
               <span className="ds-label">Vaga</span>
-              {/* §A.35: seletor do design system com busca; a lista pode ter dezenas de vagas. */}
-              <Select
+              {/* §A.35: seletor do design system com busca; a lista pode ter dezenas de vagas. O
+                  Combobox mostra o código da vaga como apoio ao lado do nome e acha a vaga tanto pelo
+                  nome quanto pelo código, no mesmo padrão do CNPJ do cliente. `hintForte` mantém o
+                  código legível no tema escuro. */}
+              <Combobox
                 value={vagaId}
                 onChange={setVagaId}
                 options={optVagas}
                 placeholder="Escolha a vaga"
                 ariaLabel="Vaga para vincular os importados"
                 searchable
+                hintForte
               />
               {optVagas.length === 0 && (
                 <span className="text-[11.5px] text-faint">
