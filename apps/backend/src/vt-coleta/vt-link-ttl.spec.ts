@@ -49,6 +49,10 @@ function banco(): Database {
           dataNascimento: "1990-05-17",
         }),
       },
+      // O emissor também resolve o endereço do local de trabalho (claim `lt`). A admissão sintética
+      // não tem loja nem cliente, então só a folha é consultada; sem endereço, o token sai sem `lt`,
+      // o que não afeta o prazo que este arquivo trava.
+      dadosVagaFolha: { findFirst: async () => undefined },
     },
   } as unknown as Database;
 }

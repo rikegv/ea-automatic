@@ -47,6 +47,11 @@ export interface DadosTokenVt {
   cpf: string;
   /** Data de nascimento como string ISO `yyyy-mm-dd` (formato do `date` do Postgres). */
   dataNascimento: string;
+  /**
+   * Endereço do local de trabalho (§A.17), para o app mostrar ao candidato traçar a rota. Opcional:
+   * ausente quando a admissão não tem nenhuma fonte de endereço. Não é PII do candidato (§A.6).
+   */
+  localTrabalho?: string | null;
 }
 
 /** Claims do token do link de VT (o que o app Firebase lê e confere). */
@@ -57,6 +62,11 @@ export interface ClaimsTokenVt {
   cpf: string;
   /** sha256 hex de `${cpf}|${dataNascimento}`. Prova de posse de CPF + data sem expor a data crua. */
   nascHash: string;
+  /**
+   * Endereço do local de trabalho (§A.17). Opcional: só vai no token quando a admissão tem endereço.
+   * Token antigo sem `lt` segue válido; o app apenas não mostra o bloco. Não é PII do candidato (§A.6).
+   */
+  lt?: string;
   /** Emitido em (epoch, segundos). */
   iat: number;
   /** Expira em (epoch, segundos). */
@@ -111,6 +121,10 @@ export function gerarTokenVt(
     exp,
     jti: randomUUID(),
   };
+  // `lt` só entra quando há endereço: assim o token de quem não tem local de trabalho cadastrado sai
+  // byte a byte como antes, e o app distingue "sem endereço" de "token antigo".
+  const localTrabalho = dados.localTrabalho?.trim();
+  if (localTrabalho) claims.lt = localTrabalho;
   const entrada = `${b64urlDeJson(HEADER)}.${b64urlDeJson(claims)}`;
   const assinatura = sign(null, Buffer.from(entrada, "utf8"), chavePrivada);
   return `${entrada}.${base64url(assinatura)}`;

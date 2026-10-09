@@ -59,6 +59,37 @@ describe("token do link de VT (Ed25519 / EdDSA)", () => {
     expect(claims.exp).toBe(iat + ttlDias * 24 * 60 * 60);
   });
 
+  it("inclui o endereço do local de trabalho no claim `lt` quando ele existe", () => {
+    const chavePrivada = carregarChavePrivadaVt(privadaBase64)!;
+    const agora = new Date("2026-07-24T12:00:00.000Z");
+    const comEndereco = gerarTokenVt(
+      { ...dados, localTrabalho: "  Avenida Paulista, 1000, São Paulo, SP  " },
+      7,
+      chavePrivada,
+      agora,
+    );
+    // Vai aparado (trim), para o app mostrar sem espaços sobrando.
+    expect(verificarTokenVt(comEndereco, publicaPem, agora).lt).toBe(
+      "Avenida Paulista, 1000, São Paulo, SP",
+    );
+  });
+
+  it("omite o claim `lt` quando não há endereço (ausente, vazio ou nulo)", () => {
+    const chavePrivada = carregarChavePrivadaVt(privadaBase64)!;
+    const agora = new Date("2026-07-24T12:00:00.000Z");
+    // Campo ausente, só espaços ou nulo: nenhum cria o claim, então o app distingue "sem endereço"
+    // (bloco escondido) de "token com endereço". (Tokens não são byte a byte iguais: o `jti` é um
+    // uuid novo a cada emissão.)
+    for (const dadosSemEndereco of [
+      dados,
+      { ...dados, localTrabalho: "   " },
+      { ...dados, localTrabalho: null },
+    ]) {
+      const token = gerarTokenVt(dadosSemEndereco, 7, chavePrivada, agora);
+      expect(verificarTokenVt(token, publicaPem, agora).lt).toBeUndefined();
+    }
+  });
+
   it("recusa um token expirado", () => {
     const chavePrivada = carregarChavePrivadaVt(privadaBase64)!;
     const emitido = new Date("2026-07-01T00:00:00.000Z");

@@ -344,6 +344,43 @@
     c.appendChild(controle);
     return c;
   }
+  // Bloco do endereco do local de trabalho (§A.17): o candidato copia para tracar a rota do VT.
+  function blocoLocalTrabalho(endereco) {
+    const bloco = el("div", "bloco-local");
+    const topo = el("div", "bloco-local-topo");
+    const rot = el("p", "bloco-local-rotulo");
+    rot.textContent = "Endereco Do Local De Trabalho";
+    const btn = el("button", "bloco-local-copiar", {
+      type: "button",
+      "aria-label": "Copiar o endereco do local de trabalho",
+    });
+    btn.textContent = "Copiar";
+    btn.addEventListener("click", function () {
+      try {
+        navigator.clipboard.writeText(endereco).then(
+          function () {
+            btn.textContent = "Copiado";
+            setTimeout(function () {
+              btn.textContent = "Copiar";
+            }, 2000);
+          },
+          function () {},
+        );
+      } catch (_e) {
+        // Clipboard bloqueado (sem https, permissao negada): o endereco segue visivel para copiar a mao.
+      }
+    });
+    topo.appendChild(rot);
+    topo.appendChild(btn);
+    const end = el("p", "bloco-local-endereco");
+    end.textContent = endereco;
+    const ajuda = el("p", "bloco-local-ajuda");
+    ajuda.textContent = "Use este endereco para tracar a sua rota e preencher as conducoes abaixo.";
+    bloco.appendChild(topo);
+    bloco.appendChild(end);
+    bloco.appendChild(ajuda);
+    return bloco;
+  }
   function secao(titulo, acessorio) {
     const s = el("section", "secao");
     const cab = el("div", "secao-cabeca");
@@ -480,6 +517,11 @@
     header.appendChild(h);
     header.appendChild(nc);
     root.appendChild(header);
+
+    // Endereco do LOCAL DE TRABALHO (§A.17): so aparece quando o token traz o claim `lt` (admissao
+    // com endereco cadastrado). Token antigo, ou admissao sem endereco, nao mostra o bloco.
+    var lt = S.claims && typeof S.claims.lt === "string" ? S.claims.lt.trim() : "";
+    if (lt) root.appendChild(blocoLocalTrabalho(lt));
 
     // Endereco
     const sEnd = secao("Seu endereco");

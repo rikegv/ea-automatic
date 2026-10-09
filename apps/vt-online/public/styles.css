@@ -668,3 +668,54 @@ h1.saudacao {
     flex: 1;
   }
 }
+
+/* Bloco do endereco do local de trabalho (§A.17): mostrado abaixo da saudacao. */
+.bloco-local {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid rgba(34, 176, 219, 0.28);
+  border-radius: 16px;
+  background: rgba(34, 176, 219, 0.06);
+}
+.bloco-local-topo {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bloco-local-rotulo {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--azul-escuro, #1d8fb4);
+}
+.bloco-local-copiar {
+  flex: 0 0 auto;
+  border: 1px solid rgba(34, 176, 219, 0.4);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--azul-escuro, #1d8fb4);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.bloco-local-copiar:hover {
+  background: rgba(34, 176, 219, 0.1);
+}
+.bloco-local-endereco {
+  margin: 8px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--slate-800, #1e293b);
+  word-break: break-word;
+}
+.bloco-local-ajuda {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--slate-500, #64748b);
+}

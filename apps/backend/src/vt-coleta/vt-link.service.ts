@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissoes, candidatos } from "../db/schema";
+import { resolverLocalTrabalho } from "../vt/local-trabalho";
 import {
   carregarChavePrivadaVt,
   gerarTokenVt,
@@ -119,10 +120,14 @@ export class VtLinkService {
       );
     }
 
+    // Endereço do local de trabalho (§A.17): vai assinado no token para o app mostrar OFFLINE, abaixo
+    // do "Olá, [nome]". Mesma resolução do formulário /vt (fonte única). `null` = não entra no token.
+    const localTrabalho = await resolverLocalTrabalho(this.db, admissao);
+
     const ttl = this.ttlDaEmissao(opcoes);
     const agora = new Date();
     const token = gerarTokenVt(
-      { admissaoId, nome: candidato.nome, cpf, dataNascimento },
+      { admissaoId, nome: candidato.nome, cpf, dataNascimento, localTrabalho },
       ttl,
       chavePrivada,
       agora,
