@@ -321,6 +321,9 @@ export class CandidatosService {
    */
   async criar(dto: CriarCandidatoDto, autor: AuthUser): Promise<AsCandidatoFicha> {
     const cpf = this.cpfOuNulo(dto.cpf);
+    // O ESPELHO `telefone = telefones[0]` é resolvido AQUI, na única porta de insert do domínio: a
+    // lista (currículo) ou o escalar (planilha/manual) entram, o par coerente sai. Ver o helper.
+    const { telefone, telefones } = telefonesEPrincipal(dto.telefones, dto.telefone);
 
     if (cpf) {
       // §A.6: O NOME NÃO É SELECIONADO, e a ausência dele aqui é metade da guarda. A consulta
@@ -341,7 +344,8 @@ export class CandidatosService {
             nome: dto.nome.trim(),
             cpf,
             email: texto(dto.email),
-            telefone: texto(dto.telefone),
+            telefone,
+            telefones,
             dataNascimento: texto(dto.dataNascimento),
             cidade: texto(dto.cidade),
             uf: dto.uf ?? null,
@@ -1130,6 +1134,8 @@ export class CandidatosService {
       cpf: c.cpf,
       email: c.email,
       telefone: c.telefone,
+      /** A LISTA da coluna nova; `telefone` acima é o primeiro dela (espelho). Vazia quando não há. */
+      telefones: c.telefones,
       dataNascimento: c.dataNascimento,
       cidade: c.cidade,
       uf: c.uf,
@@ -4798,6 +4804,35 @@ function dataBr(d: Date): string {
 function texto(v: string | null | undefined): string | null {
   const t = v?.trim();
   return t ? t : null;
+}
+
+/**
+ * ─ O ESPELHO `telefone = telefones[0]`, RESOLVIDO NUM LUGAR SÓ ──────────────────────────────────
+ *
+ * Recebe a LISTA (import por currículo) e o ESCALAR (cadastro manual, planilha) e devolve o par
+ * coerente que o banco grava. A regra (decisão do diretor): o primeiro não vazio da lista é o
+ * `telefone` principal; sem lista, o escalar é a fonte e a coluna vira `[telefone]`. A lista é
+ * aparada, sem vazios e sem duplicatas, para o espelho não gravar lixo. Cada item é cortado no
+ * tamanho da coluna (`varchar(40)`), como todo texto do cadastro.
+ */
+export function telefonesEPrincipal(
+  lista: string[] | undefined,
+  escalar: string | null | undefined,
+): { telefone: string | null; telefones: string[] } {
+  const vistos = new Set<string>();
+  const limpos: string[] = [];
+  for (const bruto of lista ?? []) {
+    const t = (bruto ?? "").trim().slice(0, 40);
+    if (t && !vistos.has(t)) {
+      vistos.add(t);
+      limpos.push(t);
+    }
+  }
+  if (limpos.length > 0) {
+    return { telefone: limpos[0], telefones: limpos };
+  }
+  const principal = texto(escalar);
+  return { telefone: principal, telefones: principal ? [principal] : [] };
 }
 
 /** Minúsculas sem acento, para a busca por nome casar "joao" com "João". */

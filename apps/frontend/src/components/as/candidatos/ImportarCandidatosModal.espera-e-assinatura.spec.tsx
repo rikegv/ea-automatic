@@ -75,6 +75,8 @@ function abrirNoUpload() {
       onImportado={() => {}}
     />,
   );
+  // A fonte passou a ser escolhida no cenário: "Planilha" mantém o caminho histórico.
+  fireEvent.click(screen.getByRole("button", { name: /^Planilha/ }));
   fireEvent.click(screen.getByRole("button", { name: /Sem Vaga/ }));
   fireEvent.click(screen.getByRole("button", { name: "Avançar" }));
   return screen.getByLabelText("Planilha de candidatos") as HTMLInputElement;

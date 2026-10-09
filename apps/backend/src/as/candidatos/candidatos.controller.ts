@@ -9,10 +9,11 @@ import {
   Patch,
   Post,
   UploadedFile,
+  UploadedFiles,
   UseFilters,
   UseInterceptors,
 } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import {
   CENARIOS_IMPORT_CANDIDATO,
   type CenarioImportCandidato,
@@ -29,12 +30,21 @@ import { CurrentUser } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
 import { CandidatosService } from "./candidatos.service";
 import { CandidatosImportService } from "./candidatos-import.service";
-import { exigirPlanilhaNoTeto, OPCOES_UPLOAD_PLANILHA } from "../../planilha/upload";
+import {
+  CandidatosImportCurriculoService,
+  type ArquivoCurriculo,
+} from "./candidatos-import-curriculo.service";
+import {
+  exigirPlanilhaNoTeto,
+  OPCOES_UPLOAD_CURRICULO,
+  OPCOES_UPLOAD_PLANILHA,
+} from "../../planilha/upload";
 import { FiltroUploadPlanilha } from "../../planilha/upload-erro.filter";
 import {
   AdicionarEmLoteDto,
   AdicionarPorFiltroDto,
   AlocarEmVagaDto,
+  AplicarImportCurriculoDto,
   BuscarCandidatosDto,
   CandidaturasDaVagaDto,
   CriarCandidatoDto,
@@ -84,6 +94,7 @@ export class CandidatosController {
   constructor(
     private readonly candidatos: CandidatosService,
     private readonly candidatosImport: CandidatosImportService,
+    private readonly candidatosImportCurriculo: CandidatosImportCurriculoService,
   ) {}
 
   // ── A PESSOA ──────────────────────────────────────────────────────────────
@@ -607,6 +618,57 @@ export class CandidatosController {
       },
       user,
     );
+  }
+
+  // ── IMPORTAÇÃO POR CURRÍCULO (.pdf/.docx, lote, caminhos fixos antes do `:id`) ─────────────
+
+  /*
+   * ─ MESMA CONTROLLER, MESMA RAZÃO DE RBAC QUE O IMPORT POR PLANILHA ────────────────────────────
+   *
+   * O `MenuGuard` resolve o coringa PELO NOME DA CLASSE (`"CandidatosController.*"`): uma controller
+   * nova para o import de currículo nasceria ABERTA a qualquer sessão válida, e o que ela oferece é
+   * ESCRITA EM MASSA de dado pessoal. Mora aqui, como o import por planilha. Os caminhos fixos
+   * `importar-curriculo/...` vêm ANTES do bloco `:id`, senão o Nest casaria "importar-curriculo"
+   * como id de candidato. SEM `@Roles`, como o `criar` e o import por planilha.
+   *
+   * §A.6: os arquivos vão no CORPO (multipart), nunca em query string; o binário é expurgado no
+   * serviço (buffer.fill(0)) e nada do conteúdo é logado.
+   */
+
+  /**
+   * PRÉVIA DO LOTE: sobe VÁRIOS currículos (campo `files`), a IA extrai o VALOR de cada campo e a
+   * tela confere/edita. NÃO GRAVA NADA. Currículo de formato recusado ou com a IA fora do ar volta
+   * com `erroLeitura` daquele item (candidato em branco), SEM derrubar o lote. Desvia por completo do
+   * leitor de planilha: currículo não é tabela.
+   */
+  @Post("importar-curriculo/previa")
+  @HttpCode(200)
+  @UseInterceptors(FilesInterceptor("files", undefined, OPCOES_UPLOAD_CURRICULO))
+  importarCurriculoPrevia(@UploadedFiles() files?: Express.Multer.File[]) {
+    if (!files || files.length === 0) {
+      throw new BadRequestException("Envie ao menos um currículo (.pdf ou .docx).");
+    }
+    // Só o que o serviço lê; o Buffer vive na requisição e é expurgado lá dentro (§A.6).
+    const arquivos: ArquivoCurriculo[] = files.map((f) => ({
+      originalname: f.originalname,
+      mimetype: f.mimetype,
+      buffer: f.buffer,
+      size: f.size,
+    }));
+    return this.candidatosImportCurriculo.previa(arquivos);
+  }
+
+  /**
+   * APLICA: com os candidatos JÁ revisados pela tela (corpo JSON), cria/reaproveita (dedup por CPF) e,
+   * no cenário COM_VAGA, vincula à `vagaId` na etapa CAPTACAO. Tolerante a falha por currículo, o
+   * relatório é keyed por `indice`. §A.6: o resultado carrega só o nome, nunca CPF/telefone/e-mail.
+   */
+  @Post("importar-curriculo/aplicar")
+  importarCurriculoAplicar(
+    @Body() dto: AplicarImportCurriculoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatosImportCurriculo.aplicar(dto, user);
   }
 
   /**

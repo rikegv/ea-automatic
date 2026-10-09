@@ -65,7 +65,7 @@ describe("a rota GET /as/candidatos/opcoes e de LEITURA, protegida pelo menu, se
       vagas: [{ id: "v1", codigo: "777", nome: "Auxiliar De Limpeza" }],
     };
     const opcoes = vi.fn(async () => resposta as never);
-    const controller = new CandidatosController({ opcoes } as never, {} as never);
+    const controller = new CandidatosController({ opcoes } as never, {} as never, {} as never);
     const nome = nomeDoHandler(RequestMethod.GET, "opcoes")!;
 
     const saida = await (controller as unknown as Record<string, () => Promise<unknown>>)[nome]!();

@@ -33,6 +33,7 @@ import {
   AS_CANDIDATO_ORIGEM,
   AS_CONTATO_TIPO,
   AS_MAXIMO_POR_LOTE,
+  CENARIOS_IMPORT_CANDIDATO,
   UFS,
   type AsCandidatoOrdenarPor,
   type AsCandidatoOrigem,
@@ -40,6 +41,7 @@ import {
   type AsContatoTipo,
   type AsDirecaoOrdenacao,
   type CandidaturaEtapa,
+  type CenarioImportCandidato,
 } from "@ea/shared-types";
 import {
   POSICAO_LADOS,
@@ -92,6 +94,20 @@ export class CriarCandidatoDto {
   @IsString()
   @MaxLength(40)
   telefone?: string;
+
+  /**
+   * TODOS os telefones do candidato (import por currículo). OPCIONAL: o cadastro manual e a
+   * importação por planilha seguem mandando só o `telefone` escalar, e o service deriva a lista.
+   * Quando vem, o PRIMEIRO item não vazio vira o `telefone` principal (o espelho `telefone =
+   * telefones[0]`). Cada item cabe no mesmo `varchar(40)` do escalar, e o teto de 20 é barreira de
+   * payload, não regra de negócio: ninguém tem vinte telefones.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  telefones?: string[];
 
   @IsOptional()
   @IsISO8601()
@@ -1204,4 +1220,74 @@ export class AdicionarPorFiltroDto {
   @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
   @IsBoolean()
   cienteReentrada?: boolean;
+}
+
+/**
+ * ─ O CANDIDATO REVISADO DE UM CURRÍCULO, no corpo do `aplicar` por currículo ───────────────────
+ *
+ * É o `CandidatoCurriculo` do `@ea/shared-types`, com a validação de FORMA que o corpo JSON precisa.
+ * Campo não lido vem "" (a IA não inventa, §A.6), então só `nome` é obrigatório, como no resto do
+ * módulo. `telefones` é a LISTA (currículo pode trazer N); o service deriva o escalar `telefone`. O
+ * CPF chega SEM máscara pelo mesmo `soDigitos` do cadastro; o dígito é conferido no service.
+ */
+export class CandidatoCurriculoDto {
+  @IsString()
+  @MaxLength(200)
+  nome!: string;
+
+  @IsOptional()
+  @Transform(soDigitos)
+  @IsString()
+  @MaxLength(14)
+  cpf!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(180)
+  email!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  telefones!: string[];
+
+  /** ISO (YYYY-MM-DD) ou "" quando não lido; o service recusa data de calendário impossível. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  nascimento!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cidade!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  uf!: string;
+}
+
+/**
+ * ─ APLICAR A IMPORTAÇÃO POR CURRÍCULO (JSON, não multipart) ────────────────────────────────────
+ *
+ * Reusa o cenário SEM_VAGA/COM_VAGA da planilha. O `vagaId` só é exigido (no service) no COM_VAGA. O
+ * `@ValidateNested` + `@Type` fazem o validador descer a cada candidato da lista.
+ */
+export class AplicarImportCurriculoDto {
+  @IsIn(CENARIOS_IMPORT_CANDIDATO as unknown as string[])
+  cenario!: CenarioImportCandidato;
+
+  @IsOptional()
+  @IsUUID()
+  vagaId?: string;
+
+  @IsArray()
+  @ArrayMinSize(1, { message: "Nenhum candidato para importar." })
+  @ArrayMaxSize(AS_MAXIMO_POR_LOTE)
+  @ValidateNested({ each: true })
+  @Type(() => CandidatoCurriculoDto)
+  candidatos!: CandidatoCurriculoDto[];
 }

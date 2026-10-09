@@ -65,6 +65,15 @@ const ALVO = {
   cpf: "00000000272",
   email: "zzqx.inventado@exemplo.invalido",
   telefone: "11900090009",
+  /**
+   * ─ UM TELEFONE DA LISTA `telefones` (text[]), E ELE É DISTINTO DO ESCALAR ──────────────────
+   *
+   * A coluna `as_candidatos.telefones` é a lista multi-telefone (o escalar `telefone` é só o
+   * primeiro dela, espelho). Esta agulha NÃO é substring de nenhum outro valor do fixture, nem do
+   * próprio `telefone` acima: é por ela que o caso comportamental procura no estado final, e o
+   * expurgo real a zera com `telefones = '{}'` nas DUAS escritas (alvo e cicatrização).
+   */
+  telefones: "11955550042",
   data_nascimento: "1991-02-03",
   identificadorPandape: "PRECOLLAB-INVENTADO-4242",
   identificadorDigai: "DIGAI-INVENTADO-8484",
@@ -463,6 +472,8 @@ function estadoInicial(): Estado {
         cpf: ALVO.cpf,
         email: ALVO.email,
         telefone: ALVO.telefone,
+        // text[] no schema: a lista carrega a agulha, e o expurgo real a zera com `telefones = '{}'`.
+        telefones: [ALVO.telefones],
         data_nascimento: ALVO.data_nascimento,
         cidade: "Cidade Inventada",
         uf: "SP",
@@ -476,6 +487,8 @@ function estadoInicial(): Estado {
         cpf: VIZINHO.cpf,
         email: null,
         telefone: null,
+        // telefone nulo → lista vazia (o default do schema). O que é do vizinho não pode ser tocado.
+        telefones: [],
         data_nascimento: null,
         cidade: "Outra Cidade Inventada",
         uf: "SP",
@@ -491,6 +504,8 @@ function estadoInicial(): Estado {
         cpf: null,
         email: null,
         telefone: null,
+        // já limpa: lista vazia, como a cicatrização a deixa.
+        telefones: [],
         data_nascimento: null,
         cidade: "Terceira Cidade Inventada",
         uf: "SP",
@@ -735,6 +750,10 @@ const COLUNAS_IDENTIFICADORAS = [
   ["as_candidatos", "cpf", ALVO.cpf],
   ["as_candidatos", "email", ALVO.email],
   ["as_candidatos", "telefone", ALVO.telefone],
+  // A LISTA multi-telefone (text[]): dado pessoal como o escalar, zerada pelo expurgo com
+  // `telefones = '{}'`. O caso comportamental abaixo procura esta agulha no estado final e exige
+  // que ela NÃO sobreviva, porque o fake aplica o SET de verdade e a lista some.
+  ["as_candidatos", "telefones", ALVO.telefones],
   ["as_candidatos", "data_nascimento", ALVO.data_nascimento],
 ] as const;
 
@@ -767,6 +786,9 @@ const COLUNAS_PERMITIDAS: Record<string, string[]> = {
     "cpf",
     "email",
     "telefone",
+    // A LISTA multi-telefone (text[], NOT NULL DEFAULT '{}'): dado pessoal, expurgada no mesmo
+    // commit (`telefones = '{}'`) nas duas escritas (alvo e cicatrização).
+    "telefones",
     "data_nascimento",
     "cidade",
     "uf",

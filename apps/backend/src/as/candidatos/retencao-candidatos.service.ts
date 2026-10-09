@@ -269,6 +269,10 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
              cpf = null,
              email = null,
              telefone = null,
+             -- A LISTA DE TELEFONES É DADO PESSOAL COMO O ESCALAR, e some junto (§A.6). O escalar é só
+             -- o primeiro dela (espelho); nular um e esquecer o outro deixaria os demais telefones
+             -- retidos para sempre numa linha "anonimizada".
+             telefones = '{}',
              data_nascimento = null,
              anonimizado_em = now(),
              atualizado_em = now()
@@ -674,11 +678,20 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                cpf = null,
                email = null,
                telefone = null,
+               -- A LISTA junto do escalar: a cicatrizacao reescreve quem ja foi carimbado e teve dado
+               -- pessoal devolvido, e a lista de telefones e dado pessoal como o escalar. Sem esta
+               -- linha, uma lista que voltasse a linha anonimizada ficaria la para sempre.
+               telefones = '{}',
                data_nascimento = null
          where anonimizado_em is not null
            and (nome is distinct from ${MARCADOR_EXPURGO_SQL}
                 or cpf is not null
                 or email is not null
+                -- NAO acrescentar telefones a ESTE gatilho: furo-3 (retencao-texto-livre) proibe a
+                -- CTE casar linha JA LIMPA (senao reescreve a base inteira de hora em hora). O
+                -- espelho telefone = telefones[0] garante que telefones sujo implica telefone sujo,
+                -- que ja dispara aqui; e o SET acima zera telefones junto. (Recomendacao de simetria
+                -- da auditoria A.38 revertida por colidir com furo-3; provado nao-exploravel.)
                 or telefone is not null
                 or data_nascimento is not null)
       ),

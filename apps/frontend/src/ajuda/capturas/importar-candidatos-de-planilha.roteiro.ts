@@ -85,14 +85,18 @@ export const roteiro: Roteiro = {
       arquivo: "03-passo-planilha.png",
       legenda: "Passo 4: o campo em que a planilha é anexada, e os formatos aceitos.",
       /*
-       * O CENÁRIO É ESCOLHIDO ANTES DE AVANÇAR, e isso não é gesto a mais: a janela nasce sem
-       * cenário nenhum marcado, e o "Avançar" nasce DESABILITADO (`podeAvancarCenario`, em
-       * `ImportarCandidatosModal.tsx`). Medido em 30/09/2026: sem este clique, o preparo morre em
-       * "element is not enabled". "Sem Vaga" é o caminho escolhido porque ele não exige escolher
-       * uma vaga logo abaixo, que seria um terceiro gesto para chegar à mesma tela.
+       * A ORIGEM E O CENÁRIO SÃO ESCOLHIDOS ANTES DE AVANÇAR, e isso não é gesto a mais: a janela
+       * nasce sem origem e sem cenário marcados, e o "Avançar" nasce DESABILITADO
+       * (`podeAvancarCenario`, em `ImportarCandidatosModal.tsx`, exige a fonte E o cenário). Medido
+       * em 30/09/2026: sem o clique de cenário, o preparo morre em "element is not enabled"; desde a
+       * frente de import por currículo (08/10/2026) o seletor "Origem Dos Dados" entrou acima dos
+       * cards, então o caminho da planilha exige escolher "Planilha" primeiro. "Sem Vaga" é o
+       * cenário escolhido porque ele não exige escolher uma vaga logo abaixo, que seria mais um gesto
+       * para chegar à mesma tela.
        */
       preparo: [
         ABRIR_A_JANELA,
+        { acao: "clicar", alvo: { papel: "button", nome: /^Planilha/, texto: "" } },
         { acao: "clicar", alvo: { papel: "button", nome: /^Sem Vaga/, texto: "" } },
         { acao: "clicar", alvo: { papel: "button", nome: "Avançar", texto: "" } },
       ],

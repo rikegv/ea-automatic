@@ -465,3 +465,32 @@ class MapeamentoColunasCandidato(_CamelModel):
     coluna_uf: int | None = None
     confianca: str = "BAIXA"
     observacao: str = ""
+
+
+# ── Extração de currículo (import de candidato por currículo, F6) ────────────
+class CurriculoCandidato(_CamelModel):
+    """Valores LIDOS de um currículo (PDF ou .docx). Campo ausente => vazio; telefones => [].
+
+    §A.6: carrega PII de conteúdo e existe só para ir à tela de revisão do consultor. Nenhum valor
+    daqui pode aparecer em log, mensagem de erro ou rastro de exceção.
+    """
+
+    nome: str = ""
+    cpf: str = ""
+    email: str = ""
+    # VÁRIOS telefones: a forma que o currículo pede e que o cadastro tabular de candidato não tinha.
+    telefones: list[str] = Field(default_factory=list)
+    nascimento: str = ""  # ISO AAAA-MM-DD ou vazio quando não lido/parseável
+    cidade: str = ""
+    uf: str = ""  # sigla de duas letras
+
+
+class CurriculoExtracaoResponse(_CamelModel):
+    """Resposta da extração de UM currículo. `erroLeitura` preenchido = arquivo ilegível (candidato
+    todo vazio); HTTP segue 200 para o lote do backend sobreviver a um arquivo ruim (§A.1/F6)."""
+
+    candidato: CurriculoCandidato = Field(default_factory=CurriculoCandidato)
+    # Chave por campo (nome, cpf, email, telefones, nascimento, cidade, uf) => ALTA|MEDIA|BAIXA.
+    # Campo desconhecido é OMITIDO (não vai BAIXA por padrão: ausência significa "não sei").
+    confianca: dict[str, str] = Field(default_factory=dict)
+    erro_leitura: str | None = None

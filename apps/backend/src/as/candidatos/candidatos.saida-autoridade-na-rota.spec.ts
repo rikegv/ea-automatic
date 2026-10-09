@@ -62,6 +62,9 @@ function controllerComServicoFingido() {
       registrarSaidaEmLote,
     } as never,
     {} as never,
+    // O TERCEIRO ARGUMENTO é o serviço de importação por currículo, que este arquivo não exercita:
+    // um dublê vazio basta para o construtor, e nenhuma rota de saída o toca.
+    {} as never,
   );
   return { controller, registrarSaida, registrarSaidaEmLote };
 }

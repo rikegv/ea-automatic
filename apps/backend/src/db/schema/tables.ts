@@ -4184,6 +4184,21 @@ export const asCandidatos = pgTable(
     cpf: varchar("cpf", { length: 11 }),
     email: varchar("email", { length: 180 }),
     telefone: varchar("telefone", { length: 40 }),
+    /**
+     * TODOS os telefones do candidato. O `telefone` acima é o PRIMEIRO deles (espelho), mantido para
+     * todo consumidor já validado seguir lendo um escalar: `telefone = telefones[0]`. O import por
+     * currículo preenche N; o cadastro manual e a importação por planilha preenchem no máximo um.
+     *
+     * `NOT NULL DEFAULT '{}'`, e as duas metades importam: anulável faria `null` virar um terceiro
+     * estado sem dono, e o default vazio deixa toda porta de inserção que NÃO lista a coluna (a
+     * ingestão crua do Pandapé e do Digai) nascer com a lista vazia em vez de quebrar.
+     *
+     * §A.6: é dado pessoal, nulado pelo expurgo de retenção junto com `telefone` (`telefones = '{}'`).
+     */
+    telefones: text("telefones")
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
     dataNascimento: date("data_nascimento"),
     cidade: varchar("cidade", { length: 120 }),
     uf: varchar("uf", { length: 2 }),

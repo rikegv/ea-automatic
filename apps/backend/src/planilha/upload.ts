@@ -35,6 +35,27 @@ export const OPCOES_UPLOAD_PLANILHA = {
 };
 
 /**
+ * O TETO DE ARQUIVOS DO LOTE DE CURRÍCULOS, barreira de payload e não regra de negócio: um lote com
+ * centenas de arquivos é erro de tela, não intenção. O teto por ARQUIVO é o MESMO dos 10 MB da
+ * planilha, reusado de propósito (o cap já estava medido e validado); o que muda é só `files`.
+ */
+export const MAX_CURRICULOS_POR_LOTE = 50;
+
+/**
+ * As opções do `FilesInterceptor` da importação por CURRÍCULO (lote): o MESMO teto de bytes por
+ * arquivo da planilha, agora com VÁRIOS arquivos no campo `files`. A alçada de extensão/mime e a
+ * conferência de bytes POR ARQUIVO moram no serviço, para uma recusa virar `erroLeitura` daquele
+ * item em vez de derrubar o lote inteiro (§A.6: o binário nunca é logado).
+ */
+export const OPCOES_UPLOAD_CURRICULO = {
+  limits: {
+    fileSize: MAX_BYTES_PLANILHA + FOLGA_DO_MULTER,
+    files: MAX_CURRICULOS_POR_LOTE,
+    fields: 20,
+  },
+};
+
+/**
  * Confere o arquivo que chegou: existe, tem conteúdo e cabe no teto. Lança 400 com mensagem pronta.
  *
  * Devolve o `Buffer` já conferido, para o chamador não repetir o `file?.buffer` em toda rota.

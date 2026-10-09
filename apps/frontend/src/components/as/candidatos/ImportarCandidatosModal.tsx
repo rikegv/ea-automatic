@@ -3,23 +3,33 @@
 import { useMemo, useRef, useState } from "react";
 import {
   CAMPOS_IMPORT_CANDIDATO,
+  UFS,
+  type AplicarImportCurriculo,
+  type CampoEscalarCurriculo,
   type CampoImportCandidato,
+  type CandidatoCurriculo,
   type CenarioImportCandidato,
   type ConfiancaImport,
+  type ItemPreviaCurriculo,
   type MapaColunasCandidato,
   type PreviaImportCandidato,
+  type PreviaImportCurriculo,
   type ResultadoImportCandidato,
+  type ResultadoImportCurriculo,
   type StatusLinhaImportCandidato,
   type VagaListItem,
 } from "@ea/shared-types";
-import { apiUpload } from "@/lib/api";
+import { apiFetch, apiUpload } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
 import { Select } from "@/components/ui/Select";
 import { BlocoCarregando } from "@/components/ui/Spinner";
 import { StatusPill } from "@/components/ui/StatusPill";
 import type { PillTone } from "@/components/ui/Pill";
 import { cn } from "@/lib/cn";
+import { useOrdenacao, type ColunaOrdenavel as ColunaOrd } from "@/lib/ordenacao";
 
 /**
  * IMPORTAÇÃO DE CANDIDATOS POR PLANILHA, com a IA lendo o cabeçalho (Central de Candidatos, A&S).
@@ -53,6 +63,14 @@ import { cn } from "@/lib/cn";
  */
 
 type Passo = "cenario" | "upload" | "depara" | "confirmar" | "resultado";
+
+/**
+ * A FONTE da importação, escolhida no passo do cenário. "planilha" é o fluxo histórico (a IA mapeia
+ * COLUNA); "curriculo" é o fluxo novo (a IA extrai VALOR de cada PDF/Word). O trilho de passos é o
+ * mesmo para os dois; o que muda é o upload (um arquivo tabular vs. um lote de currículos) e o passo
+ * do meio (de/para de coluna vs. revisão de valor).
+ */
+type Fonte = "planilha" | "curriculo";
 
 const ROTULO_CAMPO: Record<CampoImportCandidato, string> = {
   nome: "Nome",
@@ -104,11 +122,27 @@ export function ImportarCandidatosModal({
   onImportado: () => void;
 }) {
   const [passo, setPasso] = useState<Passo>("cenario");
+  const [fonte, setFonte] = useState<Fonte | null>(null);
   const [cenario, setCenario] = useState<CenarioImportCandidato | null>(null);
   const [vagaId, setVagaId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [previa, setPrevia] = useState<PreviaImportCandidato | null>(null);
   const [mapa, setMapa] = useState<MapaColunasCandidato | null>(null);
+  /**
+   * O RAMO DE CURRÍCULO, à parte do ramo de planilha para não tocar nenhum estado do fluxo histórico.
+   * `arquivosCurriculo` é o lote escolhido; `previaCurriculo` é o que a IA leu (metadados: arquivo,
+   * confiança por campo, erro de leitura); `candidatosCurriculo` é a edição do time, indexada pelo
+   * `indice` estável do item, para a ordenação clicável poder reordenar a tela sem perder o vínculo.
+   */
+  const [arquivosCurriculo, setArquivosCurriculo] = useState<File[]>([]);
+  const [previaCurriculo, setPreviaCurriculo] = useState<PreviaImportCurriculo | null>(null);
+  const [candidatosCurriculo, setCandidatosCurriculo] = useState<
+    Record<number, CandidatoCurriculo>
+  >({});
+  const [resultadoCurriculo, setResultadoCurriculo] = useState<ResultadoImportCurriculo | null>(
+    null,
+  );
+  const curriculoInputRef = useRef<HTMLInputElement>(null);
   /**
    * A ABA EM USO. Nasce do que o backend escolheu (`abaUsada`) e passa a ser a escolha do time
    * quando ele troca. Vai junto no `aplicar`: gravar de uma aba diferente da que foi conferida na
@@ -146,6 +180,27 @@ export function ImportarCandidatosModal({
   );
 
   const semNome = mapa !== null && mapa.nome === null;
+
+  /**
+   * A REGRA DO NOME, espelhada do ramo de planilha: só o Nome torna uma linha gravável. Uma linha de
+   * nome vazio é PULADA, não bloqueia as demais; o que bloqueia o avanço é o lote inteiro sem nome
+   * nenhum (não há o que gravar). `candidatosCurriculoLista` segue a ordem estável dos itens.
+   */
+  const candidatosCurriculoLista = useMemo(
+    () =>
+      previaCurriculo
+        ? previaCurriculo.itens.map((i) => candidatosCurriculo[i.indice]).filter(Boolean)
+        : [],
+    [previaCurriculo, candidatosCurriculo],
+  );
+  const comNomeCurriculo = candidatosCurriculoLista.filter((c) => c.nome.trim() !== "").length;
+  const semNomeCurriculo = previaCurriculo !== null && comNomeCurriculo === 0;
+  /** Do índice do item para o nome do arquivo, para o passo de resultado casar linha com currículo. */
+  const arquivoPorIndice = useMemo(() => {
+    const m = new Map<number, string>();
+    previaCurriculo?.itens.forEach((i) => m.set(i.indice, i.arquivo));
+    return m;
+  }, [previaCurriculo]);
 
   /**
    * O TETO DE LINHAS, e por que ele tem bloco próprio na tela.
@@ -215,12 +270,19 @@ export function ImportarCandidatosModal({
         detalhe: "Identificando as colunas dessa aba e refazendo a sugestão do de, para.",
       };
     }
+    if (fonte === "curriculo") {
+      return {
+        titulo: "Lendo Os Currículos",
+        detalhe:
+          "A IA lê cada arquivo e extrai nome, CPF, e-mail e os telefones. Pode levar alguns segundos por arquivo.",
+      };
+    }
     return {
       titulo: "Lendo A Planilha",
       detalhe:
         "Identificando as colunas de nome, CPF, e-mail e os demais dados. Pode levar alguns segundos.",
     };
-  }, [carregando, passo]);
+  }, [carregando, passo, fonte]);
 
   /**
    * PEDE A PRÉVIA ao backend, do arquivo inteiro ou de uma aba específica.
@@ -351,7 +413,106 @@ export function ImportarCandidatosModal({
     }
   }
 
-  const podeAvancarCenario = cenario === "SEM_VAGA" || (cenario === "COM_VAGA" && Boolean(vagaId));
+  /**
+   * SOBE O LOTE DE CURRÍCULOS e pede a prévia: um POST multipart com o campo `files` repetido, um por
+   * arquivo (§A.6: o binário vai no CORPO, nunca em query string). A IA lê cada arquivo e devolve o
+   * valor que achou por campo; a recusa de UM arquivo vira `erroLeitura` no item, sem derrubar o lote.
+   * Só uma falha geral (rede, backend fora) volta para o passo do upload para o time tentar de novo.
+   */
+  async function pedirPreviaCurriculo(files: File[]) {
+    setCarregando(true);
+    setErro(null);
+    try {
+      const form = new FormData();
+      for (const f of files) form.append("files", f);
+      const p = await apiUpload<PreviaImportCurriculo>(
+        "/as/candidatos/importar-curriculo/previa",
+        form,
+        token,
+      );
+      setPreviaCurriculo(p);
+      // A edição começa no que a IA leu; clona os telefones para não compartilhar o array do contrato.
+      const inicial: Record<number, CandidatoCurriculo> = {};
+      for (const item of p.itens) {
+        inicial[item.indice] = { ...item.candidato, telefones: [...item.candidato.telefones] };
+      }
+      setCandidatosCurriculo(inicial);
+      setPasso("depara");
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não foi possível ler os currículos.");
+      setArquivosCurriculo([]);
+      setPreviaCurriculo(null);
+      setCandidatosCurriculo({});
+      setPasso("upload");
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  /** Recebe o lote do seletor de arquivo e dispara a leitura (mesma UX do upload de planilha). */
+  async function escolherCurriculos(files: File[]) {
+    setArquivosCurriculo(files);
+    if (files.length === 0) {
+      setPreviaCurriculo(null);
+      setCandidatosCurriculo({});
+      setErro(null);
+      return;
+    }
+    await pedirPreviaCurriculo(files);
+  }
+
+  /** Edita UM campo escalar de UM currículo, pelo índice estável do item. */
+  function editarCampoCurriculo(indice: number, campo: CampoEscalarCurriculo, valor: string) {
+    setCandidatosCurriculo((prev) => ({
+      ...prev,
+      [indice]: { ...prev[indice], [campo]: valor },
+    }));
+  }
+
+  /** Substitui a lista de telefones de UM currículo (editor de N telefones). */
+  function editarTelefonesCurriculo(indice: number, telefones: string[]) {
+    setCandidatosCurriculo((prev) => ({
+      ...prev,
+      [indice]: { ...prev[indice], telefones },
+    }));
+  }
+
+  /**
+   * GRAVA o lote de currículos revisado. Vai JSON (não multipart): os binários já foram lidos na
+   * prévia e descartados; o que grava são os VALORES que o time confirmou. Os candidatos seguem na
+   * ordem estável dos itens; o backend pula a linha sem nome, como no ramo de planilha.
+   */
+  async function aplicarCurriculo() {
+    if (!cenario || !previaCurriculo) return;
+    setCarregando(true);
+    setErro(null);
+    try {
+      const payload: AplicarImportCurriculo = {
+        cenario,
+        ...(cenario === "COM_VAGA" && vagaId ? { vagaId } : {}),
+        // Telefone em branco (campo aberto e removido pela metade) não vira telefone cadastrado.
+        candidatos: previaCurriculo.itens.map((i) => {
+          const c = candidatosCurriculo[i.indice];
+          return { ...c, telefones: c.telefones.map((t) => t.trim()).filter(Boolean) };
+        }),
+      };
+      const r = await apiFetch<ResultadoImportCurriculo>(
+        "/as/candidatos/importar-curriculo/aplicar",
+        { method: "POST", body: payload, token },
+      );
+      setResultadoCurriculo(r);
+      setPasso("resultado");
+      // A Central recarrega por baixo, como no ramo de planilha.
+      onImportado();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não foi possível gravar a importação.");
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  const podeAvancarCenario =
+    fonte !== null && (cenario === "SEM_VAGA" || (cenario === "COM_VAGA" && Boolean(vagaId)));
 
   return (
     <Modal onClose={onClose} ariaLabel="Importar candidatos" className="max-w-[860px] p-6">
@@ -359,9 +520,19 @@ export function ImportarCandidatosModal({
         <div className="eyebrow !mb-1">Atração E Seleção</div>
         <h2 className="font-display text-xl font-bold">Importar Candidatos</h2>
         <p className="mt-1 text-[13px] text-dim">
-          Suba a planilha do jeito que ela veio. A leitura entende quais colunas são nome, CPF,
-          e-mail e os demais dados, e você confere e corrige antes de gravar. Nada é gravado sem o
-          seu aceite.
+          {fonte === "curriculo" ? (
+            <>
+              Suba os currículos em PDF ou Word, um lote de uma vez. A IA lê cada arquivo e extrai
+              nome, CPF, e-mail e os telefones, e você confere e corrige antes de gravar. Nada é
+              gravado sem o seu aceite.
+            </>
+          ) : (
+            <>
+              Suba a planilha do jeito que ela veio. A leitura entende quais colunas são nome, CPF,
+              e-mail e os demais dados, e você confere e corrige antes de gravar. Nada é gravado sem
+              o seu aceite.
+            </>
+          )}
         </p>
       </div>
 
@@ -370,8 +541,8 @@ export function ImportarCandidatosModal({
         {(
           [
             ["cenario", "Cenário"],
-            ["upload", "Planilha"],
-            ["depara", "De, Para"],
+            ["upload", fonte === "curriculo" ? "Currículo" : "Planilha"],
+            ["depara", fonte === "curriculo" ? "Revisão" : "De, Para"],
             ["confirmar", "Confirmação"],
             ["resultado", "Resultado"],
           ] as [Passo, string][]
@@ -399,6 +570,45 @@ export function ImportarCandidatosModal({
       {/* ── PASSO 1: CENÁRIO ────────────────────────────────────────────────────────────────── */}
       {passo === "cenario" && (
         <div className="grid gap-4">
+          {/* A FONTE: planilha (fluxo histórico) ou currículo (PDF/Word, extração por IA). Fica no
+              topo porque decide o que o próximo passo vai pedir, o upload de um arquivo tabular ou o
+              lote de currículos. §A.24: Title Case no título do card. */}
+          <div className="grid gap-2">
+            <span className="ds-label">Origem Dos Dados</span>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(
+                [
+                  [
+                    "planilha",
+                    "Planilha",
+                    "Sobe uma planilha (.xlsx, .xls ou .csv) e a IA mapeia as colunas.",
+                  ],
+                  [
+                    "curriculo",
+                    "Currículo (PDF Ou Word)",
+                    "Sobe um lote de currículos e a IA extrai os dados de cada um.",
+                  ],
+                ] as [Fonte, string, string][]
+              ).map(([valor, titulo, descricao]) => (
+                <button
+                  key={valor}
+                  type="button"
+                  onClick={() => setFonte(valor)}
+                  aria-pressed={fonte === valor}
+                  className={cn(
+                    "rounded-xl border p-4 text-left transition",
+                    fonte === valor
+                      ? "border-accent bg-[var(--surface-2)] ring-1 ring-[var(--accent)]"
+                      : "border-[var(--border)] hover:bg-[var(--surface-2)]",
+                  )}
+                >
+                  <div className="font-display text-base font-bold">{titulo}</div>
+                  <p className="mt-1 text-[12.5px] text-dim">{descricao}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2">
             {(
               [
@@ -454,8 +664,8 @@ export function ImportarCandidatosModal({
         </div>
       )}
 
-      {/* ── PASSO 2: UPLOAD ─────────────────────────────────────────────────────────────────── */}
-      {passo === "upload" && (
+      {/* ── PASSO 2: UPLOAD (PLANILHA) ──────────────────────────────────────────────────────── */}
+      {fonte === "planilha" && passo === "upload" && (
         <div className="grid gap-2">
           <span className="ds-label">Planilha De Candidatos</span>
           <input
@@ -500,8 +710,8 @@ export function ImportarCandidatosModal({
         </div>
       )}
 
-      {/* ── PASSO 3: DE, PARA ───────────────────────────────────────────────────────────────── */}
-      {passo === "depara" && previa && mapa && (
+      {/* ── PASSO 3: DE, PARA (PLANILHA) ────────────────────────────────────────────────────── */}
+      {fonte === "planilha" && passo === "depara" && previa && mapa && (
         <div className="grid gap-4">
           {acimaDoTeto && (
             <AvisoTeto
@@ -582,7 +792,8 @@ export function ImportarCandidatosModal({
               </>
             ) : (
               <>
-                {previa.totalLinhas} {previa.totalLinhas === 1 ? "linha" : "linhas"} a importar.{" "}
+                {previa.totalLinhas} {previa.totalLinhas === 1 ? "linha" : "linhas"} a
+                importar.{" "}
               </>
             )}
             Só o Nome é obrigatório: os demais campos podem ficar sem coluna.
@@ -590,8 +801,8 @@ export function ImportarCandidatosModal({
         </div>
       )}
 
-      {/* ── PASSO 4: CONFIRMAÇÃO ────────────────────────────────────────────────────────────── */}
-      {passo === "confirmar" && previa && mapa && (
+      {/* ── PASSO 4: CONFIRMAÇÃO (PLANILHA) ─────────────────────────────────────────────────── */}
+      {fonte === "planilha" && passo === "confirmar" && previa && mapa && (
         <div className="grid gap-3">
           {/* O aviso do teto se repete AQUI de propósito: é o passo em que se clica para gravar, e
               é onde a conclusão errada ("entrou tudo") custaria as pessoas que ficaram de fora. */}
@@ -606,7 +817,8 @@ export function ImportarCandidatosModal({
             Confira uma amostra de como a planilha foi interpretada.{" "}
             {acimaDoTeto ? (
               <>
-                O arquivo tem {totalNoArquivo} linhas e esta importação alcança {previa.totalLinhas};
+                O arquivo tem {totalNoArquivo} linhas e esta importação alcança {previa.totalLinhas}
+                ;
               </>
             ) : (
               <>
@@ -653,8 +865,8 @@ export function ImportarCandidatosModal({
         </div>
       )}
 
-      {/* ── PASSO 5: RESULTADO ──────────────────────────────────────────────────────────────── */}
-      {passo === "resultado" && resultado && (
+      {/* ── PASSO 5: RESULTADO (PLANILHA) ───────────────────────────────────────────────────── */}
+      {fonte === "planilha" && passo === "resultado" && resultado && (
         <div className="grid gap-4">
           <div className="flex flex-wrap gap-3">
             <ResumoCartao rotulo="Importados" valor={resultado.importados} tom="ok" />
@@ -718,6 +930,196 @@ export function ImportarCandidatosModal({
         </div>
       )}
 
+      {/* ── PASSO 2: UPLOAD (CURRÍCULO) ─────────────────────────────────────────────────────── */}
+      {fonte === "curriculo" && passo === "upload" && (
+        <div className="grid gap-2">
+          <span className="ds-label">Currículos (PDF Ou Word)</span>
+          <input
+            ref={curriculoInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            className="ds-input"
+            onChange={(e) => void escolherCurriculos(Array.from(e.target.files ?? []))}
+            aria-label="Currículos em PDF ou Word"
+            disabled={carregando}
+          />
+          <p className="text-[11.5px] text-faint">
+            Aceita .pdf e .docx, vários de uma vez. A IA lê cada arquivo e extrai nome, CPF, e-mail,
+            telefones e os demais dados no próximo passo.
+          </p>
+
+          {/* ENQUANTO A IA LÊ: a lista dos arquivos do lote, para a espera não parecer travada num
+              lote de muitos currículos. §A.11: sem travessão. */}
+          {carregando && arquivosCurriculo.length > 0 && (
+            <ul className="mt-1 grid gap-1 text-[11.5px] text-dim">
+              {arquivosCurriculo.map((f, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <Icon
+                    name="doc"
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 flex-none text-faint"
+                  />
+                  <span className="truncate">{f.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* A RECUSA GERAL DA LEITURA, na mesma tela em que se escolhe o arquivo. Recusa de UM
+              currículo não cai aqui: vira aviso por linha no passo de revisão. */}
+          {erro && (
+            <div
+              role="alert"
+              className="mt-2 rounded-xl border border-[var(--danger)] bg-[rgba(220,70,70,0.08)] p-3"
+            >
+              <div className="font-display text-sm font-bold text-[var(--danger)]">
+                Não Foi Possível Ler Os Currículos
+              </div>
+              <p className="mt-1 text-[12.5px] text-text">{erro}</p>
+              <p className="mt-1 text-[11.5px] text-dim">
+                Nada foi importado. Tente de novo ou escolha outros arquivos.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── PASSO 3: REVISÃO DE VALOR (CURRÍCULO) ───────────────────────────────────────────── */}
+      {fonte === "curriculo" && passo === "depara" && previaCurriculo && (
+        <RevisaoCurriculo
+          itens={previaCurriculo.itens}
+          candidatos={candidatosCurriculo}
+          totalComNome={comNomeCurriculo}
+          semNome={semNomeCurriculo}
+          onCampo={editarCampoCurriculo}
+          onTelefones={editarTelefonesCurriculo}
+        />
+      )}
+
+      {/* ── PASSO 4: CONFIRMAÇÃO (CURRÍCULO) ────────────────────────────────────────────────── */}
+      {fonte === "curriculo" && passo === "confirmar" && previaCurriculo && (
+        <div className="grid gap-3">
+          <p className="text-[13px] text-dim">
+            Confira como os currículos foram interpretados. {comNomeCurriculo}{" "}
+            {comNomeCurriculo === 1 ? "currículo será importado" : "currículos serão importados"};
+            linhas sem nome são ignoradas.
+          </p>
+          <div className="ea-scroll max-h-[340px] overflow-auto rounded-xl border border-[var(--border)]">
+            <table className="ds-table w-full min-w-[720px] text-sm">
+              <thead>
+                <tr>
+                  <th className="text-center">Nome</th>
+                  <th className="text-center">CPF</th>
+                  <th className="text-center">E-mail</th>
+                  <th className="text-center">Telefones</th>
+                  <th className="text-center">Nascimento</th>
+                  <th className="text-center">Cidade</th>
+                  <th className="text-center">UF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previaCurriculo.itens.map((item) => {
+                  const c = candidatosCurriculo[item.indice];
+                  if (!c) return null;
+                  return (
+                    <tr key={item.indice}>
+                      <td className="font-semibold">
+                        {c.nome.trim() || <span className="text-faint">não informado</span>}
+                      </td>
+                      <CelulaConfirmacao valor={c.cpf} />
+                      <CelulaConfirmacao valor={c.email} />
+                      <td className="text-center text-dim">
+                        {c.telefones.filter((t) => t.trim() !== "").join(", ") || (
+                          <span className="text-faint">não informado</span>
+                        )}
+                      </td>
+                      <CelulaConfirmacao valor={c.nascimento} />
+                      <CelulaConfirmacao valor={c.cidade} />
+                      <CelulaConfirmacao valor={c.uf} />
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── PASSO 5: RESULTADO (CURRÍCULO) ──────────────────────────────────────────────────── */}
+      {fonte === "curriculo" && passo === "resultado" && resultadoCurriculo && (
+        <div className="grid gap-4">
+          <div className="flex flex-wrap gap-3">
+            <ResumoCartao rotulo="Importados" valor={resultadoCurriculo.importados} tom="ok" />
+            <ResumoCartao
+              rotulo="Reaproveitados"
+              valor={resultadoCurriculo.reaproveitados}
+              tom="ok"
+            />
+            <ResumoCartao rotulo="Vinculados" valor={resultadoCurriculo.vinculados} tom="ok" />
+            <ResumoCartao rotulo="Ignorados" valor={resultadoCurriculo.ignorados} tom="wn" />
+          </div>
+
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-dim">
+            <span>
+              <strong className="text-text">{resultadoCurriculo.contagem.total}</strong> no total
+            </span>
+            <span>
+              <strong className="text-text">{resultadoCurriculo.contagem.novos}</strong> novos
+            </span>
+            <span>
+              <strong className="text-text">{resultadoCurriculo.contagem.duplicadosCpf}</strong>{" "}
+              duplicados por CPF
+            </span>
+            <span>
+              <strong className="text-text">{resultadoCurriculo.contagem.semCpf}</strong> sem CPF
+            </span>
+            <span>
+              <strong className="text-text">{resultadoCurriculo.contagem.invalidos}</strong>{" "}
+              inválidos
+            </span>
+          </div>
+
+          {resultadoCurriculo.linhas.length > 0 && (
+            <div className="ea-scroll max-h-[320px] overflow-auto rounded-xl border border-[var(--border)]">
+              <table className="ds-table w-full min-w-[560px] text-sm">
+                <thead>
+                  <tr>
+                    <th className="text-center">Currículo</th>
+                    <th className="text-center">Nome</th>
+                    <th className="text-center">Status</th>
+                    <th className="text-center">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {resultadoCurriculo.linhas.map((l) => (
+                    <tr key={l.indice}>
+                      <td className="text-dim">
+                        {arquivoPorIndice.get(l.indice) ?? (
+                          <span className="text-faint">não informado</span>
+                        )}
+                      </td>
+                      <td className="font-semibold">{l.nome}</td>
+                      <td className="text-center">
+                        <span className="inline-flex justify-center">
+                          <StatusPill
+                            tone={TOM_STATUS_LINHA[l.status]}
+                            label={ROTULO_STATUS_LINHA[l.status]}
+                          />
+                        </span>
+                      </td>
+                      <td className="text-dim">
+                        {l.motivo ?? <span className="text-faint">não informado</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── RODAPÉ: navegação entre passos ──────────────────────────────────────────────────── */}
       <div className="mt-6 flex items-center justify-between gap-2">
         <div>
@@ -749,17 +1151,26 @@ export function ImportarCandidatosModal({
               {passo === "depara" && (
                 // Avançar durante a releitura da aba levaria à confirmação o de/para da aba ANTIGA,
                 // que é justamente a divergência que a assinatura do cabeçalho existe para barrar.
-                <Button disabled={semNome || carregando} onClick={() => setPasso("confirmar")}>
+                // No ramo de currículo, só o lote sem nome nenhum bloqueia (linha sem nome é pulada).
+                <Button
+                  disabled={(fonte === "curriculo" ? semNomeCurriculo : semNome) || carregando}
+                  onClick={() => setPasso("confirmar")}
+                >
                   Avançar
                 </Button>
               )}
               {/* ACIMA DO TETO, O BOTÃO NÃO CHAMA O BACKEND: a gravação é recusada lá (ela não
                   importa arquivo cortado pela metade), então oferecer o clique só produziria um
                   erro depois do aceite. O caminho é dividir o arquivo, e o aviso diz isso. */}
-              {passo === "confirmar" && (
+              {passo === "confirmar" && fonte === "planilha" && (
                 <Button disabled={carregando || acimaDoTeto} onClick={() => void aplicar()}>
                   Importar {previa ? `${previa.totalLinhas} ` : ""}
                   {previa && previa.totalLinhas === 1 ? "Candidato" : "Candidatos"}
+                </Button>
+              )}
+              {passo === "confirmar" && fonte === "curriculo" && (
+                <Button disabled={carregando} onClick={() => void aplicarCurriculo()}>
+                  Importar {comNomeCurriculo} {comNomeCurriculo === 1 ? "Candidato" : "Candidatos"}
                 </Button>
               )}
             </>
@@ -809,15 +1220,7 @@ function AvisoTeto({
   );
 }
 
-function ResumoCartao({
-  rotulo,
-  valor,
-  tom,
-}: {
-  rotulo: string;
-  valor: number;
-  tom: "ok" | "wn";
-}) {
+function ResumoCartao({ rotulo, valor, tom }: { rotulo: string; valor: number; tom: "ok" | "wn" }) {
   return (
     <div className="min-w-[120px] flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
       <div
@@ -829,6 +1232,314 @@ function ResumoCartao({
         {valor}
       </div>
       <div className="mt-1 text-[11.5px] uppercase tracking-wide text-dim">{rotulo}</div>
+    </div>
+  );
+}
+
+/** Célula do passo de confirmação: o valor, ou "não informado" quando vazio (§A.11, sem travessão). */
+function CelulaConfirmacao({ valor }: { valor: string }) {
+  const v = valor.trim();
+  return (
+    <td className="text-center text-dim">
+      {v || <span className="text-faint">não informado</span>}
+    </td>
+  );
+}
+
+/**
+ * MARCA DE CONFIANÇA, discreta: um ponto ao lado do campo que a IA leu com pouca certeza (MÉDIA ou
+ * BAIXA). Campo de confiança ALTA, ou sem confiança informada, não ganha marca, para o sinal só
+ * aparecer onde o olho precisa conferir. §A.11: sem travessão no title.
+ */
+function MarcaConfianca({ nivel }: { nivel?: ConfiancaImport }) {
+  if (!nivel || nivel === "ALTA") return null;
+  return (
+    <span
+      title={`Confiança ${ROTULO_CONFIANCA[nivel]}, confira o valor lido`}
+      aria-label={`Confiança ${ROTULO_CONFIANCA[nivel]}`}
+      className="flex-none"
+    >
+      <span
+        className={cn(
+          "block h-2 w-2 rounded-full",
+          nivel === "MEDIA" ? "bg-[var(--warn)]" : "bg-[var(--danger)]",
+        )}
+      />
+    </span>
+  );
+}
+
+/**
+ * EDITOR DE N TELEFONES: o currículo pode trazer vários, e todos são cadastrados (decisão do
+ * diretor). Cada telefone é um campo com o seu botão de remover, e "Adicionar telefone" cria mais
+ * um. Lista vazia mostra só o botão de adicionar. §A.24: o botão é AÇÃO, escrita normal.
+ */
+function TelefonesEditor({
+  telefones,
+  nivel,
+  onChange,
+}: {
+  telefones: string[];
+  nivel?: ConfiancaImport;
+  onChange: (telefones: string[]) => void;
+}) {
+  function trocar(i: number, valor: string) {
+    const prox = [...telefones];
+    prox[i] = valor;
+    onChange(prox);
+  }
+  function remover(i: number) {
+    onChange(telefones.filter((_, j) => j !== i));
+  }
+  return (
+    <div className="grid min-w-[180px] gap-1.5">
+      {telefones.map((tel, i) => (
+        <div key={i} className="flex items-center gap-1">
+          <input
+            className="ds-input w-full text-[13px]"
+            value={tel}
+            onChange={(e) => trocar(i, e.target.value)}
+            placeholder="Telefone"
+            aria-label={`Telefone ${i + 1}`}
+          />
+          {i === 0 && <MarcaConfianca nivel={nivel} />}
+          <button
+            type="button"
+            onClick={() => remover(i)}
+            aria-label={`Remover telefone ${i + 1}`}
+            className="flex-none rounded-lg border border-[var(--border)] p-1.5 text-dim transition hover:text-[var(--danger)]"
+          >
+            <Icon name="x" aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...telefones, ""])}
+        className="inline-flex items-center gap-1 justify-self-start text-[12px] text-accent transition hover:underline"
+      >
+        <Icon name="plus" aria-hidden="true" className="h-3.5 w-3.5" />
+        Adicionar telefone
+      </button>
+    </div>
+  );
+}
+
+/**
+ * REVISÃO DE VALOR do lote de currículos: UMA LINHA POR ARQUIVO, com os campos editáveis (o
+ * currículo não tem colunas, então a de/para da planilha vira revisão do VALOR que a IA leu). Cada
+ * célula é editável; a UF usa o Select do design system com busca (§A.35, nunca `<select>` nativo);
+ * a confiança por campo aparece como marca discreta; a recusa de leitura de um arquivo vira aviso na
+ * linha, que segue editável para o time digitar na mão. §A.12/§A.20: máscara única, sem esmagar;
+ * §A.29: cabeçalho ordenável por clique. §A.11: sem travessão; célula vazia some (placeholder).
+ */
+function RevisaoCurriculo({
+  itens,
+  candidatos,
+  totalComNome,
+  semNome,
+  onCampo,
+  onTelefones,
+}: {
+  itens: ItemPreviaCurriculo[];
+  candidatos: Record<number, CandidatoCurriculo>;
+  totalComNome: number;
+  semNome: boolean;
+  onCampo: (indice: number, campo: CampoEscalarCurriculo, valor: string) => void;
+  onTelefones: (indice: number, telefones: string[]) => void;
+}) {
+  type LinhaRevisao = { item: ItemPreviaCurriculo; candidato: CandidatoCurriculo };
+
+  const linhas = useMemo<LinhaRevisao[]>(
+    () =>
+      itens
+        .map((item) => ({ item, candidato: candidatos[item.indice] }))
+        .filter((l): l is LinhaRevisao => Boolean(l.candidato)),
+    [itens, candidatos],
+  );
+
+  const colunas = useMemo<ColunaOrd<LinhaRevisao>[]>(
+    () => [
+      { chave: "arquivo", tipo: "texto", valor: (l) => l.item.arquivo },
+      { chave: "nome", tipo: "texto", valor: (l) => l.candidato.nome },
+      { chave: "cpf", tipo: "texto", valor: (l) => l.candidato.cpf },
+      { chave: "email", tipo: "texto", valor: (l) => l.candidato.email },
+      { chave: "nascimento", tipo: "data", valor: (l) => l.candidato.nascimento },
+      { chave: "cidade", tipo: "texto", valor: (l) => l.candidato.cidade },
+      { chave: "uf", tipo: "texto", valor: (l) => l.candidato.uf },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, linhas);
+
+  const ufOpcoes = useMemo(
+    () => [
+      { value: "", label: "não informado" },
+      ...UFS.map((u) => ({ value: u.uf, label: u.uf, busca: u.nome })),
+    ],
+    [],
+  );
+
+  const temErro = itens.some((i) => i.erroLeitura);
+
+  return (
+    <div className="grid gap-3">
+      <p className="text-[11.5px] text-dim">
+        {totalComNome} {totalComNome === 1 ? "currículo com nome" : "currículos com nome"} a
+        importar. Só o Nome é obrigatório; a linha sem nome é ignorada, as demais entram.
+        {temErro
+          ? " Um ou mais arquivos não puderam ser lidos: preencha os valores na mão na linha avisada."
+          : ""}
+      </p>
+
+      <div className="ea-scroll max-h-[440px] overflow-auto rounded-xl border border-[var(--border)]">
+        {/* §A.12/§A.20: máscara única de tabela, cabeçalho centralizado, min-width para não esmagar
+            os campos editáveis e os telefones; a tabela rola na horizontal em telas estreitas. */}
+        <table className="ds-table w-full min-w-[1040px] text-sm">
+          <thead>
+            <tr>
+              <ColunaOrdenavel ord={ord} chave="arquivo" as="th" className="text-center">
+                Arquivo
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="nome" as="th" className="text-center">
+                Nome *
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="cpf" as="th" className="text-center">
+                CPF
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="email" as="th" className="text-center">
+                E-mail
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="nascimento" as="th" className="text-center">
+                Nascimento
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="cidade" as="th" className="text-center">
+                Cidade
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="uf" as="th" className="text-center">
+                UF
+              </ColunaOrdenavel>
+              <th className="text-center">Telefones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ord.itens.map(({ item, candidato }) => {
+              const indice = item.indice;
+              return (
+                <tr key={indice}>
+                  <td className="align-top">
+                    <div className="font-medium text-dim">{item.arquivo}</div>
+                    {item.erroLeitura && (
+                      <div
+                        role="alert"
+                        className="mt-1 flex items-start gap-1 text-[11px] text-[var(--danger)]"
+                      >
+                        <Icon
+                          name="alert"
+                          aria-hidden="true"
+                          className="mt-0.5 h-3.5 w-3.5 flex-none"
+                        />
+                        <span>{item.erroLeitura}</span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="align-top">
+                    <div className="flex items-center gap-1">
+                      <input
+                        className="ds-input w-full min-w-[150px] text-[13px]"
+                        value={candidato.nome}
+                        onChange={(e) => onCampo(indice, "nome", e.target.value)}
+                        placeholder="Nome"
+                        aria-label={`Nome do currículo ${item.arquivo}`}
+                      />
+                      <MarcaConfianca nivel={item.confianca.nome} />
+                    </div>
+                  </td>
+                  <td className="align-top">
+                    <div className="flex items-center gap-1">
+                      <input
+                        className="ds-input w-full min-w-[130px] text-[13px]"
+                        value={candidato.cpf}
+                        onChange={(e) => onCampo(indice, "cpf", e.target.value)}
+                        placeholder="CPF"
+                        aria-label={`CPF do currículo ${item.arquivo}`}
+                      />
+                      <MarcaConfianca nivel={item.confianca.cpf} />
+                    </div>
+                  </td>
+                  <td className="align-top">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="email"
+                        className="ds-input w-full min-w-[170px] text-[13px]"
+                        value={candidato.email}
+                        onChange={(e) => onCampo(indice, "email", e.target.value)}
+                        placeholder="E-mail"
+                        aria-label={`E-mail do currículo ${item.arquivo}`}
+                      />
+                      <MarcaConfianca nivel={item.confianca.email} />
+                    </div>
+                  </td>
+                  <td className="align-top">
+                    <div className="flex items-center gap-1">
+                      {/* §A.35: input type=date é controle do navegador, exceção permitida. */}
+                      <input
+                        type="date"
+                        className="ds-input w-full min-w-[150px] text-[13px]"
+                        value={candidato.nascimento}
+                        onChange={(e) => onCampo(indice, "nascimento", e.target.value)}
+                        aria-label={`Nascimento do currículo ${item.arquivo}`}
+                      />
+                      <MarcaConfianca nivel={item.confianca.nascimento} />
+                    </div>
+                  </td>
+                  <td className="align-top">
+                    <div className="flex items-center gap-1">
+                      <input
+                        className="ds-input w-full min-w-[130px] text-[13px]"
+                        value={candidato.cidade}
+                        onChange={(e) => onCampo(indice, "cidade", e.target.value)}
+                        placeholder="Cidade"
+                        aria-label={`Cidade do currículo ${item.arquivo}`}
+                      />
+                      <MarcaConfianca nivel={item.confianca.cidade} />
+                    </div>
+                  </td>
+                  <td className="align-top">
+                    <div className="flex items-center gap-1">
+                      {/* §A.35: Select do design system, nunca `<select>` nativo; a sigla mostra, a
+                          busca acha pelo nome do estado. */}
+                      <Select
+                        value={candidato.uf}
+                        onChange={(v) => onCampo(indice, "uf", v)}
+                        options={ufOpcoes}
+                        ariaLabel={`UF do currículo ${item.arquivo}`}
+                        placeholder="UF"
+                        searchable
+                        className="min-w-[110px]"
+                      />
+                      <MarcaConfianca nivel={item.confianca.uf} />
+                    </div>
+                  </td>
+                  <td className="align-top">
+                    <TelefonesEditor
+                      telefones={candidato.telefones}
+                      nivel={item.confianca.telefones}
+                      onChange={(tels) => onTelefones(indice, tels)}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {semNome && (
+        <p className="text-xs text-[var(--danger)]">
+          Preencha o nome de pelo menos um currículo para continuar.
+        </p>
+      )}
     </div>
   );
 }

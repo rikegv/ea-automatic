@@ -1072,6 +1072,13 @@
       "when": 1790646019719,
       "tag": "0152_vagas_status_pandape",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1790646020719,
+      "tag": "0153_as_candidato_telefones",
+      "breakpoints": true
     }
   ]
 }

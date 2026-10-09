@@ -32,6 +32,7 @@ import { CidadesController } from "./cidades/cidades.controller";
 import { CidadesService } from "./cidades/cidades.service";
 import { CandidatosService } from "./candidatos/candidatos.service";
 import { CandidatosImportService } from "./candidatos/candidatos-import.service";
+import { CandidatosImportCurriculoService } from "./candidatos/candidatos-import-curriculo.service";
 import { DeparaEtapaExternaService } from "./depara/depara-etapa-externa.service";
 import { RetencaoCandidatosService } from "./candidatos/retencao-candidatos.service";
 import { EtapasFunilAdminController } from "./etapas/etapas-funil-admin.controller";
@@ -291,6 +292,10 @@ import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
     // método no `CandidatosService`, para não acrescentar um quinto argumento de construtor às ~14
     // specs que o instanciam (§A.26). Reusa `criar` e `adicionarEmLote` daquele serviço.
     CandidatosImportService,
+    // Importação de candidatos por CURRÍCULO (.pdf/.docx, extração de VALOR por IA). Serviço PRÓPRIO,
+    // pela mesma razão do import por planilha: reusa `criar` e `adicionarEmLote` sem acrescentar
+    // argumento de construtor ao `CandidatosService` nem às specs dele (§A.26).
+    CandidatosImportCurriculoService,
     RetencaoCandidatosService,
     EtapasFunilService,
     MotivosCancelamentoVagaService,

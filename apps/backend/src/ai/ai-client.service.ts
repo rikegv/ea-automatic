@@ -391,6 +391,66 @@ export class AiClientService {
     }
   }
 
+  /**
+   * EXTRAÇÃO DE VALOR DE UM CURRÍCULO (.pdf/.docx) pela MESMA linha Vertex/Gemini (import por
+   * currículo da Central de Candidatos). Ao contrário do `mapearColunasCandidato` (que devolve
+   * ÍNDICE de coluna), aqui a IA devolve o VALOR lido de cada campo, mais a confiança por campo.
+   *
+   * O ARQUIVO VAI EM MULTIPART (`file` + `nomeArquivo`), não em JSON: é binário, e o ai-service o
+   * lê e descarta. §A.6: o binário NUNCA é logado, só o status HTTP e o nome do arquivo (que na prova
+   * versionada é sintético, §A.43). O `fetch` do Node monta o boundary sozinho quando o corpo é
+   * `FormData`; por isso só o `X-Internal-Token` entra nos headers, nunca um `Content-Type` à mão.
+   *
+   * LANÇA EM FALHA (serviço fora, quota, formato recusado), de propósito: quem chama processa um LOTE
+   * e transforma a falha de UM currículo num `erroLeitura` daquele item, sem derrubar os demais. O
+   * corpo do ai-service nunca é repassado (pode espelhar PII): a mensagem é fixa.
+   */
+  async extrairCurriculo(
+    bytes: Buffer,
+    nomeArquivo: string,
+  ): Promise<{ candidato: Record<string, unknown>; confianca: Record<string, unknown> }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AiClientService.TIMEOUT_MS);
+    const path = "/curriculo/extrair";
+    try {
+      const form = new FormData();
+      // `Uint8Array` a partir do Buffer: o Blob aceita a view sem copiar o conteúdo para log nenhum.
+      form.append("file", new Blob([new Uint8Array(bytes)]), nomeArquivo);
+      form.append("nomeArquivo", nomeArquivo);
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "X-Internal-Token": this.token },
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        // Só status + rota, nunca o corpo (pode espelhar a PII do currículo) (§A.6).
+        this.logger.error(`ai-service ${path} respondeu HTTP ${res.status}`);
+        const familia = familiaPorStatus(res.status);
+        if (familia === "QUOTA") {
+          throw new ServiceUnavailableException("Motor de IA sem quota para ler o currículo.");
+        }
+        if (familia === "ENTRADA") {
+          throw new UnprocessableEntityException("O motor de IA não conseguiu ler este currículo.");
+        }
+        throw new ServiceUnavailableException(`Motor de IA indisponível (HTTP ${res.status})`);
+      }
+      return (await res.json()) as Awaited<ReturnType<AiClientService["extrairCurriculo"]>>;
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        this.logger.error(`ai-service ${path} excedeu o tempo limite`);
+        throw new GatewayTimeoutException("Motor de IA não respondeu no tempo limite");
+      }
+      this.logger.error(
+        `Falha ao chamar ai-service ${path}: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      throw new ServiceUnavailableException("Motor de IA indisponível");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async localizarPastaDrive(
     parentFolderId: string,
     pastaNome: string,

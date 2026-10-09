@@ -3332,7 +3332,13 @@ export interface AsCandidatoFicha {
   nome: string;
   cpf: string | null;
   email: string | null;
+  /** O telefone PRINCIPAL (o primeiro). Mantido para toda tela já validada seguir lendo um escalar. */
   telefone: string | null;
+  /**
+   * TODOS os telefones do candidato; `telefone` é o primeiro deles (espelho). Vazio quando não há.
+   * O import por currículo preenche N; planilha e cadastro manual preenchem no máximo um.
+   */
+  telefones: string[];
   dataNascimento: string | null;
   cidade: string | null;
   uf: string | null;
@@ -5529,6 +5535,86 @@ export interface ResultadoImportCandidato {
   ignorados: number;
   linhas: {
     linha: number;
+    nome: string;
+    status: StatusLinhaImportCandidato;
+    motivo?: string;
+  }[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Importação de candidatos por CURRÍCULO (.pdf e .docx) com extração de VALOR por IA (Central de
+// Candidatos, A&S). Reusa a MESMA linha Vertex/Gemini (auditar_documento/portal_extracao), o MESMO
+// modal e o MESMO caminho de cadastro da planilha. O que muda: currículo NÃO tem colunas, então a
+// de-para vira revisão de VALOR (campo → valor que a IA leu, editável). Telefone é LISTA: o currículo
+// pode trazer N e todos são cadastrados (decisão do diretor). Vocabulário backend↔frontend; dono:
+// coordenador (§A.39).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Campos ESCALARES que a IA tenta ler do currículo. Telefone vai à parte, como lista. */
+export const CAMPOS_ESCALARES_CURRICULO = [
+  "nome",
+  "cpf",
+  "email",
+  "nascimento",
+  "cidade",
+  "uf",
+] as const;
+export type CampoEscalarCurriculo = (typeof CAMPOS_ESCALARES_CURRICULO)[number];
+
+/**
+ * O candidato que a IA extraiu de UM currículo, já no formato que o time revisa e edita. Campo não
+ * lido vem "" (vazio = a resposta certa, a IA não inventa, §A.6). `telefones` vem [] quando não achou.
+ */
+export interface CandidatoCurriculo {
+  nome: string;
+  cpf: string;
+  email: string;
+  /** TODOS os telefones que o currículo trouxer; o primeiro vira o `telefone` principal. */
+  telefones: string[];
+  /** ISO (YYYY-MM-DD) ou "" quando não lido. */
+  nascimento: string;
+  cidade: string;
+  uf: string;
+}
+
+/** Confiança por campo, para a tela sinalizar o que a IA leu com pouca certeza. */
+export type ConfiancaCamposCurriculo = Partial<
+  Record<CampoEscalarCurriculo | "telefones", ConfiancaImport>
+>;
+
+/** A prévia de UM currículo do lote: o arquivo, o que a IA leu e a confiança por campo. */
+export interface ItemPreviaCurriculo {
+  /** Índice estável do arquivo no lote, para casar a revisão com o resultado. */
+  indice: number;
+  /** Nome do arquivo enviado (não é PII; na prova versionada é sintético, §A.43). */
+  arquivo: string;
+  candidato: CandidatoCurriculo;
+  confianca: ConfiancaCamposCurriculo;
+  /** Aviso quando a IA não conseguiu ler o arquivo (formato, vazio, corrompido): item segue editável. */
+  erroLeitura?: string;
+}
+
+/** A prévia do LOTE inteiro: um item por currículo enviado (§A.6: nunca o binário, só o que foi lido). */
+export interface PreviaImportCurriculo {
+  itens: ItemPreviaCurriculo[];
+}
+
+/** O que o time confirma após revisar/editar: os candidatos finais + o cenário (reusa SEM_VAGA/COM_VAGA). */
+export interface AplicarImportCurriculo {
+  cenario: CenarioImportCandidato;
+  vagaId?: string;
+  candidatos: CandidatoCurriculo[];
+}
+
+/** Resultado por currículo e agregado. Reusa a contagem/relatório da planilha. §A.6: só o nome. */
+export interface ResultadoImportCurriculo {
+  contagem: ContagemImportCandidato;
+  importados: number;
+  reaproveitados: number;
+  vinculados: number;
+  ignorados: number;
+  linhas: {
+    indice: number;
     nome: string;
     status: StatusLinhaImportCandidato;
     motivo?: string;
