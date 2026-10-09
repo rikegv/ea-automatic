@@ -234,22 +234,20 @@ describe("o motivo do desvínculo é obrigatório NOS DOIS lados, no DTO", () =>
   }
 
   /*
-   * ┌─ O TERCEIRO DESFECHO, QUE A COBERTURA NÃO ALCANÇAVA (achado do `tester`, 09/09) ───────────┐
-   * │ O DTO DIZ, EM LETRAS MAIÚSCULAS, "OBRIGATÓRIO NOS TRÊS DESFECHOS", e a régua dele é         │
-   * │ `SITUACOES_DE_SAIDA`, que tem TRÊS valores. Os testes acima derivam de `ehSaidaSemExito`,   │
-   * │ que tem DOIS: `ENVIADO_PARA_ADMISSAO` não era validado contra o DTO em teste nenhum do      │
-   * │ repositório, e a ausência de motivo nele nunca era exercitada.                              │
-   * │                                                                                            │
-   * │ POR QUE ISSO NÃO É ZELO ACADÊMICO: o argumento para AFROUXAR já está escrito no arquivo ao  │
-   * │ lado. O `FinalizarPosicaoDto` justifica não pedir motivo porque entregar a posição é o      │
-   * │ desfecho BEM-SUCEDIDO, e escrever "alocado" toda vez seria ruído. Enviar para a admissão é  │
-   * │ igualmente bem-sucedido, e a tela já o separou em seção própria. Quem aplicar o mesmo       │
-   * │ raciocínio aqui amanhã não encontra teste nenhum no caminho, e o histórico do desfecho que  │
-   * │ TIRA a pessoa do funil nasce sem explicação.                                                │
-   * │                                                                                            │
-   * │ O TERCEIRO É DERIVADO, nunca digitado: é o que sobra de `SITUACOES_DE_SAIDA` depois das     │
-   * │ duas de desvínculo. Desfecho novo cai aqui sozinho.                                         │
-   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   * ┌─ O TERCEIRO DESFECHO, QUE AGORA ACEITA MOTIVO VAZIO (Onda 2, decisão do diretor 09/10/2026) ──┐
+   * │ A REGRA MUDOU. Até 08/10/2026 o DTO exigia motivo nos TRÊS desfechos de `SITUACOES_DE_SAIDA`, │
+   * │ inclusive `ENVIADO_PARA_ADMISSAO`. A Onda 2 tornou o campo "Observação" FACULTATIVO SÓ no      │
+   * │ envio: `@ValidateIf(o => !ocupaPosicao(o.situacao))` liga os validadores de `motivo` apenas    │
+   * │ para quem NÃO ocupa posição (descarte e desistência), e o envio é a única saída que ocupa.     │
+   * │                                                                                               │
+   * │ É EXATAMENTE O AFROUXAMENTO QUE A REDAÇÃO ANTERIOR PREVIU: enviar para a admissão é desfecho   │
+   * │ BEM-SUCEDIDO (como entregar a posição no `FinalizarPosicaoDto`), a tela o separou em seção     │
+   * │ própria, e o diretor decidiu que ali o campo é observação opcional, não explicação exigida.    │
+   * │ Descarte e desistência CONTINUAM exigindo o motivo (os testes acima, intactos).               │
+   * │                                                                                               │
+   * │ O TERCEIRO É DERIVADO, nunca digitado: é o que sobra de `SITUACOES_DE_SAIDA` depois das duas   │
+   * │ de desvínculo. Desfecho novo que NÃO ocupe posição cairá nos validadores de novo, sozinho.     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   const TERCEIRO = SITUACOES_DE_SAIDA.filter((s) => !ehSaidaSemExito(s));
 
@@ -258,12 +256,16 @@ describe("o motivo do desvínculo é obrigatório NOS DOIS lados, no DTO", () =>
   });
 
   for (const situacao of TERCEIRO) {
-    it(`recusa ${situacao} SEM motivo: avançar também é sair, e sair pede explicação`, () => {
-      expect(erroDe({ situacao }, "motivo")).toHaveLength(1);
+    it(`aceita ${situacao} SEM motivo: no envio a observação é opcional (Onda 2)`, () => {
+      expect(erroDe({ situacao }, "motivo")).toHaveLength(0);
     });
 
-    it(`recusa ${situacao} com motivo só de espaços, que viraria motivo NULO no banco`, () => {
-      expect(erroDe({ situacao, motivo: "   " }, "motivo")).toHaveLength(1);
+    it(`aceita ${situacao} com motivo só de espaços: o validador é pulado no envio`, () => {
+      expect(erroDe({ situacao, motivo: "   " }, "motivo")).toHaveLength(0);
+    });
+
+    it(`aceita ${situacao} com uma observação escrita, quando o time quer registrar`, () => {
+      expect(erroDe({ situacao, motivo: "foi para a esteira" }, "motivo")).toHaveLength(0);
     });
   }
 

@@ -241,6 +241,10 @@ export function bancoFingido(cenario: CenarioFingido) {
       const linha = juntouCandidatos
         ? [
             {
+              // O `id` DO `as_candidatos`, que a ponte passou a trazer (destravamento do envio sem
+              // CPF): é dele que o service deriva o marcador PROV. Sem isto, `ponte.candidatoId` fica
+              // `undefined` e o ramo do PROV nunca é alcançado (cairia no throw de identificação).
+              candId: acharLinha(idFiltrado)?.candidatoId ?? "pessoa-1",
               candCpf: cpfDoFunil,
               candNome: "Fulano",
               // AS CINCO PROCEDÊNCIAS (0147): a ponte as lê na MESMA consulta do candidato, e é

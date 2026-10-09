@@ -518,6 +518,34 @@ export function normalizeCpf(input: string): string {
   return (input ?? "").replace(/\D/g, "");
 }
 
+/*
+ * ┌─ O CPF PROVISORIO ("PROV"), E POR QUE ELE VIVE AQUI ────────────────────────────────────────┐
+ * │ Um candidato de A&S pode ser enviado para a admissao SEM CPF (medido: ~6,9% nao tem nesta     │
+ * │ etapa). A pre-admissao e chaveada por CPF (PK, NOT NULL, FK), entao nasce com um marcador      │
+ * │ `PROV` + 7 caracteres = 11, a largura exata de `candidatos.cpf`. O candidato preenche o CPF    │
+ * │ real depois, no portal.                                                                        │
+ * │                                                                                               │
+ * │ O MARCADOR NUNCA SE PASSA POR CPF REAL: `isValidCpf` faz `replace(/\D/g,"")` e exige 11        │
+ * │ digitos; `PROV...` perde as letras, sobram menos de 11, retorna false. Garantido por           │
+ * │ construcao, e e por isso que o detector vive AO LADO do validador: quem mexer num ve o outro.  │
+ * │                                                                                               │
+ * │ ESTA AQUI, e nao so no backend, porque a TELA precisa reconhecer o marcador para mostrar "CPF  │
+ * │ Pendente" em vez do `PROV` cru ou de um numero falso. Fonte unica: o backend reexporta destes. │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const PREFIXO_CPF_PROVISORIO = "PROV";
+
+/**
+ * Diz se um identificador e um CPF provisorio (marcador PROV), nao um CPF real.
+ *
+ * Sem falso positivo: CPF real nunca tem letra, e a guarda exige os 11 chars com o prefixo. A tela
+ * usa isto para mostrar "CPF Pendente"; nunca renderize o valor cru nem o mascare como numero.
+ */
+export function ehCpfProvisorio(cpf: string | null | undefined): boolean {
+  const v = (cpf ?? "").trim().toUpperCase();
+  return v.length === 11 && v.startsWith(PREFIXO_CPF_PROVISORIO);
+}
+
 /**
  * Benefícios que TÊM valor (§A.17 etapa 4).
  *

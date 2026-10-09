@@ -93,6 +93,7 @@ import {
   type CampoDoPrePreenchimento,
 } from "../../domain/as-planilha-prepreenchimento";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
+import { derivarCpfProvisorioPorCandidato } from "../../domain/identidade-provisoria";
 import { acaoDaRetencao } from "../../domain/retencao-evento";
 
 /**
@@ -2266,11 +2267,28 @@ export class CandidatosService {
        * └─────────────────────────────────────────────────────────────────────────────────────────┘
        */
       const ponte = await this.dadosDaPonteParaAdmissao(candidaturaId);
-      const cpf = normalizeCpf(ponte?.candidato.cpf ?? "");
+      let cpf = normalizeCpf(ponte?.candidato.cpf ?? "");
       if (!isValidCpf(cpf)) {
-        throw new BadRequestException(
-          "Este candidato não tem CPF válido. Preencha o CPF antes de enviar para admissão.",
-        );
+        /*
+         * ┌─ SEM CPF VÁLIDO NÃO TRAVA MAIS: nasce um MARCADOR PROVISÓRIO por candidato ──────────────┐
+         * │ O CPF é a chave de identidade (§A.3) e a pré-admissão é chaveada por ele, mas candidato de │
+         * │ seleção muitas vezes chega sem CPF. Em vez de barrar o envio, derivamos um marcador        │
+         * │ `PROV`+7 (11 chars, a largura de `candidatos.cpf`) ÚNICO POR CANDIDATO, criamos a admissão  │
+         * │ com ele, e o candidato preenche o CPF real depois no portal (`corrigirCpf` reaponta e some  │
+         * │ o marcador órfão). O marcador NUNCA passa por `isValidCpf`, então a LIBERAÇÃO continua       │
+         * │ recusando-o: a admissão fica ESTACIONADA em AGUARDANDO_LIBERACAO até o CPF real chegar.      │
+         * │                                                                                            │
+         * │ POR CANDIDATO, e não por (nome, cliente): a data do envio é nula e aquela chave fundiria 18 │
+         * │ pares de homônimos medidos em produção (ver `derivarCpfProvisorioPorCandidato`). §A.6: nem a │
+         * │ derivação nem o ramo logam nome/e-mail/CPF; este ramo já loga só o código do motivo.        │
+         * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+         */
+        if (!ponte?.candidatoId) {
+          throw new BadRequestException(
+            "Não foi possível identificar o candidato desta candidatura para enviar à admissão.",
+          );
+        }
+        cpf = derivarCpfProvisorioPorCandidato(ponte.candidatoId);
       }
 
       await this.mudarSituacaoOcupandoPosicao(
@@ -2350,6 +2368,9 @@ export class CandidatosService {
             telefone: ponte.candidato.telefone,
             dataNascimento: ponte.candidato.dataNascimento,
           },
+          // Identidade do candidato A&S: a autoridade transacional usa ANTES do insert para resolver
+          // colisão de marcador provisório (ver `criarPreAdmissaoDoFunil`). Vazio para CPF real.
+          candidatoId: ponte.candidatoId,
           codCliente: ponte.codCliente,
           cargoId: ponte.cargoId,
           idVacancy: ponte.idVacancy,
@@ -3279,6 +3300,12 @@ export class CandidatosService {
    */
   private async dadosDaPonteParaAdmissao(candidaturaId: string): Promise<
     | {
+        /**
+         * O `id` DO `as_candidatos`, e é ELE que deriva o marcador provisório quando não há CPF válido
+         * (ponte A&S → Esteira sem CPF). Unicidade por candidato, não por (nome, cliente): ver
+         * `derivarCpfProvisorioPorCandidato`. Nunca é logado (§A.6: é id técnico, não PII).
+         */
+        candidatoId: string;
         candidato: {
           cpf: string | null;
           nome: string;
@@ -3304,6 +3331,7 @@ export class CandidatosService {
   > {
     const [linha] = await this.db
       .select({
+        candId: asCandidatos.id,
         candCpf: asCandidatos.cpf,
         candNome: asCandidatos.nome,
         candEmail: asCandidatos.email,
@@ -3336,6 +3364,7 @@ export class CandidatosService {
     if (!linha) return null;
 
     return {
+      candidatoId: linha.candId,
       candidato: {
         cpf: linha.candCpf,
         nome: linha.candNome,

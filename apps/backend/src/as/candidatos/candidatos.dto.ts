@@ -20,6 +20,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from "class-validator";
 /*
@@ -46,6 +47,7 @@ import {
 import {
   POSICAO_LADOS,
   SITUACOES_DE_SAIDA,
+  ocupaPosicao,
   type PosicaoLado,
   type SituacaoDeSaida,
 } from "../../domain/candidatura";
@@ -664,12 +666,15 @@ export class RegistrarSaidaDto {
   situacao!: SituacaoDeSaida;
 
   /**
-   * POR QUE SAIU, E AGORA É OBRIGATÓRIO NOS TRÊS DESFECHOS (ajuste 7 do diretor).
+   * POR QUE SAIU, E É OBRIGATÓRIO NO DESCARTE E NA DESISTÊNCIA, OPCIONAL NO ENVIO (ajuste 7 do
+   * diretor + Onda 2, 09/10/2026). Ver o `@ValidateIf` logo acima dos decorators abaixo.
    *
    * ANTES ERA OPCIONAL AQUI e exigido só na tela, e só para o descarte. Regra que vive apenas no
    * navegador não é regra: qualquer chamada direta à rota gravava desfecho sem motivo, e o histórico
    * do bug 1 nasceria com buracos justamente nos eventos que mais precisam de explicação. Exigir no
-   * DTO é o que faz a régua valer para todo mundo que fala com a rota.
+   * DTO é o que faz a régua valer para todo mundo que fala com a rota. A Onda 2 abriu UMA exceção, só
+   * o envio (`ocupaPosicao`), onde o campo virou "Observação" facultativa; descarte e desistência
+   * seguem exigindo, pela mesma régua no DTO.
    *
    * `MinLength(2)` ESPELHA A TELA, que já desabilitava o botão do descarte com menos de dois
    * caracteres úteis. Um espaço em branco não é motivo, e aceitar "." só moveria o buraco.
@@ -703,7 +708,19 @@ export class RegistrarSaidaDto {
    * │ texto de verdade. O nome do catálogo cabe nos 500 com folga, e é o catálogo, não o          │
    * │ comprimento, que o recusa quando está errado.                                               │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ E AGORA É OPCIONAL SÓ NO ENVIO (Onda 2, "Motivo" vira "Observação" facultativa) ─────────────┐
+   * │ `@ValidateIf(o => !ocupaPosicao(o.situacao))`: a régua de obrigatoriedade continua VALENDO    │
+   * │ para DESCARTADO e DESISTIU (que NÃO ocupam posição), e SÓ o envio (`ENVIADO_PARA_ADMISSAO`,    │
+   * │ a única saída que `ocupaPosicao`) passa a aceitar vazio. Não é afrouxamento geral: descarte e  │
+   * │ desistência seguem exigindo o motivo (ajuste 7 do diretor). Quando a condição é falsa (envio), │
+   * │ class-validator PULA os decorators abaixo, então `motivo` ausente/"" passa, e o service já     │
+   * │ tolera `texto(dto.motivo)` vazio. O `@Transform` roda à parte e segue aparando quando vem.     │
+   * │ ESCOPO (§A.14): só AQUI, no envio individual. Lote e filtro (`RegistrarSaidaEmLoteDto`,        │
+   * │ `RegistrarSaidaPorFiltroDto`) ficam como estão.                                                │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
    */
+  @ValidateIf((o) => !ocupaPosicao(o.situacao))
   @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
   @MinLength(2)

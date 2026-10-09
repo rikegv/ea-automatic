@@ -1,5 +1,6 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { AdmissoesModule } from "../admissoes/admissoes.module";
 import { PortalAcessoEmailController } from "./portal-acesso-email.controller";
 import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
@@ -67,7 +68,12 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
   // auditoria pegou; aqui o número está na lista de `exports` do outro arquivo.
   // `portal-so-uma-porta-do-vt.tester.spec.ts` trava as duas metades (o módulo exporta um só, e
   // o portal não alcança os outros serviços da coleta).
-  imports: [ConfigModule, ReguaModule, VtLinkModule],
+  // `AdmissoesModule` entra pela PONTE DO CPF PENDENTE, e o alcance dele é UM provider exportado,
+  // `AdmissoesService`. A porta de e-mail, ao gravar o CPF real de quem entrou sem CPF, reaponta a
+  // admissão que nasceu com marcador PROV, reusando `AdmissoesService.corrigirCpf` (ator SISTEMA).
+  // `forwardRef` porque `AdmissoesModule` já importa este módulo (a liberação entrega o link): o
+  // ciclo é real e declarado, não acidental. §A.38: rota pública sobre CPF, re-auditoria obrigatória.
+  imports: [ConfigModule, ReguaModule, VtLinkModule, forwardRef(() => AdmissoesModule)],
   // DUAS CONTROLLERS, DOIS PÚBLICOS. `PortalController` é do CANDIDATO (`@Public()` + guard de
   // sessão, na allowlist da barreira); `PortalPendenciasController` é do TIME (autenticado, sob
   // `esteira/`, jamais alcançável de fora). Ver o cabeçalho de cada uma.

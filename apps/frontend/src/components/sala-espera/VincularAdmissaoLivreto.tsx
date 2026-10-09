@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ehCpfProvisorio } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
@@ -47,6 +48,7 @@ function fmtData(d?: string | null): string {
 }
 function fmtCpf(cpf?: string | null): string {
   if (!cpf) return "não informado";
+  if (ehCpfProvisorio(cpf)) return "CPF Pendente";
   const d = cpf.replace(/\D/g, "");
   return d.length === 11 ? `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}` : cpf;
 }

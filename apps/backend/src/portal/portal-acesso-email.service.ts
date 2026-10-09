@@ -5,6 +5,7 @@ import {
   Logger,
   ServiceUnavailableException,
   UnauthorizedException,
+  forwardRef,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ThrottlerStorage } from "@nestjs/throttler";
@@ -47,6 +48,7 @@ import {
 } from "../domain/portal-acesso-email";
 import { corpoDoEmailDoCodigo } from "../domain/portal-envio";
 import type { PortalMotivo } from "../domain/portal-evento";
+import { AdmissoesService } from "../admissoes/admissoes.service";
 import { FAROIS_FORA_DO_PAINEL } from "./portal-painel.service";
 import { PortalCorreioService } from "./portal-correio.service";
 import { PortalEnvioService } from "./portal-envio.service";
@@ -213,6 +215,14 @@ export class PortalAcessoEmailService {
      */
     private readonly envio: PortalEnvioService,
     @Inject(ThrottlerStorage) private readonly throttle: ThrottlerStorage,
+    /*
+     * A PONTE DO CPF PENDENTE. Quando o candidato entra por e-mail e grava o CPF REAL, a admissão que
+     * nasceu com marcador PROV (envio A&S sem CPF) é reapontada por `corrigirCpf`, reusado AQUI por
+     * dentro (ator SISTEMA, sem a guarda Master do controller). `forwardRef` porque o `AdmissoesModule`
+     * importa este módulo de volta (a liberação entrega o link). §A.38: rota pública que alcança CPF,
+     * re-auditoria do `seguranca` obrigatória antes do deploy.
+     */
+    @Inject(forwardRef(() => AdmissoesService)) private readonly admissoes: AdmissoesService,
   ) {}
 
   // ══ CONFIGURAÇÃO: A PORTA NASCE INERTE ══════════════════════════════════════════════════════
@@ -989,7 +999,42 @@ export class PortalAcessoEmailService {
      */
     await this.registrar("PORTAL_IDENTIDADE_GRAVADA", contexto, { cpf });
 
+    /*
+     * ┌─ A PONTE: O CPF REAL SUBSTITUI O MARCADOR PROVISÓRIO NA ESTEIRA ───────────────────────────┐
+     * │ Candidato enviado à admissão SEM CPF nasceu com marcador PROV (envio A&S). Agora que ele     │
+     * │ provou a identidade pelo e-mail+código e gravou o CPF REAL, a admissão viva vinculada é       │
+     * │ REAPONTADA pelo `corrigirCpf` (ator SISTEMA), que já valida, trata duplicata, reaponta e apaga │
+     * │ a linha PROV órfã. ISTO NÃO É A QUARTA PORTA DE ENVIO que o cabeçalho de `identidade` proíbe:  │
+     * │ não consome posição, não cria admissão, não libera nada; só acerta a chave de uma admissão     │
+     * │ que JÁ existe, estacionada em AGUARDANDO_LIBERACAO esperando exatamente este CPF.               │
+     * │                                                                                              │
+     * │ FALHA AQUI NÃO DERRUBA O FLUXO (mesma assimetria do `despacharLink`): o CPF já está gravado na │
+     * │ ficha (o fato), a reconciliação é efeito. Colisão de CPF sem confirmação, corrida de farol ou  │
+     * │ duplicata de vaga caem em ERRO de log (§A.6: só o nome da classe) e a admissão fica PROV para  │
+     * │ um Master corrigir à mão. Nunca auto-confirmamos merge de duplicata sem humano.                │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    await this.reconciliarCpfProvisorioDaEsteira(desfecho.candidatoId, cpf);
+
     return this.despacharLink(desfecho.candidatoId, contexto);
+  }
+
+  /**
+   * Reaponta a admissão viva de marcador PROVISÓRIO para o CPF REAL recém-gravado. Server-side, ator
+   * SISTEMA (`corrigirCpf(..., null)`), fail-safe. Ver o bloco em `identidade`.
+   */
+  private async reconciliarCpfProvisorioDaEsteira(candidatoId: string, cpfReal: string): Promise<void> {
+    try {
+      // A ADMISSÃO VEM DO VÍNCULO, nunca de uma busca por CPF: este serviço público não toca coluna de
+      // CPF da esteira (trava 1 de `portal-acesso-email.travas`). A decisão "é provisório?" e a troca
+      // moram em `AdmissoesService.reconciliarCpfProvisorio` (ator SISTEMA, no-op se o CPF já é real).
+      const admissaoId = await this.admissaoVivaDoCandidato(candidatoId);
+      if (!admissaoId) return;
+      await this.admissoes.reconciliarCpfProvisorio(admissaoId, cpfReal);
+    } catch (erro) {
+      // §A.6: só o nome da classe do erro; a mensagem pode carregar id ou CPF.
+      this.log.error(`reconciliacao do CPF pendente nao ocorreu: ${(erro as Error).name}`);
+    }
   }
 
   // ══ A SAÍDA: O LINK, PELO CAMINHO QUE JÁ EXISTE ═════════════════════════════════════════════

@@ -530,6 +530,19 @@ function ListaDeCandidaturasDaVaga({
     onMudou();
   }
 
+  /**
+   * ─ DEPOIS DE UMA AÇÃO DO "MOVER CANDIDATURA", SEM FECHAR O MODAL (§A.41) ────────────────────────
+   *
+   * O fluxo aprovar -> enviar acontece no MESMO modal, que re-aponta para a linha fresca sozinho.
+   * Então, ao contrário do `aposAcao`, esta variante NÃO zera `moverAlvo`: ela só relê o fundo (lista
+   * e contagem da vaga) para refletir a mudança por trás do modal. Quem fecha o modal é o "Fechar".
+   */
+  function aposAcaoMover() {
+    selecao.limpar();
+    pag.setFiltro({});
+    onMudou();
+  }
+
   // O RECORTE, VINDO DA BARRA, VIRA FILTRO SERVER-SIDE. Mudar o recorte limpa a seleção: o conjunto
   // mudou, e manter marcas de um recorte anterior seria seleção invisível (a régua do diretor).
   function mudarRecorte(r: RecorteDoPainel) {
@@ -742,7 +755,7 @@ function ListaDeCandidaturasDaVaga({
           candidatura={moverAlvo}
           token={token}
           onClose={() => setMoverAlvo(null)}
-          onFeito={aposAcao}
+          onFeito={aposAcaoMover}
         />
       )}
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import {
+  ehCpfProvisorio,
   ROTULO_ITEM_EPI,
   TAMANHOS_BOTA,
   TAMANHOS_CALCA,
@@ -255,6 +256,7 @@ function frenteTone(f: FrenteDetalhe): PillTone {
   return "wn";
 }
 function fmtCpf(cpf: string): string {
+  if (ehCpfProvisorio(cpf)) return "CPF Pendente";
   const d = (cpf ?? "").replace(/\D/g, "");
   if (d.length !== 11) return cpf || "não informado";
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;

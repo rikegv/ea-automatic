@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AuditoriaStatus, Origem, ResultadoAuditoria } from "@ea/shared-types";
+import { ehCpfProvisorio } from "@ea/shared-types";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import { SeletorLoja } from "@/components/admin/SeletorLoja";
 import { useAuth } from "@/lib/auth-context";
@@ -154,6 +155,7 @@ const s = (v: string | null | undefined) => v ?? "";
 
 // Máscara de exibição do CPF (mesma do AdmissaoDetalheModal): CPF é somente leitura.
 function fmtCpf(cpf: string): string {
+  if (ehCpfProvisorio(cpf)) return "CPF Pendente";
   const d = (cpf ?? "").replace(/\D/g, "");
   if (d.length !== 11) return cpf || "não informado";
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;

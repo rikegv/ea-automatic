@@ -21125,3 +21125,36 @@ Registrado para o próximo coordenador não repetir o que custou tempo nesta fre
   "super-proteção" de simetria no expurgo (predicado a mais na cicatrização) quebrava o furo-3. **Lição:
   rodar a SUÍTE CHEIA antes de dar por pronto (§A.40 regra 4)** — foi ela, rodada pela sessão de Vagas, que
   pegou a guarda D1 de LGPD que minhas auditorias de subconjunto não tinham rodado.
+
+## 2026-10-09 — CPF pendente no envio A&S (3 ondas), destravado e publicado
+
+Candidato de A&S podia ficar preso sem ser enviado para a admissão por não ter CPF (medido: ~6,9%
+não têm nesta etapa). Três ondas, validadas na tela pelo diretor no preview isolado (porta 3130, banco
+`ea_preview_cpf` descartável), publicadas pela rotina (§A.25/§A.49).
+
+- **Onda 1, destravar o envio sem CPF.** A pré-admissão nasce com um **marcador provisório** `PROV`+7 =
+  11 chars (largura exata de `candidatos.cpf`), derivado **por `as_candidatos.id`**
+  (`derivarCpfProvisorioPorCandidato`), não por (nome, cliente, data): no envio vivo a data é nula e a
+  chave da carga degeneraria para (nome, cliente), fundindo 18 pares de homônimos medidos em produção. O
+  marcador **nunca se passa por CPF real** (`isValidCpf` exige 11 dígitos; `PROV...` perde as letras),
+  prova em `shared-types` ao lado do validador. A admissão fica em `AGUARDANDO_LIBERACAO`; `criar` aceita
+  o marcador, `liberar` continua recusando. A tela mostra **"CPF Pendente"**, nunca um número falso
+  (guarda central em `formatCpf`/`fmtCpf`). O CPF real entra depois no Portal e **reaponta a admissão**
+  pela ponte `reconciliarCpfProvisorio` → `corrigirCpf` (ator SISTEMA, trata duplicata e apaga o órfão);
+  o ciclo `PortalModule`↔`AdmissoesModule` é declarado com `forwardRef` dos dois lados.
+- **Onda 2, "Motivo" vira "Observação" opcional NO ENVIO.** `@ValidateIf(o => !ocupaPosicao(o.situacao))`
+  no DTO: só o envio aceita vazio; descarte e desistência seguem exigindo motivo. Escopo fechado (§A.14):
+  lote e filtro intactos.
+- **Onda 3, o modal não fecha por ação (§A.41).** Aprovar → enviar acontecem no MESMO modal, que
+  re-aponta para a linha fresca sozinho; só o "Fechar" fecha.
+
+**Agentes (§A.38/§A.39):** `backend` e `frontend` construíram; `seguranca` auditou a Onda 1 (CPF/dado
+pessoal) e **APROVOU**; `tester` independente achou 3 testes "verdes que mentiam" (asseriam o requisito
+velho de "recusar sem CPF") e foram reescritos. Prova visual das 4 cenas em
+`~/ost-cpf-pendente-prints/out`. Gate verde no `origin/main` (recorte da BASE em worktree pristino):
+`tsc` backend+frontend RC=0, 332 testes da frente passados.
+
+**Recorte (§A.14, [[ea-recorte-parte-da-base-nao-do-tree]]):** `shared-types/src/index.ts` entrou por
+patch de UM hunk só (PREFIXO_CPF_PROVISORIO + ehCpfProvisorio), deixando fora o WIP da frente de de/para
+de cliente da fila e dos campos de origem/consultor de outra sessão. `portal-painel...tester.spec.ts`,
+`PropostaDeClienteDaPlanilha.tsx`, `docs/` e `deploy-local.sh` ficaram de fora por serem de outras frentes.

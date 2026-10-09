@@ -81,7 +81,7 @@
  * §A.11 (sem travessão), §A.24 (title case em título e rótulo de etapa).
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CANDIDATURA_SITUACAO_AJUDA,
   CANDIDATURA_SITUACAO_LABEL,
@@ -130,7 +130,7 @@ function ehDesvinculo(sa: Saida): sa is Desvinculo {
 const SAIDAS: Saida[] = ["DESCARTADO", "DESISTIU", "ENVIADO_PARA_ADMISSAO"];
 
 export function MoverCandidaturaModal({
-  candidatura,
+  candidatura: candidaturaInicial,
   token,
   onClose,
   onFeito,
@@ -140,6 +140,32 @@ export function MoverCandidaturaModal({
   onClose: () => void;
   onFeito: () => void;
 }) {
+  /*
+   * ─ O MODAL É DONO DA CANDIDATURA QUE MOSTRA, E NÃO SOME A CADA AÇÃO (§A.41) ─────────────────────
+   *
+   * ┌─ O QUE MUDOU (decisão do diretor) ────────────────────────────────────────────────────────┐
+   * │ APROVAR -> ENVIAR É UM FLUXO SÓ, no MESMO modal. Antes toda ação chamava `onFeito`, e os    │
+   * │ pais zeravam a seleção: o modal fechava, e quem acabara de aprovar tinha de reabrir para    │
+   * │ enviar. Agora a ação grava, o modal RE-APONTA para a linha fresca (a `situacao` nova decide  │
+   * │ quais seções aparecem, e a de "Enviar Para A Admissão" nasce aqui mesmo) e fica aberto.     │
+   * │                                                                                             │
+   * │ SÓ "Fechar" E Escape FECHAM (§A.41). `onFeito` passou a significar só "releia o fundo",     │
+   * │ nunca "feche": os pais mantêm o alvo e recarregam a lista por trás.                          │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A LINHA FRESCA VEM DO RETORNO DA PRÓPRIA AÇÃO (`registrarSaida`, `aprovar`, `moverEtapa`,
+   * `reverter` já devolvem o `AsCandidaturaItem` atualizado), então o modo reflete o estado novo sem
+   * uma rota de leitura a mais. Caso de borda (desvincular tira a pessoa do universo da tela): o modal
+   * mostra o novo estado em vez de sumir, e é o fundo que deixa de listá-la.
+   */
+  const [candidatura, setCandidatura] = useState(candidaturaInicial);
+  // RESYNC SÓ QUANDO O PAI APONTA PARA OUTRA LINHA (abrir outra candidatura): a comparação é por id,
+  // porque o pai mantém o MESMO objeto entre releituras de fundo, e reatribuir ali apagaria a linha
+  // fresca que a ação acabou de gravar.
+  useEffect(() => {
+    setCandidatura(candidaturaInicial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidaturaInicial.id]);
   /*
    * DUAS LISTAS, E A DIFERENÇA É O QUE IMPEDE UM DEFEITO SILENCIOSO:
    *  . `ativas` desenha os CARDS. Oferecer uma etapa que o diretor tirou de circulação levaria a
@@ -241,7 +267,9 @@ export function MoverCandidaturaModal({
      * existente muda de aparência por causa desta linha.
      */
     tone: "default" | "danger" | "warn";
-    acao: () => Promise<unknown>;
+    /* A AÇÃO DEVOLVE A CANDIDATURA ATUALIZADA, e é dela que o modal re-aponta a linha: todas as
+       quatro rotas deste modal (mover, aprovar, saída, reverter) já retornam o `AsCandidaturaItem`. */
+    acao: () => Promise<AsCandidaturaItem>;
     falha: string;
   } | null>(null);
 
@@ -282,8 +310,22 @@ export function MoverCandidaturaModal({
     setErro(null);
     setOcupado(true);
     try {
-      await acao();
+      const atualizada = await acao();
       setConfirmacao(null);
+      // O CARD DE SAÍDA ABERTO SE FECHA E O MOTIVO SE LIMPA: a ação gravou, e deixar o campo cheio
+      // convidaria a reenviar o mesmo motivo por cima do estado novo.
+      setSaidaAberta(null);
+      setMotivo("");
+      setMotivoEscolhido(null);
+      setPretensao("");
+      setMovendoPara(null);
+      // RE-APONTA PARA A LINHA FRESCA, sem fechar: a `situacao` nova decide quais seções aparecem
+      // (aprovar faz nascer "Enviar Para A Admissão", enviar faz nascer "Voltar Para A Seleção"). O
+      // retorno vazio de um ambiente de teste não corrompe o estado: o merge preserva o que já havia.
+      if (atualizada && typeof atualizada === "object") {
+        setCandidatura((prev) => ({ ...prev, ...atualizada }));
+      }
+      // `onFeito` AGORA SÓ RELÊ O FUNDO (lista e contagem), nunca fecha: o modal fecha só no "Fechar".
       onFeito();
     } catch (err) {
       // O DIÁLOGO FECHA NO ERRO, e a mensagem do backend aparece no corpo do modal, que é onde o
@@ -313,6 +355,11 @@ export function MoverCandidaturaModal({
        travar o botão e incluir o valor no corpo) saem da MESMA resposta: três comparações soltas
        divergiriam no primeiro ajuste, e a que divergisse seria a do corpo, em silêncio. */
     const pedePretensao = motivoEscolhido?.pedePretensao === true;
+    /* ─ SÓ O ENVIO VIRA "Observação" OPCIONAL (decisão do diretor) ─────────────────────────────
+       Desvincular (descarte e desistência) CONTINUA com "Motivo *" obrigatório: o motivo da saída é
+       o que o histórico vai mostrar depois. O envio é o desfecho bem-sucedido, e a observação é um
+       complemento que pode ir em branco. */
+    const ehEnvio = sa === "ENVIADO_PARA_ADMISSAO";
     return (
       <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
         {/* O CAMPO SE DECIDE SOZINHO ENTRE SELETOR E CAIXA DE TEXTO, pela régua compartilhada
@@ -323,6 +370,10 @@ export function MoverCandidaturaModal({
           situacao={sa}
           valor={motivo}
           onChange={setMotivo}
+          /* SÓ O ENVIO É OPCIONAL E GANHA O RÓTULO "Observação". As duas saídas sem êxito seguem com
+             "Motivo *". */
+          opcional={ehEnvio}
+          rotulo={ehEnvio ? "Observação" : undefined}
           /* A LINHA INTEIRA DO CATÁLOGO, e não só o nome: é a marca `pedePretensao` dela que abre o
              campo do valor logo abaixo. Trocar de motivo LIMPA o que foi digitado, senão o valor
              pedido por um motivo viajaria carimbado com outro. */
@@ -364,7 +415,11 @@ export function MoverCandidaturaModal({
         <div className="mt-3 flex justify-end">
           <Button
             className="px-4 py-2.5"
-            disabled={ocupado || motivo.trim().length < 2 || (pedePretensao && !pretensao.trim())}
+            disabled={
+              ocupado ||
+              (!ehEnvio && motivo.trim().length < 2) ||
+              (pedePretensao && !pretensao.trim())
+            }
             onClick={() =>
               pedirConfirmacao({
                 titulo: `${SAIDA_TITULO[sa]}?`,

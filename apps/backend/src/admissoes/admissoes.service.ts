@@ -14,6 +14,7 @@ import {
   CLICKSIGN_STATUS_LABEL,
   TIPO_MARCACAO_LABEL,
   FAROL_GLOBAL_LABEL,
+  ehCpfProvisorio,
   isValidCpf,
   ITENS_EPI,
   normalizarColunasRelatorio,
@@ -95,6 +96,7 @@ import {
   STATUS_INICIAL_FRENTE,
 } from "../domain/admissao";
 import { parseBeneficiosPadrao } from "../domain/beneficios";
+import { derivarCpfProvisorioPorCandidato } from "../domain/identidade-provisoria";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PortalEnvioService } from "../portal/portal-envio.service";
@@ -333,12 +335,23 @@ export interface CreateAdmissaoOpts {
  */
 export interface PreAdmissaoDoFunilInput {
   candidato: {
+    /**
+     * CPF REAL (11 dígitos) OU marcador PROVISÓRIO (`PROV`+7), quando o candidato ainda não tem CPF.
+     * O marcador é a identidade válida-o-bastante-para-CRIAR a pré-admissão; a LIBERAÇÃO continua
+     * recusando-o por `isValidCpf`, então a admissão fica estacionada até o CPF real chegar.
+     */
     cpf: string;
     nome: string;
     email?: string | null;
     telefone?: string | null;
     dataNascimento?: string | null;
   };
+  /**
+   * `as_candidatos.id` de quem está sendo enviado. ENTRA SÓ no caminho SEM CPF real: é a semente da
+   * re-derivação com sal quando um marcador provisório colide com outra identidade (condição 4). Com
+   * CPF real, é ignorado. §A.6: id técnico, nunca logado.
+   */
+  candidatoId?: string | null;
   /**
    * NULÁVEIS de propósito: a vaga do A&S pode não ter cliente resolvido (só 31 de 164 casaram) e o
    * de/para é manual (§A.5). Enviar não pode inventar `cod_cliente`: o que não resolve entra na
@@ -395,6 +408,22 @@ type Executor = Database | Parameters<Parameters<Database["transaction"]>[0]>[0]
 /** numeric do driver ("500.00") no formato que o consultor lê e digita ("500,00"). */
 function fmtValorBr(valor: string): string {
   return String(valor).replace(".", ",");
+}
+
+/**
+ * MESMA PESSOA PELO NOME, para distinguir reenvio de colisão de marcador provisório. Caixa alta, sem
+ * acento, espaços colapsados: o reenvio traz o nome idêntico da mesma fonte, então a comparação é
+ * estável. Não é chave de identidade (o CPF é, §A.3); é só o sinal disponível na tabela `candidatos`.
+ */
+function mesmaIdentidadePeloNome(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (s: string | null | undefined): string =>
+    (s ?? "")
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+  return norm(a) === norm(b);
 }
 
 @Injectable()
@@ -903,9 +932,16 @@ export class AdmissoesService {
   async criarPreAdmissaoDoFunil(
     input: PreAdmissaoDoFunilInput,
   ): Promise<{ admissaoId: string; jaExistia: boolean }> {
-    const cpf = normalizeCpf(input.candidato.cpf);
+    const bruto = (input.candidato.cpf ?? "").trim();
+    const ehProvisorio = ehCpfProvisorio(bruto);
+    // CPF REAL vira chave normalizada; MARCADOR PROVISÓRIO entra como está, porque `normalizeCpf`
+    // tiraria as letras e o degradaria a dígitos soltos. A LIBERAÇÃO continua recusando o marcador
+    // (`isValidCpf` o reprova), então a admissão nasce e fica estacionada em AGUARDANDO_LIBERACAO.
+    let cpf = ehProvisorio ? bruto.toUpperCase() : normalizeCpf(bruto);
     // Risco (b): dígito do CPF conferido antes de qualquer escrita. Fail-closed, sem repetir o número.
-    if (!isValidCpf(cpf)) throw new BadRequestException("CPF inválido");
+    if (!ehProvisorio && !isValidCpf(cpf)) throw new BadRequestException("CPF inválido");
+    // O marcador só é aceito com o candidato que o semeia: é ele que re-deriva na colisão (abaixo).
+    if (ehProvisorio && !input.candidatoId) throw new BadRequestException("CPF inválido");
 
     // Risco (a): o idVacancy é DESNORMALIZADO na admissão para alimentar o unique parcial
     // `uq_admissao_cpf_vaga_viva`, que é a defesa de corrida contra duas admissões vivas do par.
@@ -922,6 +958,18 @@ export class AdmissoesService {
 
     try {
       return await this.db.transaction(async (tx) => {
+        /*
+         * ┌─ COLISÃO DE MARCADOR PROVISÓRIO (condição 4 da auditoria) ─────────────────────────────────┐
+         * │ O marcador é um hash de 36^7 (78 bilhões), então colisão entre uuids é desprezível, MAS se  │
+         * │ dois candidatos distintos derivarem o MESMO marcador, um `onConflictDoNothing` cego faria a  │
+         * │ segunda admissão apontar para a linha de `candidatos` do PRIMEIRO, contaminando a identidade. │
+         * │ Aqui, DENTRO da transação, re-derivamos com sal até o marcador estar livre OU já ser do       │
+         * │ MESMO candidato (reenvio idempotente). §A.6: a resolução não loga nome nem o marcador.         │
+         * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+         */
+        if (ehProvisorio) {
+          cpf = await this.marcadorProvisorioLivre(tx, cpf, input.candidatoId!, input.candidato.nome);
+        }
         // Candidato por CPF, preservando o existente (regra 6 — histórico).
         await tx
           .insert(candidatos)
@@ -1012,18 +1060,58 @@ export class AdmissoesService {
   }
 
   /**
+   * MARCADOR PROVISÓRIO QUE NÃO CONTAMINA OUTRA IDENTIDADE (condição 4 da auditoria).
+   *
+   * Lê `candidatos` por marcador DENTRO da transação do chamador e decide:
+   *  - não existe linha: o marcador está LIVRE, é o certo;
+   *  - existe e é do MESMO candidato (nome igual): é REENVIO, reusar a linha (idempotência);
+   *  - existe e é de OUTRA identidade: COLISÃO de hash, re-deriva com sal e tenta o próximo.
+   *
+   * O nome é o único sinal de identidade na tabela `candidatos` (que é chaveada por CPF, não pelo
+   * `as_candidatos.id`), e serve porque o reenvio traz o nome idêntico da MESMA fonte e uma colisão de
+   * 36^7 entre pessoas DIFERENTES praticamente nunca compartilha o nome. Esgotar o teto é
+   * matematicamente desprezível (36^7 contra ~6 mil marcadores): se acontecer, fail-closed com erro
+   * próprio, nunca um `onConflictDoNothing` cego. §A.6: nada aqui loga nome nem marcador.
+   */
+  private async marcadorProvisorioLivre(
+    tx: Executor,
+    base: string,
+    candidatoId: string,
+    nome: string,
+  ): Promise<string> {
+    const TETO_SAL = 1000;
+    for (let sal = 0; sal <= TETO_SAL; sal++) {
+      const marcador = sal === 0 ? base : derivarCpfProvisorioPorCandidato(candidatoId, sal);
+      const [existente] = await tx
+        .select({ nome: candidatos.nome })
+        .from(candidatos)
+        .where(eq(candidatos.cpf, marcador))
+        .limit(1);
+      if (!existente) return marcador;
+      if (mesmaIdentidadePeloNome(existente.nome, nome)) return marcador;
+    }
+    throw new ConflictException(
+      "Não foi possível gerar um identificador provisório único para este candidato. Tente novamente.",
+    );
+  }
+
+  /**
    * DEDUP Pandapé — admissões VIVAS do CPF (não terminais). "Viva" = EM_ADMISSAO / BANCO_AGUARDAR /
    * AGUARDANDO_LIBERACAO (§A.16: declínio/rescisão/concluída são terminais e viram processo NOVO).
    * Devolve o `idVacancy` de cada uma para a trava decidir por (CPF + vaga). Manuais/históricas têm
    * idVacancy nulo (nunca casam por vaga; entram no cálculo do "ambíguo").
    */
   async vivasPorCpf(cpf: string): Promise<{ id: string; idVacancy: string | null }[]> {
+    // MARCADOR PROVISÓRIO entra como está (`normalizeCpf` o degradaria a dígitos soltos e a busca não
+    // casaria); CPF real é normalizado como antes. Sem isto a idempotência da ponte sem CPF não acha a
+    // admissão PROV já viva e a reentrada estoura como erro em vez de reusar.
+    const chave = ehCpfProvisorio(cpf) ? cpf.trim().toUpperCase() : normalizeCpf(cpf);
     return this.db
       .select({ id: admissoes.id, idVacancy: admissoes.idVacancy })
       .from(admissoes)
       .where(
         and(
-          eq(admissoes.candidatoCpf, normalizeCpf(cpf)),
+          eq(admissoes.candidatoCpf, chave),
           inArray(admissoes.farolGlobal, ["EM_ADMISSAO", "BANCO_AGUARDAR", "AGUARDANDO_LIBERACAO"]),
         ),
       );
@@ -3527,7 +3615,11 @@ export class AdmissoesService {
   async corrigirCpf(
     id: string,
     dto: { cpf: string; confirmarDuplicado?: boolean },
-    user: AuthUser,
+    // `null` É O ATOR SISTEMA: a ponte do portal (candidato trocando o marcador PROV pelo CPF real,
+    // `portal-acesso-email.service`) não tem `AuthUser`, e `candidato_alteracoes_log.autor_id` é
+    // nullable justamente para a trilha de sistema (precedente `cria-prontuario-nc1`). O controller
+    // de Master continua passando o usuário real; só esta porta server-side passa `null`.
+    user: AuthUser | null,
   ) {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
@@ -3627,7 +3719,7 @@ export class AdmissoesService {
         campo: "correcaoCpf",
         valorAnterior: adm.candidatoCpf,
         valorNovo: novo,
-        autorId: user.id,
+        autorId: user?.id ?? null,
       });
 
       // Fantasma de digitação: o CPF errado sem NENHUMA admissão apontando para ele não é histórico
@@ -3649,6 +3741,20 @@ export class AdmissoesService {
       duplicadoConfirmado: jaExiste ? { nome: jaExiste.nome } : null,
       corrigidoEm: agora.toISOString(),
     };
+  }
+
+  /**
+   * PONTE DO CPF PENDENTE, server-side (porta de e-mail do portal). Se a admissão AINDA carrega um
+   * marcador PROVISÓRIO, troca-o pelo CPF REAL que o candidato acabou de provar no portal, reusando
+   * `corrigirCpf` com ator SISTEMA (`null`). NO-OP quando o CPF já é real: NUNCA reescreve um CPF
+   * verdadeiro. A decisão de "é provisório?" mora AQUI, e não no serviço público do portal, de
+   * propósito, porque aquela classe tem trava de teste de não tocar coluna de CPF da esteira; o portal
+   * só descobre a admissão pelo vínculo e DELEGA. Ver o bloco em `portal-acesso-email.identidade`.
+   */
+  async reconciliarCpfProvisorio(admissaoId: string, cpfReal: string): Promise<void> {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm || !ehCpfProvisorio(adm.candidatoCpf)) return;
+    await this.corrigirCpf(admissaoId, { cpf: cpfReal }, null);
   }
 
   /** Rótulos legíveis do par atual, para a trilha não guardar só códigos. */

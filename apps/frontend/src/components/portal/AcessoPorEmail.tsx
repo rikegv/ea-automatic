@@ -560,8 +560,8 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
     return (
       <div className="flex flex-col gap-5">
         <Titulo
-          titulo="Confirme Seus Dados"
-          apoio="Para seguir, informe o seu CPF e a sua data de nascimento."
+          titulo="Criar Cadastro"
+          apoio="Para criar o seu cadastro, informe o CPF e a data de nascimento."
         />
 
         {manutencao ? <AvisoManutencao /> : erro ? <Aviso tom="atencao">{erro}</Aviso> : null}

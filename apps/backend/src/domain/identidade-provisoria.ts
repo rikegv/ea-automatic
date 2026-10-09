@@ -1,5 +1,18 @@
 import { createHash } from "node:crypto";
-import { isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
+import {
+  PREFIXO_CPF_PROVISORIO,
+  ehCpfProvisorio,
+  isValidCpf,
+  normalizeCpf,
+  type FarolGlobal,
+} from "@ea/shared-types";
+
+/**
+ * FONTE ÚNICA do detector e do prefixo: o `shared-types`. A TELA precisa reconhecer o marcador para
+ * mostrar "CPF Pendente", então o detector e o prefixo moram no pacote compartilhado; aqui eles são
+ * só REEXPORTADOS, nunca redefinidos, para não existirem duas verdades sobre o que é um provisório.
+ */
+export { ehCpfProvisorio };
 
 /**
  * IDENTIDADE PROVISÓRIA para declínio sem CPF (decisão do diretor, Opção 1a).
@@ -26,7 +39,7 @@ import { isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
  *  - quando o CPF real aparecer numa carga futura, ela deriva o mesmo provisório a partir dos mesmos
  *    três campos e ACHA o registro por chave primária, para reconciliar em vez de duplicar.
  */
-export const PREFIXO_PROVISORIO = "PROV";
+export const PREFIXO_PROVISORIO = PREFIXO_CPF_PROVISORIO;
 
 /** Quantos caracteres de hash vão depois do prefixo. 4 + 7 = 11 = largura de `candidatos.cpf`. */
 const TAMANHO_HASH = 7;
@@ -72,10 +85,28 @@ export function derivarCpfProvisorio(
   return `${PREFIXO_PROVISORIO}${sufixo}`;
 }
 
-/** Diz se um identificador é provisório. Barato e sem falso positivo: CPF real nunca tem letra. */
-export function ehCpfProvisorio(cpf: string | null | undefined): boolean {
-  const v = (cpf ?? "").trim().toUpperCase();
-  return v.length === 11 && v.startsWith(PREFIXO_PROVISORIO);
+/**
+ * DERIVAÇÃO POR CANDIDATO, para o ENVIO VIVO sem CPF (destravamento da ponte A&S → Esteira).
+ *
+ * POR QUE NÃO REUSAR `derivarCpfProvisorio` (nome + cliente + data): no envio vivo a data de admissão
+ * é NULA, então a chave da carga degenera para (nome, cliente), e MEDIDO em produção há 18 pares
+ * (nome, cliente) com 2+ candidatos A&S DISTINTOS sem CPF. Reusar aquela derivação FUNDIRIA essas
+ * pessoas numa linha só de `candidatos` e quebraria `uq_admissao_cpf_vaga_viva` quando fossem para a
+ * mesma vaga. A unicidade POR CANDIDATO (`as_candidatos.id`) é o ponto, e por isso a entrada é o id.
+ *
+ * DETERMINÍSTICO por candidato: reenviar o mesmo candidato deriva o MESMO marcador, e a idempotência
+ * da ponte (unique parcial + reuso da admissão viva) reconhece em vez de duplicar.
+ *
+ * O `sal` SÓ ENTRA NA COLISÃO: o espaço é 36^7 = 78 bilhões, então colisão entre uuids é desprezível,
+ * mas quando dois candidatos distintos derivarem o MESMO marcador o chamador transacional re-deriva
+ * com sal incremental até achar um livre, para a identidade de um nunca contaminar a do outro. Com
+ * `sal = 0` a saída é a base, e é por isso que o caminho normal nunca paga o custo do sal.
+ */
+export function derivarCpfProvisorioPorCandidato(candidatoId: string, sal = 0): string {
+  const chave = sal > 0 ? `${candidatoId}|${sal}` : candidatoId;
+  const hex = createHash("sha256").update(chave, "utf8").digest("hex").slice(0, 16);
+  const sufixo = (BigInt(`0x${hex}`) % ESPACO).toString(36).toUpperCase().padStart(TAMANHO_HASH, "0");
+  return `${PREFIXO_PROVISORIO}${sufixo}`;
 }
 
 /**

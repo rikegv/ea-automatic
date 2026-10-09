@@ -1441,10 +1441,10 @@ export default function CentralDeCandidatosPage() {
           candidatura={moverAlvo}
           token={token}
           onClose={() => setMoverAlvo(null)}
-          onFeito={() => {
-            setMoverAlvo(null);
-            recarregar();
-          }}
+          /* NÃO FECHA A CADA AÇÃO (§A.41): o fluxo aprovar -> enviar acontece no MESMO modal, que
+             re-aponta para a linha fresca sozinho. Aqui só recarrega a lista de fundo; quem fecha é
+             o "Fechar" do modal (onClose). */
+          onFeito={() => recarregar()}
         />
       )}
 

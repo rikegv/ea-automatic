@@ -23,6 +23,7 @@
  */
 
 import type { AsCandidaturaEtapaItem } from "@ea/shared-types";
+import { ehCpfProvisorio } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
@@ -905,6 +906,7 @@ export function ehBancoTalentos(alvo: unknown): boolean {
 }
 
 export function formatCpf(valor: string): string {
+  if (ehCpfProvisorio(valor)) return "CPF Pendente";
   const d = valor.replace(/\D/g, "").slice(0, 11);
   return d
     .replace(/^(\d{3})(\d)/, "$1.$2")

@@ -45,6 +45,8 @@ export function CampoMotivoDaSaida({
   alturaMinima = "min-h-[70px]",
   semRotulo = false,
   semMotivosQuePedemPretensao = false,
+  opcional = false,
+  rotulo = "Motivo",
 }: {
   /** O desfecho escolhido. É ELE que decide se o campo é seletor ou caixa de texto. */
   situacao: string;
@@ -94,6 +96,16 @@ export function CampoMotivoDaSaida({
    * grafia.
    */
   semMotivosQuePedemPretensao?: boolean;
+  /**
+   * ─ OPCIONAL, E SÓ O ENVIO PASSA (decisão do diretor) ──────────────────────────────────────────
+   *
+   * Tira o asterisco de obrigatório do rótulo. O ENVIO PARA A ADMISSÃO é o único desfecho em que a
+   * observação pode ir em branco: desvincular (descarte e desistência) continua exigindo o motivo,
+   * que é o que o histórico mostra depois. A régua do botão mora no modal; aqui é só a apresentação.
+   */
+  opcional?: boolean;
+  /** O rótulo do campo. O envio troca "Motivo" por "Observação"; as outras saídas seguem "Motivo". */
+  rotulo?: string;
 }) {
   const doCatalogo = motivoVemDoCatalogo(situacao);
   // O CATÁLOGO SÓ É PEDIDO QUANDO O CAMPO É SELETOR. Ver o comentário de `useMotivosDescarte`.
@@ -105,8 +117,8 @@ export function CampoMotivoDaSaida({
       <label className="flex flex-col gap-1.5">
         {!semRotulo && (
           <span className="text-[12.5px] text-dim">
-            Motivo
-            <span className="ml-1 text-danger">*</span>
+            {rotulo}
+            {!opcional && <span className="ml-1 text-danger">*</span>}
           </span>
         )}
         <textarea
@@ -131,8 +143,8 @@ export function CampoMotivoDaSaida({
     <label className="flex flex-col gap-1.5">
       {!semRotulo && (
         <span className="text-[12.5px] text-dim">
-          Motivo
-          <span className="ml-1 text-danger">*</span>
+          {rotulo}
+          {!opcional && <span className="ml-1 text-danger">*</span>}
         </span>
       )}
       <Select

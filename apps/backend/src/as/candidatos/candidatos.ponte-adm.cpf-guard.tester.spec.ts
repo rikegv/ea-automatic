@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { describe, expect, it } from "vitest";
 import { asCandidaturas } from "../../db/schema";
+import { ehCpfProvisorio } from "@ea/shared-types";
 import {
   bancoFingido,
   linhaFingida,
@@ -8,61 +9,46 @@ import {
 } from "./fronteira-encerrada.tester-fake";
 
 /**
- * ─ PONTE A&S -> ADM, RISCO b: A GUARDA DE CPF NO ENVIO PARA A ESTEIRA (`tester` §A.38/§A.40) ─────
+ * ─ PONTE A&S -> ADM: O ENVIO SEM CPF DEIXOU DE SER RECUSADO (regra MUDOU em 09/10/2026) ──────────
  *
- * ESCRITO A PARTIR DO REQUISITO, como verificação INDEPENDENTE da guarda que a ponte A&S -> ADM
- * construiu em paralelo: `registrarSaida`, no ramo `ENVIADO_PARA_ADMISSAO`, valida o CPF do
- * candidato ANTES de `mudarSituacaoOcupandoPosicao`. A admissão nasce pela chave de identidade
- * (o CPF, §A.3); enviar sem CPF válido criaria uma admissão órfã de identidade DEPOIS de já ter
- * consumido a posição da vaga, deixando a vaga furada e a esteira quebrada. Este arquivo prova,
- * sem ter escrito a guarda, que a ordem (recusar ANTES de consumir) e o §A.6 são honrados.
+ * ┌─ A REGRA INVERTEU, e este arquivo foi reescrito para a regra NOVA ──────────────────────────────┐
+ * │ ANTES (até 08/10/2026): `registrarSaida`, no ramo `ENVIADO_PARA_ADMISSAO`, RECUSAVA quando o    │
+ * │ candidato não tinha CPF válido (a pré-admissão nasce pela chave de identidade, o CPF, §A.3).     │
+ * │ AGORA (decisão do diretor, 09/10/2026, destravamento do envio sem CPF): em vez de recusar, o    │
+ * │ envio DERIVA UM MARCADOR PROVISÓRIO por candidato (`PROV`+7) e PROSSEGUE. A admissão nasce com   │
+ * │ o marcador, estacionada em AGUARDANDO_LIBERACAO, e o candidato preenche o CPF real depois no      │
+ * │ portal (a ponte `corrigirCpf` reaponta e some o marcador órfão). A LIBERAÇÃO continua recusando  │
+ * │ o marcador (`isValidCpf` o reprova), então nada avança de fase sem CPF real.                      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * A REGRA QUE ESTES TESTES FIXAM:
- *   1. sem CPF válido, o envio FALHA com mensagem PRÓPRIA;
- *   2. a falha é ANTES de consumir a posição: a candidatura NÃO vai a `ENVIADO_PARA_ADMISSAO`, e a
- *      linha da vaga não recebe a entrega (ordem importa: consumir e depois falhar deixa a vaga
- *      furada, que é o dano exato do risco b);
- *   3. §A.6: nem a mensagem nem qualquer efeito carregam o número do CPF.
+ * O QUE ESTE ARQUIVO FIXA AGORA (verificação independente, §A.38/§A.40):
+ *   1. sem CPF válido o envio NÃO FALHA mais: ele consome a posição e a candidatura vira ENVIADO;
+ *   2. com CPF presente porém INVÁLIDO, mesmo desfecho (o inválido também leva ao marcador);
+ *   3. §A.6: nenhum efeito carrega um número de 11 dígitos (o marcador tem letras, não é número).
  *
- * ┌─ POR QUE `bancoFingido`, E O QUE ELE FIXA SEM QUE EU CONTROLE O CPF ────────────────────────┐
- * │ O dublê da fronteira encerrada é o único que modela o caminho travado inteiro (leitura da    │
- * │ vaga com FOR UPDATE, contagem por lado, escrita da candidatura e do histórico). Ele devolve  │
- * │ o candidato do funil SEM CPF (`asCandidatos.findFirst` -> `{ id, nome }`), que é EXATAMENTE   │
- * │ o cenário "sem CPF válido" do requisito. Não preciso injetar CPF para provar o risco b: a     │
- * │ ausência já é a violação.                                                                     │
- * │                                                                                              │
- * │ GAP REPORTADO AO COORDENADOR: o caso "CPF PRESENTE mas inválido, e o número NÃO vaza na       │
- * │ mensagem" precisa de um dublê que devolva um CPF inválido, o que este fake não permite. Fica  │
- * │ como `.todo` abaixo, para o autor da ponte (ou o dono do fake) expor um override de CPF.      │
- * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ * ┌─ POR QUE A ADMISSÃO NÃO É CRIADA NESTE DUBLÊ, e por que isso está CERTO ────────────────────────┐
+ * │ `bancoFingido` constrói `CandidatosService` SEM a `AdmissoesService` (o 5º argumento). Então     │
+ * │ `this.admissoes` é `undefined` e `criarPreAdmissaoDoFunil` NÃO é chamado: este dublê cobre o     │
+ * │ caminho de `candidatos.service` (derivar o PROV e consumir a posição), não a criação da          │
+ * │ admissão. "Criar ACEITA PROV (nasce AGUARDANDO_LIBERACAO)" e "liberar RECUSA PROV" são medidos   │
+ * │ direto contra a `AdmissoesService` em `admissoes.ponte-cpf-provisorio.backend.spec.ts`.          │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 
 const ENVIO = "ENVIADO_PARA_ADMISSAO" as const;
 
-/** Uma sequência de 11 dígitos, que é a forma que um CPF vazado tomaria numa frase de erro. */
+/** Uma sequência de 11 dígitos, que é a forma que um CPF vazaria numa frase ou numa escrita. */
 const ONZE_DIGITOS = /\d{11}/;
 
 async function erroDe(p: Promise<unknown>): Promise<unknown> {
   return p.then(() => null).catch((e: unknown) => e);
 }
 
-function mensagemDe(erro: unknown): string {
-  const resp = (erro as { getResponse?: () => unknown })?.getResponse?.();
-  if (resp && typeof resp === "object" && "message" in resp) {
-    return String((resp as { message: unknown }).message);
-  }
-  return String((erro as { message?: unknown })?.message ?? erro);
-}
-
-describe("ponte A&S -> ADM (risco b): enviar para a esteira SEM CPF válido não consome posição", () => {
-  it("a candidatura de alguém SEM CPF não vai para a esteira: o envio é RECUSADO", async () => {
-    // ALOCADO/OFICIAL é o caso de consumo do caminho travado. É por ele que se mede o risco b: sem
-    // a guarda a linha viraria ENVIADO; com a guarda (o dublê devolve candidato SEM CPF), ela tem
-    // de continuar ALOCADA.
+describe("ponte A&S -> ADM: enviar para a esteira SEM CPF agora DERIVA PROV e prossegue", () => {
+  it("a candidatura de alguém SEM CPF VAI para a esteira: o envio NÃO é mais recusado", async () => {
     const b = bancoFingido({
       candidaturas: [linhaFingida({ id: "cand-1", situacao: "ALOCADO", posicaoLado: "OFICIAL" })],
-      // O override de CPF que este arquivo pediu: `null` modela o candidato do funil SEM CPF, que é
-      // a violação do risco b. Sem ele, o fake usa o CPF válido padrão e o gate não teria o que barrar.
+      // `null` modela o candidato do funil SEM CPF. Antes isto barrava o envio; agora deriva o PROV.
       cpfDoFunil: null,
     });
 
@@ -74,64 +60,18 @@ describe("ponte A&S -> ADM (risco b): enviar para a esteira SEM CPF válido não
       ),
     );
 
-    // 1. FALHOU: sem a guarda, resolveria e consumiria; com a guarda, rejeita.
-    expect(erro).not.toBeNull();
+    // NÃO falhou: o ramo do PROV prosseguiu em vez de lançar.
+    expect(erro).toBeNull();
+    // A posição FOI consumida: a candidatura avançou para ENVIADO_PARA_ADMISSAO.
+    expect(b.situacaoDe("cand-1")).toBe(ENVIO);
+    expect(
+      b.updates.some((u) => u.tabela === asCandidaturas && u.valores.situacao === ENVIO),
+    ).toBe(true);
   });
 
-  it("a posição NÃO é consumida: a candidatura continua ALOCADA e nada vira ENVIADO", async () => {
-    const b = bancoFingido({
-      candidaturas: [linhaFingida({ id: "cand-1", situacao: "ALOCADO", posicaoLado: "OFICIAL" })],
-      cpfDoFunil: null,
-    });
-
-    await erroDe(
-      b.service.registrarSaida(
-        "cand-1",
-        { situacao: ENVIO, motivo: "foi para a esteira" } as never,
-        usuarioFingido("COMUM") as never,
-      ),
-    );
-
-    // 2. A ORDEM É A REGRA: recusar ANTES de consumir. A linha fica no estado anterior...
-    expect(b.situacaoDe("cand-1")).toBe("ALOCADO");
-    // ...e nenhuma escrita levou a candidatura a ENVIADO_PARA_ADMISSAO.
-    const virouEnvio = b.updates.some(
-      (u) => u.tabela === asCandidaturas && u.valores.situacao === ENVIO,
-    );
-    expect(virouEnvio).toBe(false);
-  });
-
-  it("§A.6: a frase da recusa não carrega o número do CPF", async () => {
-    const b = bancoFingido({
-      candidaturas: [linhaFingida({ id: "cand-1", situacao: "ALOCADO", posicaoLado: "OFICIAL" })],
-      cpfDoFunil: null,
-    });
-
-    const erro = await erroDe(
-      b.service.registrarSaida(
-        "cand-1",
-        { situacao: ENVIO, motivo: "foi para a esteira" } as never,
-        usuarioFingido("COMUM") as never,
-      ),
-    );
-
-    // Sem a guarda, `erro` seria null (a operação resolveria) e não haveria frase a inspecionar.
-    // Com a guarda, há mensagem própria e ela é limpa de CPF.
-    expect(erro).not.toBeNull();
-    expect(mensagemDe(erro)).not.toMatch(ONZE_DIGITOS);
-  });
-
-  /**
-   * O GAP FECHADO: CPF PRESENTE, PORÉM INVÁLIDO, e o número NÃO reaparece em NENHUM efeito.
-   *
-   * O `bancoFingido` GANHOU o override de CPF que este arquivo pediu (`cpfDoFunil`), então o caso
-   * agora é exprimível sem dublê próprio: um CPF sintético de dígito inválido entra pela ponte, a
-   * guarda recusa, e o número sintético é procurado na frase de erro. §A.6 exige que ele não esteja
-   * lá, e é isso que o teste prova.
-   */
-  it("CPF presente mas inválido: recusa e o número sintético não aparece na mensagem", async () => {
-    // 11 uns: onze dígitos que um `isValidCpf` REPROVA (dígito verificador não fecha). Se a guarda
-    // vazasse o número, ele apareceria na frase e o regex de onze dígitos casaria.
+  it("CPF presente mas INVÁLIDO: também deriva o marcador e prossegue, sem vazar o número", async () => {
+    // 11 uns: onze dígitos que `isValidCpf` reprova (dígito verificador não fecha). Como não é válido,
+    // o envio cai no ramo do marcador provisório, igual ao caso sem CPF.
     const CPF_INVALIDO = "11111111111";
     const b = bancoFingido({
       candidaturas: [linhaFingida({ id: "cand-1", situacao: "ALOCADO", posicaoLado: "OFICIAL" })],
@@ -146,14 +86,36 @@ describe("ponte A&S -> ADM (risco b): enviar para a esteira SEM CPF válido não
       ),
     );
 
-    expect(erro).not.toBeNull();
-    // A candidatura não avançou, e nenhuma escrita a levou a ENVIADO.
-    expect(b.situacaoDe("cand-1")).toBe("ALOCADO");
-    expect(
-      b.updates.some((u) => u.tabela === asCandidaturas && u.valores.situacao === ENVIO),
-    ).toBe(false);
-    // §A.6: nem a mensagem carrega o número (sintético) do CPF.
-    expect(mensagemDe(erro)).not.toContain(CPF_INVALIDO);
-    expect(mensagemDe(erro)).not.toMatch(ONZE_DIGITOS);
+    expect(erro).toBeNull();
+    expect(b.situacaoDe("cand-1")).toBe(ENVIO);
+    // §A.6: o número (sintético) do CPF inválido não reaparece em nenhuma escrita da candidatura.
+    for (const u of b.updates) {
+      expect(JSON.stringify(u.valores)).not.toContain(CPF_INVALIDO);
+    }
+  });
+
+  it("§A.6: nenhuma escrita da candidatura carrega um número de 11 dígitos (o marcador tem letras)", async () => {
+    const b = bancoFingido({
+      candidaturas: [linhaFingida({ id: "cand-1", situacao: "ALOCADO", posicaoLado: "OFICIAL" })],
+      cpfDoFunil: null,
+    });
+
+    await erroDe(
+      b.service.registrarSaida(
+        "cand-1",
+        { situacao: ENVIO, motivo: "foi para a esteira" } as never,
+        usuarioFingido("COMUM") as never,
+      ),
+    );
+
+    for (const u of b.updates) {
+      expect(JSON.stringify(u.valores)).not.toMatch(ONZE_DIGITOS);
+    }
+  });
+
+  it("o marcador provisório é, de fato, reconhecido como provisório (nunca um CPF real)", () => {
+    // Fixa o contrato do detector que a ponte usa: `PROV`+7 é provisório, 11 dígitos nunca é.
+    expect(ehCpfProvisorio("PROVABCDEFG")).toBe(true);
+    expect(ehCpfProvisorio("52998224725")).toBe(false);
   });
 });

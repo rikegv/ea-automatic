@@ -40,6 +40,7 @@ import {
   type ProjetoDoSeletor,
 } from "@/lib/alto-volume";
 import {
+  ehCpfProvisorio,
   FAROL_GLOBAL_LABEL,
   isValidCpf,
   ITENS_EPI,
@@ -181,6 +182,7 @@ function fmtData(d?: string | null): string {
   return a && m && dia ? `${dia}/${m}/${a}` : "não informado";
 }
 function fmtCpf(cpf: string): string {
+  if (ehCpfProvisorio(cpf)) return "CPF Pendente";
   return cpf.length === 11
     ? `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`
     : cpf;
