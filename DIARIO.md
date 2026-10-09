@@ -21095,3 +21095,33 @@ não 404. Detalhe completo em `docs/MAPA-IMPORT-CURRICULO-IA.md`.
 **Propostas registradas (§A.31, fora do escopo):** (1) ATS (DIGAI/Pandapé) gravam só o `telefone`
 escalar por SQL cru, então candidato vindo delas nasce com `telefones=[]`; alinhar é frente própria.
 (2) o modal de edição de candidato edita um telefone só.
+
+### Adendo (encerramento) — lições operacionais e coordenação entre sessões
+
+Registrado para o próximo coordenador não repetir o que custou tempo nesta frente.
+
+- **A ea-homolog (3120) é worktree COMPARTILHADO** com o WIP vivo de várias sessões ao mesmo tempo, e
+  está no branch `main-nova`, **66 commits atrás do `main`**. Frente main-based entangled com refactors
+  do main (ex.: o envio na saída saiu do `candidatos.service.ts` para um gancho de admissões) **não sobe
+  ali por cópia** sem misturar bases. Para a prova, o caminho foi **ambiente ISOLADO** (worktree limpo do
+  `main` + só a frente, DB/portas próprios), com aval do diretor (§A.32 permite o ambiente separado com
+  aviso).
+- **Coordenação entre sessões por mensagem funcionou** (Vagas, Alto Volume, ea-automatic-5a). A de Vagas
+  limpou o WIP dela da ea-homolog e passou intel que vale guardar: migração manual **sem registrar no
+  controle do drizzle** (registrar eleva a marca d'água e pula as de outras frentes), **BACKEND_ORIGIN=
+  http://127.0.0.1:3111** obrigatório no build do frontend de homolog, e Playwright nesta VM só sobe pelo
+  **chrome-headless-shell** com `LD_LIBRARY_PATH=/home/henrique/.ea-harness/libs/root/usr/lib/x86_64-linux-gnu`.
+- **`publicar-producao.sh` NÃO cobre ai-service nem migrations.** O ai-service de PROD roda o **fonte** de
+  `ea-automatic/apps/ai-service` (deploy = `systemctl --user restart ea-ai-service`; a venv de prod já tem
+  `python-docx`). As migrations são aplicadas À MÃO no `ea-automatic` (container `ea-db`, DB `ea_automatic`);
+  checado coluna a coluna que a produção estava **current para todo o origin/main menos a 0153**.
+- **Riscos de isolamento que morderam e foram pegos:** (a) o backend isolado caía no **REDIS de PRODUÇÃO
+  (6380)** por default e subiu workers BullMQ nas filas compartilhadas, consertado com um redis próprio
+  (6390); (b) `pkill -f <nome-do-worktree>` **se mata sozinho** (o próprio comando casa o padrão); (c) no
+  recorte, `git add` de arquivo COMPARTILHADO arrasta o WIP de outras sessões, então os compartilhados
+  (`shared-types`, `tables.ts`, `as.module.ts`) entraram por **`git apply --cached` só dos meus hunks**.
+- **Dois bugs auto-infligidos, pegos pela cabeça independente:** backtick em comentário dentro de
+  template literal ``sql`...` `` quebra o build (aconteceu DUAS vezes ao editar `retencao-candidatos`); e a
+  "super-proteção" de simetria no expurgo (predicado a mais na cicatrização) quebrava o furo-3. **Lição:
+  rodar a SUÍTE CHEIA antes de dar por pronto (§A.40 regra 4)** — foi ela, rodada pela sessão de Vagas, que
+  pegou a guarda D1 de LGPD que minhas auditorias de subconjunto não tinham rodado.
