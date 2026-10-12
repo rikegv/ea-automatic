@@ -3606,16 +3606,20 @@ export class AdmissoesService {
   }
 
   /**
-   * CORRIGE O CPF de uma admissão (item 9, Frente B). Só MASTER/SUPER_ADMIN (gate no controller).
+   * CORRIGE O CPF de uma admissão (item 9, Frente B; porta do consultor na Liberação, Frente 3).
    *
    * É SÓ ACERTAR O CAMPO para bater com o documento (decisão do diretor): não reprocessa auditoria,
    * não renomeia arquivo do Drive, não reagrupa nada, e por isso NÃO acende aviso vermelho nem exige
    * revisão como a troca de cliente. Aquilo é troca estrutural (muda régua e pasta); isto é correção
-   * de digitação.
+   * de digitação. Serve para os dois casos: consertar um CPF digitado errado (o dígito não fecha) e
+   * preencher o CPF real de quem ainda está como "CPF Pendente" (marcador provisório).
    *
-   * SEM TRAVA DE FASE, por decisão do diretor: a IA costuma pegar o CPF errado na auditoria, mas o
-   * erro pode aparecer depois, e uma admissão adiantada com CPF errado é exatamente a que mais precisa
-   * ser corrigida.
+   * QUEM PODE, POR FASE (Frente 3). O MASTER/SUPER_ADMIN corrige EM QUALQUER FASE, como sempre: a IA
+   * costuma pegar o CPF errado na auditoria, mas o erro pode aparecer depois, e uma admissão adiantada
+   * com CPF errado é a que mais precisa de correção. O CONSULTOR (papel COMUM) corrige SÓ enquanto a
+   * admissão está na fila de liberação (farol `AGUARDANDO_LIBERACAO`), ANTES de subir para a operação;
+   * depois da liberação vale a trava de sempre, só Master/Super Admin. O ator SISTEMA (`user` nulo,
+   * ponte do portal) não tem papel e não passa por este gate.
    *
    * COMO A TROCA ACONTECE: `admissoes.candidato_cpf` é FK de `candidatos.cpf` (PK), então corrigir NÃO
    * é editar o CPF do candidato, é REAPONTAR a admissão para a linha certa. Editar a PK arrastaria
@@ -3623,9 +3627,11 @@ export class AdmissoesService {
    * certas. A linha nova nasce com os dados da antiga; a antiga, se ficar sem nenhuma admissão, é um
    * fantasma de digitação e sai (§A.6, minimização).
    *
-   * COLISÃO: se o CPF corrigido já pertence a alguém, o Master vê O NOME de quem é e decide (AVISA,
-   * não bloqueia). O reenvio com `confirmarDuplicado` é a decisão dele: a admissão passa a apontar
-   * para o candidato existente, e o nome dele NÃO é sobrescrito.
+   * COLISÃO, por papel. Para o MASTER/SUPER_ADMIN, a colisão AVISA e não bloqueia: ele vê O NOME de
+   * quem já tem o CPF e decide reenviando com `confirmarDuplicado` (a admissão passa a apontar para o
+   * candidato existente, cujo nome NÃO é sobrescrito). Para o CONSULTOR, a colisão BLOQUEIA e NÃO
+   * expõe de quem é o CPF (§A.6): a tela só diz que o CPF já está em uso, e o consultor resolve o caso
+   * na mão. O consultor nunca recebe a escotilha do `confirmarDuplicado`.
    */
   async corrigirCpf(
     id: string,
@@ -3638,6 +3644,17 @@ export class AdmissoesService {
   ) {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    // GATE DE PAPEL E FASE (Frente 3). O CONSULTOR (COMUM) só corrige antes de a admissão subir para a
+    // operação, isto é, enquanto ela está na fila de liberação. Fora dessa fase, só Master/Super Admin.
+    // SISTEMA (`user` nulo) não tem papel e passa, como a ponte do portal sempre fez.
+    const ehConsultor =
+      user !== null && user.papel !== "MASTER" && user.papel !== "SUPER_ADMIN";
+    if (ehConsultor && adm.farolGlobal !== "AGUARDANDO_LIBERACAO") {
+      throw new ForbiddenException(
+        "Depois da liberação, só um Master ou Super Admin pode corrigir o CPF desta admissão.",
+      );
+    }
 
     const novo = normalizeCpf(dto.cpf);
     // Não troca um errado por outro inválido: o CPF novo passa pelo MESMO dígito verificador da
@@ -3664,6 +3681,16 @@ export class AdmissoesService {
           .from(admissoes)
           .where(eq(admissoes.candidatoCpf, novo))
       : [];
+
+    // CONSULTOR: a duplicidade BLOQUEIA e NÃO expõe de quem é o CPF (§A.6). Sem `confirmarDuplicado`,
+    // sem nome, sem contagem: a tela só avisa que o CPF já está em uso e o consultor resolve na mão.
+    if (jaExiste && ehConsultor) {
+      throw new ConflictException({
+        codigo: "CPF_EM_USO",
+        message:
+          "Este CPF já está cadastrado para outro candidato. Confira o número no documento ou trate a duplicidade com a administração.",
+      });
+    }
 
     if (jaExiste && !dto.confirmarDuplicado) {
       throw new ConflictException({

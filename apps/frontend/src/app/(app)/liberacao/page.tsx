@@ -187,6 +187,15 @@ function fmtCpf(cpf: string): string {
     ? `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`
     : cpf;
 }
+/** Máscara progressiva do CPF digitado no campo de correção: só dígitos, 11 no máximo, pontuado. */
+function maskCpfDigitado(raw: string): string {
+  const d = raw.replace(/\D/g, "").slice(0, 11);
+  let out = d.slice(0, 3);
+  if (d.length > 3) out += "." + d.slice(3, 6);
+  if (d.length > 6) out += "." + d.slice(6, 9);
+  if (d.length > 9) out += "-" + d.slice(9, 11);
+  return out;
+}
 /**
  * Busca por candidato (nome parcial OU CPF), no mesmo espírito da esteira/gerenciador, mas
  * client-side: as duas listas já estão carregadas em memória. Nome é case-insensitive e parcial;
@@ -399,6 +408,13 @@ export default function LiberacaoPage() {
   const precisaValorBeneficio = useMemo(() => criarPrecisaValor(beneficiosCat), [beneficiosCat]);
   // Modal de liberação: a pré-admissão alvo (null = fechado) + os campos do formulário.
   const [alvo, setAlvo] = useState<PreAdmissao | null>(null);
+  // CORREÇÃO DE CPF na própria liberação (Frente 3): o consultor pode acertar o CPF errado ou
+  // preencher o real de um "CPF Pendente" ANTES de liberar. `cpfEditAberto` revela o campo; o resto é
+  // o rascunho, o estado de envio, e o aviso que a tela mostra (dígito que não fecha ou CPF em uso).
+  const [cpfEditAberto, setCpfEditAberto] = useState(false);
+  const [cpfNovo, setCpfNovo] = useState("");
+  const [cpfSalvando, setCpfSalvando] = useState(false);
+  const [cpfEditErro, setCpfEditErro] = useState<string | null>(null);
   // Rótulos dos campos que NASCERAM pré-preenchidos pelo payload do A&S (folha). Base do azul: campo
   // azul = veio do A&S e ainda tem valor. Recomputado a cada abertura de modal, nunca deriva régua.
   const [prefilledKeys, setPrefilledKeys] = useState<Set<string>>(new Set());
@@ -744,6 +760,11 @@ export default function LiberacaoPage() {
    */
   function abrirModal(r: PreAdmissao, pre?: { codCliente?: string; cargoId?: string }) {
     setAlvo(r);
+    // Correção de CPF (Frente 3): campo fechado e rascunho limpo a cada abertura, como o resto do modal.
+    setCpfEditAberto(false);
+    setCpfNovo("");
+    setCpfEditErro(null);
+    setCpfSalvando(false);
     // Estado PRÓPRIO do vínculo, zerado junto: a marca é de um candidato, não da tela.
     setSalaVinculada(null);
     // SEXO (OST do seletor de sexo): o que veio do Pandapé PRÉ-PREENCHE o seletor, e o consultor
@@ -807,9 +828,62 @@ export default function LiberacaoPage() {
     setDupAviso(null);
   }
   function fecharModal() {
-    if (liberando) return;
+    if (liberando || cpfSalvando) return;
     setDupAviso(null);
+    setCpfEditAberto(false);
+    setCpfNovo("");
+    setCpfEditErro(null);
     setAlvo(null);
+  }
+
+  /**
+   * CORRIGE O CPF da admissão alvo, da própria tela de Liberação (Frente 3). Reusa a rota única
+   * `PATCH /admissoes/:id/corrigir-cpf` (ator do consultor, continuidade do 66a0302): não há caminho
+   * paralelo. O dígito verificador é conferido AQUI antes de chamar, para recusar cedo e sem ida ao
+   * servidor; o servidor confere de novo (fonte da verdade) e ainda barra a duplicidade. §A.6: o
+   * rascunho do CPF nunca vai para log, e o aviso de duplicidade não traz de quem é o CPF.
+   */
+  async function salvarCpfCorrigido() {
+    if (!alvo) return;
+    const digitos = cpfNovo.replace(/\D/g, "");
+    if (!isValidCpf(digitos)) {
+      setCpfEditErro(
+        "CPF inválido: o dígito verificador não fecha. Confira o CPF no documento e informe os 11 dígitos.",
+      );
+      return;
+    }
+    setCpfSalvando(true);
+    setCpfEditErro(null);
+    try {
+      await apiFetch(`/admissoes/${encodeURIComponent(alvo.admissaoId)}/corrigir-cpf`, {
+        method: "PATCH",
+        token,
+        body: { cpf: digitos },
+      });
+      // Reaponta o alvo para o CPF novo: o bloco vermelho some e o botão Liberar destrava na hora,
+      // sem reabrir o modal. A fila também é relida, para a linha refletir o CPF corrigido.
+      setAlvo((prev) => (prev ? { ...prev, candidatoCpf: digitos } : prev));
+      setCpfEditAberto(false);
+      setCpfNovo("");
+      setOkMsg("CPF corrigido.");
+      void recarregarListas();
+    } catch (e) {
+      const corpo =
+        e instanceof ApiError && typeof e.data === "object" && e.data
+          ? (e.data as { codigo?: string; message?: string })
+          : null;
+      if (corpo?.codigo === "CPF_EM_USO" || corpo?.codigo === "CPF_DUPLICADO") {
+        setCpfEditErro(
+          "Este CPF já está em uso em outro cadastro. Confira o número ou trate a duplicidade com a administração.",
+        );
+      } else {
+        setCpfEditErro(
+          e instanceof ApiError ? e.message : "Não foi possível corrigir o CPF. Tente novamente.",
+        );
+      }
+    } finally {
+      setCpfSalvando(false);
+    }
   }
 
   /**
@@ -1790,20 +1864,88 @@ export default function LiberacaoPage() {
             )}
           </div>
 
-          {/* TRAVA DO CPF INVÁLIDO (item 9, Frente A). Bloqueia a liberação e diz por quê. Quem
-              corrige é Master ou Super Admin, pela rota de correção de CPF: por isso o texto aponta
-              para quem resolve, em vez de mandar o consultor tentar de novo. */}
-          {cpfAlvoInvalido && (
+          {/* CPF INVÁLIDO ou CPF PENDENTE (Frente 3). Antes a tela só mandava chamar um Master; agora o
+              CONSULTOR corrige aqui mesmo, antes de a admissão subir para a operação. O invalido é CPF
+              errado (o dígito não fecha) e trava a liberação; o pendente é o marcador provisório, que
+              NÃO trava, mas pode receber o CPF real se ele chegar antes da liberação. O campo é o mesmo
+              para os dois casos, e a rota de correção também. */}
+          {(cpfAlvoInvalido || cpfAlvoPendente) && (
             <div
-              className="mb-4 rounded-xl border border-[rgba(214,69,69,0.45)] bg-[rgba(214,69,69,0.1)] px-3 py-2.5"
-              role="alert"
+              className={cn(
+                "mb-4 rounded-xl border px-3 py-2.5",
+                cpfAlvoInvalido
+                  ? "border-[rgba(214,69,69,0.45)] bg-[rgba(214,69,69,0.1)]"
+                  : "border-[rgba(224,168,0,0.4)] bg-[rgba(224,168,0,0.08)]",
+              )}
+              role={cpfAlvoInvalido ? "alert" : "status"}
             >
-              <div className="text-[11px] uppercase tracking-wide text-danger">CPF Inválido</div>
+              <div
+                className={cn(
+                  "text-[11px] uppercase tracking-wide",
+                  cpfAlvoInvalido ? "text-danger" : "text-warn",
+                )}
+              >
+                {cpfAlvoInvalido ? "CPF Inválido" : "CPF Pendente"}
+              </div>
               <p className="mt-1 text-[13px] text-text">
-                O dígito verificador deste CPF não fecha, então ele está errado na origem. A liberação
-                fica bloqueada até a correção. Peça a um Master ou Super Admin que corrija o CPF desta
-                admissão, conferindo o documento do candidato.
+                {cpfAlvoInvalido
+                  ? "O dígito verificador deste CPF não fecha, então ele está errado na origem. A liberação fica bloqueada até a correção. Corrija o CPF aqui, conferindo o documento do candidato."
+                  : "Este candidato ainda está sem CPF real. A liberação não fica bloqueada por isso, ele entra na esteira como CPF Pendente. Se o CPF real já chegou, informe aqui antes de liberar."}
               </p>
+
+              {!cpfEditAberto ? (
+                <div className="mt-2.5">
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setCpfNovo("");
+                      setCpfEditErro(null);
+                      setCpfEditAberto(true);
+                    }}
+                  >
+                    {cpfAlvoInvalido ? "Corrigir CPF" : "Informar CPF"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">CPF do candidato</span>
+                    <input
+                      className="ds-input font-mono"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      placeholder="000.000.000-00"
+                      value={maskCpfDigitado(cpfNovo)}
+                      onChange={(e) => {
+                        setCpfNovo(e.target.value.replace(/\D/g, "").slice(0, 11));
+                        if (cpfEditErro) setCpfEditErro(null);
+                      }}
+                      disabled={cpfSalvando}
+                    />
+                  </label>
+                  {cpfEditErro && (
+                    <p className="mt-2 text-[12.5px] text-danger" role="alert">
+                      {cpfEditErro}
+                    </p>
+                  )}
+                  <div className="mt-3 flex gap-2.5">
+                    <Button onClick={() => void salvarCpfCorrigido()} disabled={cpfSalvando}>
+                      {cpfSalvando ? "Salvando…" : "Salvar CPF"}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setCpfEditAberto(false);
+                        setCpfNovo("");
+                        setCpfEditErro(null);
+                      }}
+                      disabled={cpfSalvando}
+                    >
+                      Cancelar
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

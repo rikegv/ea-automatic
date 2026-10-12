@@ -295,12 +295,14 @@ export class AdmissoesController {
   }
 
   /**
-   * CORRIGE O CPF da admissão (item 9, Frente B). ROTA PRÓPRIA e só MASTER/SUPER_ADMIN, pelo mesmo
-   * motivo da troca de cliente: o RBAC fica no método certo e a correção reaponta a admissão para
-   * outra linha de candidato, o que não cabe numa edição comum de campos.
+   * CORRIGE O CPF da admissão (item 9, Frente B; porta do consultor na Liberação, Frente 3). ROTA
+   * PRÓPRIA porque a correção reaponta a admissão para outra linha de candidato, o que não cabe numa
+   * edição comum de campos. SEM `@Roles` fixo, de propósito: o RBAC aqui é POR FASE, não por papel
+   * cru. O consultor (COMUM) corrige enquanto a admissão está em `AGUARDANDO_LIBERACAO`; fora dessa
+   * fase, só Master/Super Admin. Esse gate mora no serviço (`corrigirCpf`), que é quem conhece o
+   * farol da admissão, e devolve `ForbiddenException` quando o papel não alcança a fase.
    */
   @Patch(":id/corrigir-cpf")
-  @Roles("MASTER", "SUPER_ADMIN")
   corrigirCpf(@Param("id") id: string, @Body() dto: CorrigirCpfDto, @CurrentUser() user: AuthUser) {
     return this.admissoes.corrigirCpf(id, dto, user);
   }
