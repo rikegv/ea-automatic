@@ -1046,13 +1046,6 @@
       "breakpoints": true
     },
     {
-      "idx": 149,
-      "version": "7",
-      "when": 1790646016719,
-      "tag": "0149_grupo_cliente_meta",
-      "breakpoints": true
-    },
-    {
       "idx": 150,
       "version": "7",
       "when": 1790646017719,
