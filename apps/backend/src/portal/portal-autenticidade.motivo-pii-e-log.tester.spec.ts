@@ -166,7 +166,7 @@ function montar(autenticidadeMotivo: string) {
         eventos.push({ tipo, dados });
       }),
     } as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
   return { svc, updates, inserts, eventos };
 }
 

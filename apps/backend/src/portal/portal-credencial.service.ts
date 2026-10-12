@@ -64,6 +64,7 @@ import {
   observacaoDoVeredito,
   separarRegrasPorCategoria,
 } from "../domain/auditoria";
+import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
 import { MOTIVO_POR_RECUSA, PortalLeitorService } from "./portal-leitor.service";
 import { admissaoOpaca } from "./portal-objeto";
@@ -110,6 +111,14 @@ export class PortalCredencialService {
     private readonly armazenamento: PortalArmazenamentoService,
     private readonly leitor: PortalLeitorService,
     private readonly trilha: PortalTrilhaService,
+    /**
+     * A RÉGUA VIGENTE (frente Auditoria -> Portal, item 2): a MESMA materialização que a trilha faz
+     * destrava a emissão. Sem ela, uma exigência incluída depois do nascimento da admissão apareceria
+     * na lista (a trilha materializa ao abrir) mas o `naRegua` abaixo recusaria o envio se o candidato
+     * emitisse a credencial por um caminho que não passou pela trilha. Chamada aqui, as duas portas
+     * concordam. Fonte única da régua (§A.19).
+     */
+    private readonly regua: ReguaCompletudeService,
   ) {}
 
   /**
@@ -323,6 +332,13 @@ export class PortalCredencialService {
       this.log.warn("pedido de credencial recusado: portal ainda nao configurado");
       throw new ServiceUnavailableException("Envio de documentos indisponível");
     }
+
+    // RESOLVER A RÉGUA PELAS EXIGÊNCIAS ATUAIS (frente Auditoria -> Portal, item 2): a MESMA
+    // materialização da trilha, aqui para DESTRAVAR A EMISSÃO. Uma exigência incluída depois do
+    // nascimento da admissão nasce só em `regua_documental`; sem a linha de `documentos_admissao`, o
+    // `naRegua` abaixo recusaria o envio com "este documento não faz parte da sua lista". Idempotente
+    // e só para admissões vivas (§A.16/§A.19); a lógica mora na fonte única (§A.19).
+    await this.regua.sincronizarDocumentosDaRegua(entrada.admissaoId);
 
     const tipo = await this.db.query.tiposDocumento.findFirst({
       where: and(eq(tiposDocumento.codigo, entrada.codigoTipoDocumento), eq(tiposDocumento.ativo, true)),

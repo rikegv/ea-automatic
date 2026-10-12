@@ -307,7 +307,17 @@ function servico(
   // A conferência do link vivo virou uma INJEÇÃO (consolidação, 21/09/2026): entra o serviço real,
   // com o mesmo banco falso. Nenhum teste deste arquivo passa `jtiLink`, então ele sai cedo sem
   // tocar o banco, e o `config` continua sendo o argumento a mais que o comentário acima descreve.
-  return new Classe(b.db, credenciais, log, new PortalLinkVivoService(b.db as never, log as never), config);
+  // A materialização da régua (frente Auditoria -> Portal, item 2) é uma INJEÇÃO: entra como fake
+  // inerte, porque este arquivo trava a composição da trilha a partir de `documentos_admissao`, não
+  // a materialização (que tem suíte própria). O `config` segue como o argumento a mais inofensivo.
+  return new Classe(
+    b.db,
+    credenciais,
+    log,
+    new PortalLinkVivoService(b.db as never, log as never),
+    { sincronizarDocumentosDaRegua: async () => {} },
+    config,
+  );
 }
 
 /** O cenário padrão: quatro documentos na admissão, e uma régua MAIOR que eles. */

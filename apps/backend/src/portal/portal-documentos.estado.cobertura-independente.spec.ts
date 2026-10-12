@@ -181,7 +181,7 @@ function servico(docs: LinhaDoc[]) {
     credenciais(docs),
     trilhaLog,
     new PortalLinkVivoService(b.db, trilhaLog),
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
 }
 
 const primeiroPasso = async (linha: LinhaDoc) => {

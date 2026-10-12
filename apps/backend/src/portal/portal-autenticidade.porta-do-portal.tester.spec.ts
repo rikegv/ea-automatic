@@ -147,7 +147,7 @@ function montar(opts: { auditoria: Record<string, unknown> | null; comCampos?: b
     armazenamento as never,
     leitor as never,
     { configurada: () => true, registrar: vi.fn(async () => {}) } as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
   return { svc, updates, inserts };
 }
 

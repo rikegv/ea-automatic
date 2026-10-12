@@ -18,6 +18,7 @@ import {
   type RecuoDaAuditoria,
 } from "../auditoria/auditoria.service";
 import { podeReabrirDocumento } from "../domain/reabertura-documento";
+import { PortalPendenciasService } from "../portal/portal-pendencias.service";
 import { StagingService } from "../staging/staging.service";
 import {
   mimeDeVisualizacao,
@@ -60,6 +61,7 @@ export class DocumentoArquivoService {
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly staging: StagingService,
     private readonly auditoria: AuditoriaService,
+    private readonly portalPendencias: PortalPendenciasService,
   ) {}
 
   /** Tipo de documento pelo id, ou 404. */
@@ -293,6 +295,30 @@ export class DocumentoArquivoService {
           `Pós-veredito do descarte falhou (admissão ${admissaoId}): ` +
             `${err instanceof Error ? err.message : "erro"}. ` +
             `O documento já voltou a PENDENTE; a próxima ação de auditoria recalcula.`,
+        );
+      }
+    }
+
+    // CAMADA 8, A SINCRONIZAÇÃO COM O PORTAL (frente Auditoria -> Portal, item 1). O descarte
+    // devolvia o documento a PENDENTE só na ESTEIRA. No Portal do candidato a casa continuava em
+    // "Documento recebido": `estadoDoPasso` pergunta `cabeOutroArquivoNaPendencia` ANTES de cair em
+    // PENDENTE, e o envio que a IA já aceitara seguia contando como "em aberto" porque nenhum MARCO
+    // de reabertura fora movido. Mover o marco (o MESMO mecanismo do "Solicitar reenvio"/"Zerar
+    // tentativas", porta única em `PortalPendenciasService`) zera a contagem a partir de agora:
+    // `cabeOutroArquivo` volta a `true`, a casa cai para PENDENTE e o candidato reenvia.
+    //
+    // BEST-EFFORT e fora de transação, pelo mesmo motivo do arquivamento e do recuo: o descarte já
+    // está commitado (o documento já voltou a PENDENTE) e não pode ser derrubado por uma falha
+    // nesta consequência. Sem cliente/cargo não há pendência de régua a reabrir (pré-admissão).
+    // §A.6: só ids no log, nunca CPF, nome ou URL.
+    if (adm.codCliente && adm.cargoId) {
+      try {
+        await this.portalPendencias.reabrirPorAuditoria(admissaoId, tipoDocumentoId, user);
+      } catch (err) {
+        this.logger.warn(
+          `Reabertura da pendência no Portal falhou (admissão ${admissaoId}): ` +
+            `${err instanceof Error ? err.message : "erro"}. ` +
+            `O documento já voltou a PENDENTE na Esteira; o candidato pode não ter sido destravado no Portal.`,
         );
       }
     }

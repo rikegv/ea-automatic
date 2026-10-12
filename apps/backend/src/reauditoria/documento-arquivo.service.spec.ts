@@ -101,8 +101,17 @@ function montar(cen: Cenario = {}) {
   // A CONSEQUÊNCIA da reabertura (pós-veredito) é testada na suíte própria; aqui ela entra como
   // fake inerte, para estas asserções continuarem falando só das seis camadas do descarte.
   const auditoria = { aplicarPosVeredito: vi.fn(async () => ({ progresso: { completa: false } })) };
-  const svc = new DocumentoArquivoService(db as never, staging as never, auditoria as never);
-  return { svc, db, staging, updates, deletes, trilha, removidos, auditoria };
+  // A SINCRONIZAÇÃO COM O PORTAL (camada 8): fake inerte por padrão. A chamada só acontece quando a
+  // admissão tem cliente+cargo (caso contrário é pré-admissão, sem régua), e tem suíte própria para
+  // as asserções do marco.
+  const portalPendencias = { reabrirPorAuditoria: vi.fn(async () => undefined) };
+  const svc = new DocumentoArquivoService(
+    db as never,
+    staging as never,
+    auditoria as never,
+    portalPendencias as never,
+  );
+  return { svc, db, staging, updates, deletes, trilha, removidos, auditoria, portalPendencias };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -290,5 +299,45 @@ describe("BLOCO 3 — descartar documento (seis camadas)", () => {
     expect(out.arquivosRemovidos).toBe(0);
     expect(out.documento.estado).toBe("PENDENTE");
     expect(ctx.deletes).toContain("documento_arquivos_coletados");
+  });
+});
+
+describe("CAMADA 8 — sincronizar o Portal (reabrir a pendência do candidato)", () => {
+  const ADM_VIVA = {
+    id: "adm-1",
+    drivePastaUrl: null,
+    driveAsoUrl: null,
+    codCliente: "C1",
+    cargoId: "cargo-1",
+  };
+
+  it("com cliente+cargo, o descarte MOVE o marco do Portal para aquele (admissão, tipo)", async () => {
+    const ctx = montar({ arquivos: ["/staging/adm-1/RG__a.pdf"], admissao: ADM_VIVA });
+
+    await ctx.svc.descartar("adm-1", TIPO_RG.id, USER);
+
+    // Reabrir na Auditoria destrava o candidato no Portal: sem isto a casa dele fica em
+    // "Documento recebido" e ele não reenvia. A porta é única (PortalPendenciasService).
+    expect(ctx.portalPendencias.reabrirPorAuditoria).toHaveBeenCalledWith("adm-1", TIPO_RG.id, USER);
+  });
+
+  it("pré-admissão (sem cliente/cargo) não tem régua a reabrir: o Portal não é tocado", async () => {
+    const ctx = montar({ arquivos: [] }); // admissão padrão, sem codCliente/cargoId
+
+    await ctx.svc.descartar("adm-1", TIPO_RG.id, USER);
+
+    expect(ctx.portalPendencias.reabrirPorAuditoria).not.toHaveBeenCalled();
+  });
+
+  it("falha ao reabrir no Portal NÃO derruba o descarte (best-effort): o documento já voltou a PENDENTE", async () => {
+    const ctx = montar({ arquivos: [], admissao: ADM_VIVA });
+    ctx.portalPendencias.reabrirPorAuditoria = vi.fn(async () => {
+      throw new Error("trilha indisponível");
+    });
+
+    const out = await ctx.svc.descartar("adm-1", TIPO_RG.id, USER);
+
+    expect(out.documento.estado).toBe("PENDENTE");
+    expect(out.reaberto).toBe(true);
   });
 });

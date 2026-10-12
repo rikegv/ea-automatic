@@ -6140,7 +6140,7 @@ export const portalPendenciasNoTime = pgTable(
     ),
     ckLiberadoTipo: check(
       "ck_portal_pendencias_no_time_liberado_tipo",
-      sql`${t.liberadoTipo} is null or ${t.liberadoTipo} in ('SOLICITACAO_REENVIO','DESTRAVAMENTO_MASTER')`,
+      sql`${t.liberadoTipo} is null or ${t.liberadoTipo} in ('SOLICITACAO_REENVIO','DESTRAVAMENTO_MASTER','REABERTURA_AUDITORIA')`,
     ),
     // Reabertura sem autor e sem data é rastro pela metade, e rastro pela metade não responde "quem
     // destravou". Os três andam juntos ou nenhum existe.

@@ -83,7 +83,7 @@ describe("PORTA 1 — `descartar` recusa a reabertura com contrato vivo", () => 
       const { db, escritas } = montarDb(caso.admissao);
       const staging = { listar: vi.fn(async () => []), removerArquivo: vi.fn() };
       const auditoria = { aplicarPosVeredito: vi.fn() };
-      const svc = new DocumentoArquivoService(db as never, staging as never, auditoria as never);
+      const svc = new DocumentoArquivoService(db as never, staging as never, auditoria as never, { reabrirPorAuditoria: async () => {} } as never);
 
       await expect(svc.descartar("adm-1", TIPO_RG.id, USER)).rejects.toThrow(ConflictException);
       await expect(svc.descartar("adm-1", TIPO_RG.id, USER)).rejects.toThrow(caso.mensagem);
@@ -107,7 +107,7 @@ describe("PORTA 1 — `descartar` recusa a reabertura com contrato vivo", () => 
     });
     const staging = { listar: vi.fn(async () => []), removerArquivo: vi.fn() };
     const auditoria = { aplicarPosVeredito: vi.fn() };
-    const svc = new DocumentoArquivoService(db as never, staging as never, auditoria as never);
+    const svc = new DocumentoArquivoService(db as never, staging as never, auditoria as never, { reabrirPorAuditoria: async () => {} } as never);
 
     const out = await svc.descartar("adm-1", TIPO_RG.id, USER);
 

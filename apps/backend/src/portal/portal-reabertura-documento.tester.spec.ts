@@ -61,6 +61,12 @@ describe("1. quem escreve `documentos_admissao.estado = PENDENTE` continua sendo
     const conhecidos = [
       "reauditoria/documento-arquivo.service.ts",
       "admissoes/admissoes.service.ts",
+      // A MATERIALIZAÇÃO DA RÉGUA (frente Auditoria -> Portal, item 2) escreve `estado: "PENDENTE"`,
+      // mas NÃO é uma porta de reabertura: ela só INSERE linhas NOVAS (exigências incluídas depois
+      // do nascimento da admissão), com `onConflictDoNothing`, então NUNCA devolve um documento já
+      // existente a PENDENTE nem des-completa a régua. O teste logo abaixo trava exatamente essa
+      // distinção, para o canário não virar permissão para uma segunda porta REAL.
+      "regua/regua-completude.service.ts",
     ].sort();
     const achados = varrer(SRC)
       .filter((f) => !f.includes(".spec."))
@@ -71,6 +77,22 @@ describe("1. quem escreve `documentos_admissao.estado = PENDENTE` continua sendo
       achados,
       "apareceu uma segunda porta de reabertura: a guarda de uma porta é contornável pela outra",
     ).toEqual(conhecidos);
+  });
+
+  it("a materialização da régua INSERE, nunca REABRE: o PENDENTE dela não des-completa a régua", () => {
+    const fonte = semComentarios(
+      readFileSync(join(SRC, "regua", "regua-completude.service.ts"), "utf8"),
+    );
+    // O único caminho que escreve PENDENTE ali é um INSERT com onConflictDoNothing: a linha que já
+    // existe (inclusive ENTREGUE/INCONFORME e o que o candidato enviou) NÃO é tocada.
+    expect(fonte).toMatch(/\.insert\(documentosAdmissao\)/);
+    expect(fonte).toMatch(/onConflictDoNothing/);
+    // E NUNCA um UPDATE que devolva um documento existente a PENDENTE (isso sim seria reabertura, e
+    // teria de passar pela guarda `podeReabrirDocumento`, que não mora aqui).
+    expect(
+      fonte,
+      "a materialização não pode UPDATE-ar o estado de um documento existente: seria uma reabertura escondida",
+    ).not.toMatch(/\.update\(documentosAdmissao\)/);
   });
 
   it("não nasceu rota de reabertura sob `portal/` (a barreira allowlista aquele prefixo)", () => {

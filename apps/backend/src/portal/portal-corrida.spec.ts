@@ -145,7 +145,7 @@ async function emitirEmParalelo(servico: PortalCredencialService, n: number) {
 describe("Teto de QUANTIDADE sob corrida (25 arquivos por link)", () => {
   it("com 24 emitidas, QUATRO pedidos simultaneos concedem UMA so", async () => {
     const banco = bancoComTravas(24);
-    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha);
+    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never);
 
     const { concedidas } = await emitirEmParalelo(servico, 4);
 
@@ -155,7 +155,7 @@ describe("Teto de QUANTIDADE sob corrida (25 arquivos por link)", () => {
 
   it("a trava e pedida ao SERVIDOR, que e o que serializa duas INSTANCIAS do backend", async () => {
     const banco = bancoComTravas(24);
-    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha);
+    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never);
     await emitirEmParalelo(servico, 3);
     // Uma trava por pedido: a serializacao nao depende de nada que viva no processo Node.
     expect(banco.pedidosDeTrava.length).toBe(3);
@@ -163,7 +163,7 @@ describe("Teto de QUANTIDADE sob corrida (25 arquivos por link)", () => {
 
   it("o link ja cheio (25) nao concede nenhuma, nem sob corrida", async () => {
     const banco = bancoComTravas(25);
-    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha);
+    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never);
     const { concedidas } = await emitirEmParalelo(servico, 5);
     expect(concedidas).toBe(0);
     expect(banco.linhas.length).toBe(25);
@@ -179,7 +179,7 @@ describe("Teto de BYTES SOMADOS sob corrida (60 MB por link)", () => {
     for (let i = 0; i < 5; i++) banco.linhas.push(antigas(10 * MB));
     banco.linhas.push(antigas(9 * MB));
     // Sobra exatamente 1 MB: cabe UM pedido de 1 MB, e o segundo estoura.
-    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha);
+    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never);
 
     const { concedidas } = await emitirEmParalelo(servico, 3);
 
@@ -195,7 +195,7 @@ describe("Teto de RITMO sob corrida (10 por minuto por link)", () => {
     for (let i = 0; i < 9; i++) {
       banco.linhas.push({ jtiLink: "jti", bytes: 1024, criadoEm: new Date(Date.now() - 1_000) });
     }
-    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha);
+    const servico = new PortalCredencialService(banco.db as never, config(), armazenamento, {} as never, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never);
 
     const { concedidas } = await emitirEmParalelo(servico, 4);
 

@@ -281,7 +281,7 @@ function servicoDaCredencial(link: Record<string, unknown> | null, registro: { i
   const leitor = { configurado: () => true } as never;
   const trilha = { configurada: () => true, registrar } as never;
   return {
-    alvo: new PortalCredencialService(db as never, config, armazenamento, leitor, trilha),
+    alvo: new PortalCredencialService(db as never, config, armazenamento, leitor, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never),
     registrar,
   };
 }
@@ -477,7 +477,7 @@ describe("PORTA 4 (leitura da trilha): link bloqueado não lista documento nenhu
           credenciais,
           log,
           new PortalLinkVivoService(db, log),
-        );
+        { sincronizarDocumentosDaRegua: async () => {} } as never);
       })(),
       registrar,
     };

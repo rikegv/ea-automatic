@@ -183,6 +183,15 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
   // `PortalEnvioService` é EXPORTADO porque o gancho do caminho automático mora em `as/`: é o
   // ramo de `ENVIADO_PARA_ADMISSAO` de `registrarSaida` que dispara o envio, e é a reversão dele
   // que revoga o link. Ver o comentário da importação em `as/as.module.ts`.
-  exports: [PortalTrilhaService, PortalIdentidadeService, PortalEnvioService],
+  // `PortalPendenciasService` é EXPORTADO para a `ReauditoriaModule`: o descarte de documento na
+  // aba Auditoria (`documento-arquivo.service.ts`) move o marco de reabertura do Portal por ESTA
+  // porta única, em vez de escrever `portal_pendencias_no_time` por fora (frente Auditoria -> Portal,
+  // item 1). A régua "um único escritor do marco" (§A.6, trilha) continua valendo.
+  exports: [
+    PortalTrilhaService,
+    PortalIdentidadeService,
+    PortalEnvioService,
+    PortalPendenciasService,
+  ],
 })
 export class PortalModule {}

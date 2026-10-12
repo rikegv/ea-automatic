@@ -119,7 +119,7 @@ function servico(cenario: Cenario) {
     credenciais(cenario.docs),
     trilhaLog,
     new PortalLinkVivoService(db, trilhaLog),
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
 }
 
 function doc(over: Partial<LinhaDoc> & { codigo: string }): LinhaDoc {

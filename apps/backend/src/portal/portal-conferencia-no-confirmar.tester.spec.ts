@@ -155,7 +155,7 @@ function montar(opts: {
     armazenamento as never,
     leitor as never,
     trilha as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
   return { svc, updates, inserts, registrar };
 }
 

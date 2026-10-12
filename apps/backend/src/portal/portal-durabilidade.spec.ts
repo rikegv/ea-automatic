@@ -59,7 +59,7 @@ describe("A contagem da emissao vive no BANCO, e por isso sobrevive a reinicio",
 
   it("o estado e REMONTADO do banco, nao guardado no processo", async () => {
     const db = bancoFake(linhas);
-    const servico = new PortalCredencialService(db, config({}), {} as never, {} as never, {} as never);
+    const servico = new PortalCredencialService(db, config({}), {} as never, {} as never, {} as never, { sincronizarDocumentosDaRegua: async () => {} } as never);
     const estado = await estadoDoLink(servico, db, "jti-do-link");
     expect(estado).toEqual({
       emitidas: 25,
@@ -74,12 +74,12 @@ describe("A contagem da emissao vive no BANCO, e por isso sobrevive a reinicio",
     const bancoA = bancoFake(linhas);
     const bancoB = bancoFake(linhas);
     const antes = await estadoDoLink(
-      new PortalCredencialService(bancoA, config({}), {} as never, {} as never, {} as never),
+      new PortalCredencialService(bancoA, config({}), {} as never, {} as never, {} as never, { sincronizarDocumentosDaRegua: async () => {} } as never),
       bancoA,
       "jti-do-link",
     );
     const depois = await estadoDoLink(
-      new PortalCredencialService(bancoB, config({}), {} as never, {} as never, {} as never),
+      new PortalCredencialService(bancoB, config({}), {} as never, {} as never, {} as never, { sincronizarDocumentosDaRegua: async () => {} } as never),
       bancoB,
       "jti-do-link",
     );
@@ -92,7 +92,7 @@ describe("A contagem da emissao vive no BANCO, e por isso sobrevive a reinicio",
       totais: { emitidas: 10, bytes: 10, extracoes: 0 },
       recentes: [{ criadoEm: new Date(agora) }],
     });
-    const servico = new PortalCredencialService(banco, config({}), {} as never, {} as never, {} as never);
+    const servico = new PortalCredencialService(banco, config({}), {} as never, {} as never, {} as never, { sincronizarDocumentosDaRegua: async () => {} } as never);
     const estado = (await estadoDoLink(servico, banco, "j")) as { emissoesMs: number[] };
     expect(estado.emissoesMs).toEqual([agora]);
   });

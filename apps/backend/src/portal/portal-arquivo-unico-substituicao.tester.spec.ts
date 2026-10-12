@@ -52,7 +52,7 @@ function servico(emAberto: number) {
     {} as never,
     { configurado: () => false } as never,
     { configurada: () => true, registrar: async () => {} } as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
 }
 
 describe("REQ 9 (servidor): a leitura recusa o aprovado/em analise e aceita apos reprovado", () => {

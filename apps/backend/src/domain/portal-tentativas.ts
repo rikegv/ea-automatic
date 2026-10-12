@@ -158,7 +158,30 @@ export const AVISO_PENDENCIA_NO_TIME =
  * `reprovado_em` destruiria a trilha e, pior, desligaria o único vínculo entre o objeto no balde e a
  * admissão, fabricando documento órfão que ninguém consegue expurgar.
  */
-export type TipoDeReabertura = "SOLICITACAO_REENVIO" | "DESTRAVAMENTO_MASTER";
+/**
+ * ══ A TERCEIRA PORTA: A REABERTURA PELA AUDITORIA ══════════════════════════════════════════════
+ *
+ * `REABERTURA_AUDITORIA` é o que o descarte da aba Auditoria move (o consultor reabre a pendência de
+ * um documento porque a IA aprovou errado, `reauditoria/documento-arquivo.service.ts`). Ela usa o
+ * MESMO marco das outras duas, mas é uma terceira coisa, e a distinção não é cosmética:
+ *
+ *  - NÃO é `SOLICITACAO_REENVIO`: aquele é o botão do time para a pendência JÁ caída na fila
+ *    (`noTime`), devolve UMA tentativa e CONSOME a cota `reaberturas_time`. A reabertura da auditoria
+ *    acontece com o documento ACEITO (zero reprovação), então não há queda, e consumir a cota do time
+ *    por uma correção de veredito da IA esgotaria o orçamento de reabertura por um motivo que não é o
+ *    dele.
+ *  - NÃO é `DESTRAVAMENTO_MASTER`: aquele é a exceção que o §A.9 conta como "a régua foi desmentida
+ *    por um humano". A reabertura da auditoria não é desmentir a régua, é corrigir uma APROVAÇÃO da
+ *    IA; contá-la como destrave de Master inflaria o número que vigia a qualidade da régua.
+ *
+ * DEVOLVE O TETO INTEIRO (como o Master): reabrir um documento aprovado é começá-lo do zero, e o
+ * candidato precisa do orçamento cheio para reenviar. Diferente do Master só em quem a aciona (o
+ * consultor, fluxo normal) e em não consumir `reaberturas_time`.
+ */
+export type TipoDeReabertura =
+  | "SOLICITACAO_REENVIO"
+  | "DESTRAVAMENTO_MASTER"
+  | "REABERTURA_AUDITORIA";
 
 /**
  * ══ O DESTRAVE DO MASTER SÓ VALE COM A PENDÊNCIA NA FILA, E A RECUSA É UMA REGRA PURA ═══════════
@@ -216,6 +239,10 @@ export function recusaDoDestrave(entrada: { reprovacoes: number }): RecusaDoDest
 export const TENTATIVAS_DEVOLVIDAS: Record<TipoDeReabertura, number> = {
   SOLICITACAO_REENVIO: 1,
   DESTRAVAMENTO_MASTER: TETO_REPROVACOES_POR_PENDENCIA,
+  // Teto inteiro, como o Master: reabrir um documento aprovado é recomeçá-lo do zero. O que a
+  // distingue do Master está em quem a aciona e em não consumir `reaberturas_time`, não no quanto
+  // devolve. Ver `TipoDeReabertura` acima.
+  REABERTURA_AUDITORIA: TETO_REPROVACOES_POR_PENDENCIA,
 };
 
 /**

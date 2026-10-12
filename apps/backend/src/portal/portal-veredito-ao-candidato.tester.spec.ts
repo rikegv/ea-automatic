@@ -166,7 +166,7 @@ function montar(opts: {
     armazenamento as never,
     leitor as never,
     trilha as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
 
   // Todo log do serviço é capturado: motivo com PII em `logger.log` é a mesma fuga, por outra porta.
   for (const metodo of ["log", "warn", "error", "debug", "verbose"] as const) {

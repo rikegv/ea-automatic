@@ -149,7 +149,7 @@ function montar(opts: {
     armazenamento as never,
     leitor as never,
     { configurada: () => true, registrar: vi.fn(async () => {}) } as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
   return { svc, inserts, updates };
 }
 

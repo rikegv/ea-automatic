@@ -3,7 +3,9 @@ import {
   acabouDeCairParaOTime,
   AVISO_PENDENCIA_NO_TIME,
   queimaTentativa,
+  reprovacoesEfetivas,
   situacaoDaPendencia,
+  TENTATIVAS_DEVOLVIDAS,
   TETO_REPROVACOES_POR_PENDENCIA,
 } from "./portal-tentativas";
 
@@ -76,6 +78,34 @@ describe("O CARIMBO DA QUEDA é de borda, e não do último clique de quem insis
     expect(acabouDeCairParaOTime(2)).toBe(false);
     expect(acabouDeCairParaOTime(3)).toBe(true);
     expect(acabouDeCairParaOTime(4)).toBe(false);
+  });
+});
+
+describe("A REABERTURA PELA AUDITORIA devolve o teto inteiro (recomeçar o documento do zero)", () => {
+  it("é um tipo de reabertura conhecido, com crédito do teto inteiro (como o Master)", () => {
+    expect(TENTATIVAS_DEVOLVIDAS.REABERTURA_AUDITORIA).toBe(TETO_REPROVACOES_POR_PENDENCIA);
+  });
+
+  it("depois do marco, sem reprovação nova, a contagem efetiva volta a ZERO: candidato destravado", () => {
+    // É o caso real: a Auditoria reabre um documento APROVADO (zero reprovação após o marco).
+    expect(
+      reprovacoesEfetivas({ reprovacoesDepoisDoMarco: 0, reabertura: "REABERTURA_AUDITORIA" }),
+    ).toBe(0);
+    // E não fica em no_time: há tentativa de sobra.
+    expect(
+      situacaoDaPendencia({
+        reprovacoes: reprovacoesEfetivas({
+          reprovacoesDepoisDoMarco: 0,
+          reabertura: "REABERTURA_AUDITORIA",
+        }),
+      }).noTime,
+    ).toBe(false);
+  });
+
+  it("só conta o que vier DEPOIS do marco: uma reprovação nova conta como a primeira", () => {
+    expect(
+      reprovacoesEfetivas({ reprovacoesDepoisDoMarco: 1, reabertura: "REABERTURA_AUDITORIA" }),
+    ).toBe(1);
   });
 });
 

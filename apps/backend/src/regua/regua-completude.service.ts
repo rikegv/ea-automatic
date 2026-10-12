@@ -44,6 +44,7 @@ function porDocumento<
   return [...escolhido.values()];
 }
 import { compararDocumentosDaTrilha } from "../domain/ordem-dos-documentos";
+import { ehFarolVivo } from "../domain/admissao";
 import {
   calcularProgressoRegua,
   faltantesObrigatorios,
@@ -106,6 +107,76 @@ export class ReguaCompletudeService {
     return porDocumento(linhas.map((l) => ({ ...l, admissaoId })))
       .filter((l) => !(l.codigo === RESERVISTA_COD && !masculino))
       .map((l) => ({ nome: l.nome, exigencia: l.exigencia, estado: l.estado ?? null }));
+  }
+
+  /**
+   * MATERIALIZA as linhas de `documentos_admissao` que a régua VIGENTE exige e que ainda não existem
+   * nesta admissão (frente Auditoria -> Portal, item 2).
+   *
+   * ══ O PROBLEMA QUE RESOLVE ════════════════════════════════════════════════════════════════════
+   *
+   * A lista do Portal é resolvida AO VIVO a cada carregamento, mas a fonte das casas é
+   * `documentos_admissao`, nunca a régua (`portal-documentos.service.ts`): a régua só cola a
+   * `exigencia` num documento que JÁ tem linha. E essas linhas são um snapshot do NASCIMENTO da
+   * admissão (`admissoes.service`, materialização inicial). Uma exigência documental incluída depois
+   * (ex.: vale-transporte vira obrigatório para o cargo) nasce em `regua_documental` e NUNCA ganha
+   * linha em `documentos_admissao`, então não aparecia para o candidato por mais refresh que ele
+   * desse, e a emissão de credencial a recusava (`naRegua` exige a linha existir). Esta sincronização
+   * resolve a lista a partir das exigências ATUAIS a cada carregamento.
+   *
+   * ══ O RECORTE, E ELE É DURO (§A.16/§A.19) ═════════════════════════════════════════════════════
+   *
+   * SÓ admissões VIVAS (EM_ADMISSAO / BANCO_AGUARDAR). Finalizadas (ADMISSAO_CONCLUIDA) e encerradas
+   * (DECLINOU / RESCISAO) NÃO são recalculadas: a carga histórica fica intacta e quem declinou não
+   * ganha pendência nova. Pré-admissão sem cliente/cargo (§A.3) não tem régua a resolver.
+   *
+   * A RÉGUA CANDIDATA é a MESMA do `docsRegua` e do nascimento: linha de cliente (vínculo nulo) MAIS
+   * a do vínculo que a admissão aponta, o vínculo vencendo o cliente no mesmo documento
+   * (`porDocumento`). Entram OBRIGATORIO e FACULTATIVO, NAO_OBRIGATORIO fica de fora, espelhando o
+   * `exigidos` da materialização inicial.
+   *
+   * IDEMPOTENTE e NÃO DESTRUTIVO: `onConflictDoNothing` sobre o unique (admissão, tipo). A linha que
+   * já existe NÃO é tocada, então o estado real do documento (inclusive ENTREGUE/INCONFORME e o que o
+   * candidato já enviou) é preservado; só a exigência NOVA nasce, em PENDENTE. Rodar a cada
+   * carregamento converge. §A.6: opera por ids e estado, sem PII.
+   */
+  async sincronizarDocumentosDaRegua(admissaoId: string): Promise<void> {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm || !ehFarolVivo(adm.farolGlobal)) return;
+    if (!adm.codCliente || !adm.cargoId) return;
+
+    const linhas = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        exigencia: reguaDocumental.exigencia,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
+      })
+      .from(reguaDocumental)
+      .innerJoin(admissoes, eq(admissoes.id, admissaoId))
+      .where(
+        and(
+          eq(reguaDocumental.codCliente, adm.codCliente),
+          eq(reguaDocumental.cargoId, adm.cargoId),
+          REGUA_DO_VINCULO_DA_ADMISSAO,
+        ),
+      );
+
+    const aMaterializar = porDocumento(linhas)
+      .filter((l) => l.exigencia === "OBRIGATORIO" || l.exigencia === "FACULTATIVO")
+      .map((l) => ({
+        admissaoId,
+        tipoDocumentoId: l.tipoDocumentoId,
+        estado: "PENDENTE" as const,
+      }));
+    if (aMaterializar.length === 0) return;
+
+    await this.db
+      .insert(documentosAdmissao)
+      .values(aMaterializar)
+      .onConflictDoNothing({
+        target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
+      });
   }
 
   /** Nomes dos documentos OBRIGATÓRIOS ainda não ENTREGUE (insumo do gatilho NC-1). */

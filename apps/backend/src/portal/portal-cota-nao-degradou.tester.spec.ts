@@ -156,8 +156,18 @@ describe("A linha de base nao pode ter sido editada", () => {
     // Os tres testes de corrida continuam medindo exatamente o que mediam (a trava por link e a
     // cota que nao degrada), e nenhuma assercao foi afrouxada. Se a proxima edicao afrouxar uma
     // asercao, a regra continua valendo: parar e reportar.
-    "portal-corrida.spec.ts": "7f0a816e9dc7d388592784b1db0c750340e5687a178da34c88189148285e01e2",
-    "portal-durabilidade.spec.ts": "b3c53c6d02b20c348c9bf57af8d9b193f02413a7547838b2767ebd3420f197ec",
+    // IMPRESSAO ATUALIZADA DE NOVO, em 09/10/2026, pela frente Auditoria -> Portal, e o porque fica
+    // registrado aqui porque o tripwire manda parar e reportar antes de atualizar.
+    //
+    // O QUE MUDOU, e NAO foi a exigencia 3: `PortalCredencialService` ganhou UMA injecao, a
+    // `ReguaCompletudeService`, para resolver a lista do Portal pelas exigencias ATUAIS (materializar
+    // `documentos_admissao` faltante, so admissoes vivas). Isso obrigou os DOIS arquivos abaixo a
+    // passar o novo argumento no `new PortalCredencialService(...)`. A edicao e PURAMENTE o argumento
+    // a mais (um fake inerte `{ sincronizarDocumentosDaRegua }`): nenhuma assercao de corrida ou de
+    // durabilidade foi tocada ou afrouxada, os testes continuam medindo a trava por link e a cota que
+    // nao degrada. Se a proxima edicao afrouxar uma assercao, a regra continua valendo: parar e reportar.
+    "portal-corrida.spec.ts": "6e635fe04271fd1afa79653b231a4b57b1b427fb4cfe35373f2aaffcf0d3eaff",
+    "portal-durabilidade.spec.ts": "541f99e7b6da3f637f906e295c48efaa475d878278aa413340570d164cca2ea8",
     "portal-leitor.spec.ts": "a55638ec568e01ad6233505542b0d69856e312ff85813b2229a9a5b7d7202916",
   };
 

@@ -125,6 +125,21 @@ export const PORTAL_EVENTOS = [
   // documento e a contagem. Nenhum dos dois carrega o motivo escrito pela IA nem texto livre.
   "PORTAL_REENVIO_SOLICITADO",
   "PORTAL_TETO_DESTRAVADO",
+  // ── A REABERTURA DISPARADA PELA AUDITORIA (reabrir/excluir documento na Esteira) ────────────────
+  //
+  // EVENTO PRÓPRIO, pelo mesmo argumento dos dois acima, e por um a mais que é só dele: quando o
+  // consultor REABRE a pendência de um documento na aba Auditoria (o descarte, que devolve o
+  // documento a PENDENTE porque a IA aprovou errado), o Portal precisa destravar também, senão a
+  // casa do candidato fica em "Documento recebido" e ele não reenvia. Essa reabertura move o MESMO
+  // marco de `portal_pendencias_no_time`, mas NÃO é o `PORTAL_REENVIO_SOLICITADO` (que é o botão do
+  // time para pendência JÁ caída na fila) nem o `PORTAL_TETO_DESTRAVADO` (a exceção do Master que o
+  // §A.9 conta como "régua desmentida"): contá-la junto com qualquer um dos dois poluiria o número
+  // que cada um existe para medir. Ela devolve o teto inteiro (começar o documento do zero), e NÃO
+  // consome a cota de reaberturas do time (`reaberturas_time`).
+  //
+  // §A.6: leva `autorId` (usuário do EA), o código do tipo e a contagem zerada. Mesma forma do
+  // `PORTAL_REENVIO_SOLICITADO`, então a allowlist `CAMPOS_PERMITIDOS` NÃO foi alargada.
+  "PORTAL_REABERTURA_AUDITORIA",
   // A TENTATIVA DE DESTRAVAR FORA DA HORA (decisão do diretor: o destrave vale só depois da queda).
   //
   // EVENTO PRÓPRIO, e não `PORTAL_TETO_DESTRAVADO` com resultado de recusa, porque este é o evento

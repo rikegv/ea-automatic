@@ -84,7 +84,7 @@ const armazenamento = {
 
 function servico(b: ReturnType<typeof banco>, registrar = vi.fn(async () => {})) {
   const trilha = { configurada: () => true, registrar } as never;
-  return new PortalCredencialService(b.db as never, config(), armazenamento, {} as never, trilha);
+  return new PortalCredencialService(b.db as never, config(), armazenamento, {} as never, trilha, { sincronizarDocumentosDaRegua: async () => {} } as never);
 }
 
 const pedido = (jtiLink = "jti-1") => ({

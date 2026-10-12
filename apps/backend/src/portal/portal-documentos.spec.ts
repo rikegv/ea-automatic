@@ -236,7 +236,7 @@ function servico(cenario: Cenario, registrar = vi.fn(async () => {})) {
       c.servico,
       trilhaLog,
       new PortalLinkVivoService(b.db, trilhaLog),
-    ),
+    { sincronizarDocumentosDaRegua: async () => {} } as never),
   };
 }
 

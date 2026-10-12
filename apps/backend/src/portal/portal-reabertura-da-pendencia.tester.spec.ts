@@ -236,7 +236,7 @@ function mundo(inicial: { credenciais?: Credencial[]; pendencias?: Pendencia[] }
     } as never,
     {} as never,
     trilha as never,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
 
   return { credenciais, pendencias, emitidas, eventos, pendenciasSvc, credencialSvc, trilha };
 }

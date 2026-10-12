@@ -112,7 +112,7 @@ function servico(b: ReturnType<typeof banco>, registrar = vi.fn(async () => {}))
     armazenamento,
     {} as never,
     trilha,
-  );
+  { sincronizarDocumentosDaRegua: async () => {} } as never);
 }
 
 const pedido = () => ({

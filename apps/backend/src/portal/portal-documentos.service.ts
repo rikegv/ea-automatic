@@ -26,6 +26,7 @@ import {
 import { CAMPOS_GI } from "../domain/dados-gi-campos";
 import { LIMITES_PORTAL, TIPOS_ACEITOS_PORTAL } from "../domain/portal-credencial";
 import { compararDocumentosDaTrilha } from "../domain/ordem-dos-documentos";
+import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { PortalCredencialService } from "./portal-credencial.service";
 import { PortalLinkVivoService } from "./portal-link-vivo.service";
 import { PortalTrilhaService } from "./portal-trilha.service";
@@ -115,6 +116,12 @@ export class PortalDocumentosService {
      * é a porta que fica aberta em silêncio.
      */
     private readonly linkVivo: PortalLinkVivoService,
+    /**
+     * A RÉGUA VIGENTE, para resolver a lista a partir das exigências ATUAIS a cada carregamento
+     * (frente Auditoria -> Portal, item 2). É a mesma fonte única da completude (§A.19); a
+     * materialização lazy vive lá, e aqui só se chama antes de montar os passos.
+     */
+    private readonly regua: ReguaCompletudeService,
   ) {}
 
   /**
@@ -136,6 +143,12 @@ export class PortalDocumentosService {
     await this.linkVivo.exigirVivo(contexto, "Lista de documentos indisponível");
 
     const cabecalho = await this.cabecalho(admissaoId);
+    // RESOLVER A LISTA PELAS EXIGÊNCIAS ATUAIS (frente Auditoria -> Portal, item 2). Antes de montar
+    // os passos, materializa as linhas de `documentos_admissao` que a régua vigente exige e que ainda
+    // não existem (só admissões vivas, §A.16/§A.19). Sem isto, uma exigência incluída depois do
+    // nascimento da admissão nunca apareceria para o candidato, por mais refresh que ele desse. É
+    // idempotente e não destrutivo (preserva o estado dos documentos já existentes).
+    await this.regua.sincronizarDocumentosDaRegua(admissaoId);
     const passos = await this.passos(admissaoId, cabecalho.codCliente, cabecalho.cargoId);
     // O termo já foi aceito? (bug 1) E o que o candidato já confirmou do GI? (reidratar a tela sem
     // depender do estado React volátil). §A.6: `dadosGiConfirmados` é PII do próprio candidato,

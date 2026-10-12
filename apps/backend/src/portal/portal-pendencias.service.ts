@@ -133,6 +133,31 @@ export class PortalPendenciasService {
    * QUEM PODE É DECIDIDO NA ROTA, pelo `RolesGuard` que já existe no projeto. Este serviço não
    * inventa autorização própria: caminho paralelo de autorização é como o RBAC deixa de valer.
    */
+  /**
+   * A AUDITORIA REABRIU A PENDÊNCIA (o descarte na aba Auditoria da Esteira,
+   * `reauditoria/documento-arquivo.service.ts`), e o Portal destrava junto.
+   *
+   * ══ POR QUE ELA NÃO É `solicitarReenvio` NEM `zerarTentativas` ════════════════════════════════
+   *
+   * As duas acima exigem a pendência JÁ CAÍDA na fila do time (`noTime`). Esta NÃO: o caminho que a
+   * dispara é o descarte de um documento que a IA APROVOU (zero reprovação), então não há queda a
+   * esperar, e exigir `noTime` deixaria o caso mais comum (reabrir um aprovado errado) sem conserto,
+   * que é exatamente o furo que esta frente fecha. O marco é o MESMO das outras duas; o tipo é
+   * próprio (`REABERTURA_AUDITORIA`), devolve o teto inteiro (recomeçar o documento do zero) e NÃO
+   * consome a cota `reaberturas_time` (só `SOLICITACAO_REENVIO` a consome, dentro de `liberar`).
+   *
+   * BEST-EFFORT NO CHAMADOR: o descarte já commitou quando chama aqui, e mover o marco não pode
+   * derrubar o descarte. O chamador trata a falha; esta porta continua fail-closed quanto à trilha
+   * (sem `PORTAL_LOG_PEPPER`, `liberar` recusa, como as outras duas).
+   *
+   * IDEMPOTENTE NO EFEITO: pendência sem envio do candidato (documento validado só pela esteira, sem
+   * nada no balde) ganha um marco que não muda nada para ele. §A.6: opera por ids, sem PII.
+   */
+  async reabrirPorAuditoria(admissaoId: string, tipoDocumentoId: string, user: AuthUser) {
+    const alvo = await this.carregarPendencia(admissaoId, tipoDocumentoId);
+    return this.liberar("REABERTURA_AUDITORIA", alvo, user, "PORTAL_REABERTURA_AUDITORIA");
+  }
+
   async zerarTentativas(admissaoId: string, tipoDocumentoId: string, user: AuthUser) {
     const alvo = await this.carregarPendencia(admissaoId, tipoDocumentoId);
 
@@ -188,7 +213,7 @@ export class PortalPendenciasService {
     tipo: TipoDeReabertura,
     alvo: Awaited<ReturnType<PortalPendenciasService["carregarPendencia"]>>,
     user: AuthUser,
-    evento: "PORTAL_REENVIO_SOLICITADO" | "PORTAL_TETO_DESTRAVADO",
+    evento: "PORTAL_REENVIO_SOLICITADO" | "PORTAL_TETO_DESTRAVADO" | "PORTAL_REABERTURA_AUDITORIA",
   ) {
     if (!this.trilha.configurada()) {
       throw new ServiceUnavailableException(
