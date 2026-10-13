@@ -319,6 +319,18 @@ export function podeReverterEnvio(s: CandidaturaSituacao): boolean {
 }
 
 /**
+ * ─ ESTA CANDIDATURA PODE TER A APROVAÇÃO VOLTADA? (ITEM 5 do diretor) ────────────────────────────
+ *
+ * SÓ QUEM ESTÁ APROVADO, espelho do backend (`domain/candidatura.podeReverterAprovacao`): voltar o
+ * status desfaz a APROVAÇÃO (volta a `ATIVO`, em seleção, na etapa escolhida), então não faz sentido
+ * para quem nem está aprovado. Comparação direta, como `podeReverterEnvio`, e não lista nova. A tela
+ * não é a trava: quem recusa é o 409 do backend; esta função só decide onde o gesto aparece.
+ */
+export function podeReverterAprovacao(s: CandidaturaSituacao): boolean {
+  return s === "APROVADO";
+}
+
+/**
  * ESTA CANDIDATURA PODE ENTREGAR UMA POSIÇÃO?
  *
  * DUAS CONDIÇÕES, as duas do vocabulário compartilhado:

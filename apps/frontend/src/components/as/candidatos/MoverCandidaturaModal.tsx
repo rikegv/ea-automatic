@@ -95,12 +95,14 @@ import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
+import { Select } from "@/components/ui/Select";
 import { StatusPill } from "@/components/ui/StatusPill";
 import {
   aprovarCandidatura,
   mensagemDoErro,
   moverEtapa,
   registrarSaida,
+  reverterAprovacao,
   reverterEnvioParaAdmissao,
 } from "@/lib/as-candidatos";
 import { maskMoedaBR } from "@/lib/salario";
@@ -108,7 +110,12 @@ import { EntrevistaDaCandidatura } from "@/components/as/candidatos/EntrevistaDa
 import { ReprovarPeloClienteModal } from "@/components/as/candidatos/ReprovarPeloClienteModal";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
-import { podeAprovar, podeMoverNoFunil, podeReverterEnvio } from "@/lib/as-vaga-acoes";
+import {
+  podeAprovar,
+  podeMoverNoFunil,
+  podeReverterAprovacao,
+  podeReverterEnvio,
+} from "@/lib/as-vaga-acoes";
 import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
 import { cn } from "@/lib/cn";
 
@@ -207,6 +214,8 @@ export function MoverCandidaturaModal({
 
   /** A etapa clicada enquanto a requisição não volta: só ela mostra o estado de espera, não a grade toda. */
   const [movendoPara, setMovendoPara] = useState<CandidaturaEtapa | null>(null);
+  /** A etapa de destino escolhida ao VOLTAR uma aprovação (ITEM 5): o funil não é trilho, então é uma escolha. */
+  const [voltandoPara, setVoltandoPara] = useState<CandidaturaEtapa | "">("");
   /*
    * ┌─ A RÉGUA DE QUEM SE MOVE, E O ERRO QUE ELA CORRIGE ────────────────────────────────────────┐
    * │ ERA `situacao === "ATIVO"`, E ISSO FAZIA A TELA CHAMAR DE ENCERRADO QUEM NÃO ESTÁ. Quem     │
@@ -799,6 +808,57 @@ export function MoverCandidaturaModal({
                   <p className="mt-2 text-[12px] text-faint">
                     Desfaz o envio para a admissão: a pessoa volta para a etapa em que estava, a
                     posição dela fica livre na vaga e o motivo do envio fica só no histórico.
+                  </p>
+                </Secao>
+              )}
+
+              {/* ─ VOLTAR PARA A SELEÇÃO: o desfazer da APROVAÇÃO, sem reprovar antes (ITEM 5) ───
+                  ┌─ POR QUE ELE EXISTE (decisão do diretor) ──────────────────────────────────────┐
+                  │ VOLTAR UM APROVADO EXIGIA REPROVÁ-LO ANTES, o que registra na trilha um          │
+                  │ descarte que não aconteceu só para desfazer um clique. Aqui a volta é DIRETA: a  │
+                  │ pessoa deixa de estar Aprovada e volta para a seleção, e a posição que a          │
+                  │ aprovação ocupava fica livre.                                                   │
+                  └────────────────────────────────────────────────────────────────────────────────┘
+
+                  O DESTINO É ESCOLHIDO, e é a diferença real para a volta do envio: o funil não é
+                  trilho, então quem volta a pessoa escolhe para QUAL etapa ela vai (não só a
+                  anterior). O seletor é o `Select` do design system (§A.35), com as etapas ATIVAS do
+                  catálogo. Qualquer consultor faz (ação operacional), e a trilha grava o de/para e
+                  quem fez. Só aparece para quem está APROVADO (`podeReverterAprovacao`, espelho do
+                  backend); em qualquer outra situação a rota devolve 409. */}
+              {podeReverterAprovacao(candidatura.situacao) && (
+                <Secao titulo="Voltar Para A Seleção">
+                  <Select
+                    value={voltandoPara}
+                    onChange={(v) => setVoltandoPara(v as CandidaturaEtapa)}
+                    options={ativas.map((e) => ({ value: e.codigo, label: e.rotulo }))}
+                    placeholder="Escolha a etapa para onde a pessoa volta"
+                    ariaLabel="Etapa de destino ao voltar da aprovação"
+                    disabled={ocupado}
+                  />
+                  <Button
+                    className="mt-2 px-4 py-2.5"
+                    disabled={ocupado || voltandoPara === ""}
+                    onClick={() => {
+                      const destino = voltandoPara;
+                      if (destino === "") return;
+                      pedirConfirmacao({
+                        titulo: "Voltar Para A Seleção?",
+                        mensagem: `${candidatura.candidatoNome} deixa de estar Aprovado e volta para a seleção, na etapa ${rotuloDaEtapa(destino, etapas)}. A posição que a aprovação ocupava fica livre na vaga. A mudança fica registrada no histórico, com quem fez e o de/para da etapa.`,
+                        rotulo: "Voltar para a seleção",
+                        // `warn` e não `danger`: desfazer uma aprovação precoce é correção legítima,
+                        // não acusação, e mesmo assim é decisão registrada, que se lê antes de confirmar.
+                        tone: "warn",
+                        acao: () => reverterAprovacao(candidatura.id, destino, token),
+                        falha: "Falha ao voltar o candidato para a seleção.",
+                      });
+                    }}
+                  >
+                    Voltar para a seleção
+                  </Button>
+                  <p className="mt-2 text-[12px] text-faint">
+                    Desfaz a aprovação sem precisar reprovar antes: a pessoa volta para a seleção na
+                    etapa escolhida acima e a posição dela fica livre na vaga.
                   </p>
                 </Secao>
               )}
