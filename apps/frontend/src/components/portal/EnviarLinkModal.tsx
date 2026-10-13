@@ -40,11 +40,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type {
-  AdmissaoSemLinkDoPortal,
-  LinkDoPortalParaCopiar,
-  ResultadoDoEnvioDoLink,
-} from "@ea/shared-types";
+import type { AdmissaoSemLinkDoPortal, LinkDoPortalParaCopiar } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
@@ -54,9 +50,11 @@ import { caixaAlta } from "@/lib/nome";
 import { copiarTexto, AVISO_COPIA_FALHOU, type ResultadoDaCopia } from "@/lib/copiar-texto";
 import {
   destinoVisivel,
+  ehConvitePrimeiroAcesso,
   enviarLinkDaAdmissao,
   etiquetaDaRecusa,
   fraseDaRecusa,
+  fraseDoConvite,
   fraseDoLinkParaCopiar,
   fraseDoResultado,
   gerarLinkParaCopiar,
@@ -126,12 +124,15 @@ export function EnviarLinkModal({
   async function enviar(a: AdmissaoSemLinkDoPortal) {
     setEnviando(a.admissaoId);
     try {
-      const r: ResultadoDoEnvioDoLink = await enviarLinkDaAdmissao(a.admissaoId, token);
+      const r = await enviarLinkDaAdmissao(a.admissaoId, token);
       setDesfechos((d) => ({
         ...d,
         [a.admissaoId]: {
           ok: r.enviado,
-          texto: fraseDoResultado(r, formatarDataHora(r.expiraEm)),
+          // ITEM 1: quem está sem CPF é roteado para a porta de e-mail (convite de primeiro acesso).
+          texto: ehConvitePrimeiroAcesso(r)
+            ? fraseDoConvite(r)
+            : fraseDoResultado(r, formatarDataHora(r.expiraEm)),
         },
       }));
       // SÓ RELÊ A LISTA DE TRÁS QUANDO ALGO NASCEU. Recusa não cria link, e reler à toa faria a

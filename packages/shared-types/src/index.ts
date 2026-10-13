@@ -5263,6 +5263,37 @@ export interface ResultadoDoEnvioDoLink {
 }
 
 /**
+ * MOTIVO DE O CONVITE DE PRIMEIRO ACESSO NÃO TER SAÍDO. Lista fechada, separada da recusa do link
+ * porque a porta de e-mail não cunha link nem tem prazo: ela só manda o convite para o candidato
+ * entrar pelo e-mail.
+ */
+export const MOTIVOS_DE_RECUSA_DO_CONVITE = [
+  "SEM_EMAIL_NO_FUNIL",
+  "CANAL_INDISPONIVEL",
+  "FALHA_NO_ENVIO",
+] as const;
+export type MotivoDeRecusaDoConvite = (typeof MOTIVOS_DE_RECUSA_DO_CONVITE)[number];
+
+/**
+ * DESFECHO DO REENVIO PARA QUEM ESTÁ SEM CPF (marcador PROV). Em vez do link clássico (CPF +
+ * nascimento), que o candidato sem CPF não consegue passar, o reenvio manda o CONVITE DE PRIMEIRO
+ * ACESSO por e-mail: o candidato entra pela porta de e-mail, informa o CPF e o nascimento (que ali
+ * GRAVAM o cadastro, reusando `corrigirCpf`) e então recebe o link. Tipo próprio, discriminado por
+ * `convitePrimeiroAcesso`, para a tela distinguir do `ResultadoDoEnvioDoLink`.
+ *
+ * §A.6: `destinoMascarado` é derivado na hora (`f****o@empresa.com`) e nunca persistido; nunca
+ * carrega CPF nem o endereço em claro.
+ */
+export interface ResultadoDoConvitePrimeiroAcesso {
+  convitePrimeiroAcesso: true;
+  enviado: boolean;
+  /** Nulo quando `enviado` é verdadeiro. */
+  motivo: MotivoDeRecusaDoConvite | null;
+  /** `f****o@empresa.com`, ou nulo quando não há e-mail no funil para enviar. */
+  destinoMascarado: string | null;
+}
+
+/**
  * UMA PESSOA NA PRÉVIA DO DISPARO, e esta é a exigência que a auditoria pôs para liberar o lote.
  *
  * Antes de confirmar, o consultor vê NOME e DESTINO MASCARADO de cada um, e vê separado quem fica

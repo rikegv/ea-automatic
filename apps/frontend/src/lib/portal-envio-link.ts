@@ -28,6 +28,7 @@ import type {
   LinkDoPortalParaCopiar,
   MotivoDeRecusaDeEnvio,
   PreviaDoEnvioEmLote,
+  ResultadoDoConvitePrimeiroAcesso,
   ResultadoDoEnvioDoLink,
 } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -214,6 +215,30 @@ export function fraseDoResultado(r: ResultadoDoEnvioDoLink, quando: string): str
   return `O link foi enviado por e-mail para ${destinoVisivel(r.destinoMascarado)} e vale até ${quando}.`;
 }
 
+/**
+ * O REENVIO DE QUEM ESTÁ SEM CPF (marcador PROV) foi roteado para a porta de e-mail. A resposta vem
+ * discriminada por `convitePrimeiroAcesso`, então a tela sabe que não é o link clássico.
+ */
+export function ehConvitePrimeiroAcesso(
+  r: ResultadoDoEnvioDoLink | ResultadoDoConvitePrimeiroAcesso,
+): r is ResultadoDoConvitePrimeiroAcesso {
+  return (r as ResultadoDoConvitePrimeiroAcesso).convitePrimeiroAcesso === true;
+}
+
+/** O desfecho do convite de primeiro acesso, dito em uma frase. */
+export function fraseDoConvite(r: ResultadoDoConvitePrimeiroAcesso): string {
+  if (!r.enviado) {
+    if (r.motivo === "SEM_EMAIL_NO_FUNIL") {
+      return "Este candidato está sem CPF e sem e-mail cadastrado. Cadastre o e-mail dele para poder enviar o convite de primeiro acesso.";
+    }
+    if (r.motivo === "CANAL_INDISPONIVEL") {
+      return "O envio de e-mail não está disponível neste ambiente, então o convite de primeiro acesso não saiu.";
+    }
+    return "Não foi possível enviar o convite de primeiro acesso agora. Tente de novo em instantes.";
+  }
+  return `Este candidato está sem CPF, então enviamos o convite de primeiro acesso por e-mail para ${destinoVisivel(r.destinoMascarado)}. Ele entra pelo e-mail, informa o CPF e a data de nascimento, e aí o portal abre.`;
+}
+
 // ── A prévia do lote ────────────────────────────────────────────────────────────────────────────
 
 export interface PreviaSeparada {
@@ -345,8 +370,11 @@ export function usePreviaIndividual(
 export function enviarLinkDaAdmissao(
   admissaoId: string,
   token: string | null,
-): Promise<ResultadoDoEnvioDoLink> {
-  return apiFetch<ResultadoDoEnvioDoLink>(rotaEnviarLink(admissaoId), { method: "POST", token });
+): Promise<ResultadoDoEnvioDoLink | ResultadoDoConvitePrimeiroAcesso> {
+  return apiFetch<ResultadoDoEnvioDoLink | ResultadoDoConvitePrimeiroAcesso>(rotaEnviarLink(admissaoId), {
+    method: "POST",
+    token,
+  });
 }
 
 /**

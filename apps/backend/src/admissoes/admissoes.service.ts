@@ -3799,6 +3799,33 @@ export class AdmissoesService {
     await this.corrigirCpf(admissaoId, { cpf: cpfReal }, null);
   }
 
+  /**
+   * A ADMISSÃO É UMA ADMISSÃO VIVA AINDA SEM CPF (marcador PROVISÓRIO)? Leitura por `admissaoId`,
+   * para o roteamento do reenvio do Portal decidir entre o link clássico (CPF + nascimento) e o
+   * convite de primeiro acesso pela porta de e-mail. A decisão "é provisório?" mora AQUI, pela MESMA
+   * razão da ponte de reconciliação: o serviço público do portal tem trava de teste de NÃO tocar a
+   * coluna de CPF da esteira, então ele delega esta leitura.
+   *
+   * ┌─ O FAROL É PARTE DA DECISÃO, e não um detalhe ─────────────────────────────────────────────┐
+   * │ O marcador PROV NÃO é exclusivo de admissão viva: a identidade provisória nasceu para o      │
+   * │ DECLÍNIO sem CPF (`domain/identidade-provisoria.ts`, `FAROL_COM_IDENTIDADE_PROVISORIA`), e a │
+   * │ carga histórica o atribui a DECLINOU/RESCISAO. Rotear por PROV sozinho mandaria convite de    │
+   * │ primeiro acesso a quem declinou ou foi rescindido, contornando o recorte de farol que o      │
+   * │ caminho clássico (`enviarParaAdmissao`) já tem. Por isso o roteamento SÓ vale para farol VIVO │
+   * │ (`ehFarolVivo`: EM_ADMISSAO/BANCO_AGUARDAR), que é exatamente a população que o reenvio       │
+   * │ atende. Fora disso devolve `false`, e o envio segue o caminho de sempre.                       │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `false` para admissão inexistente. §A.6: só devolve um booleano, nunca o CPF.
+   */
+  async ehAdmissaoSemCpf(admissaoId: string): Promise<boolean> {
+    const adm = await this.db.query.admissoes.findFirst({
+      where: eq(admissoes.id, admissaoId),
+      columns: { candidatoCpf: true, farolGlobal: true },
+    });
+    return !!adm && ehFarolVivo(adm.farolGlobal) && ehCpfProvisorio(adm.candidatoCpf);
+  }
+
   /** Rótulos legíveis do par atual, para a trilha não guardar só códigos. */
   private async rotulosClienteCargo(codCliente: string | null, cargoId: string | null) {
     const [cli] = codCliente

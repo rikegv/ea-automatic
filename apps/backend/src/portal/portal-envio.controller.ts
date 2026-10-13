@@ -3,6 +3,7 @@ import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
+import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalEnvioService } from "./portal-envio.service";
 
 /**
@@ -48,7 +49,10 @@ import { PortalEnvioService } from "./portal-envio.service";
  */
 @Controller("esteira/portal/envio")
 export class PortalEnvioController {
-  constructor(private readonly envio: PortalEnvioService) {}
+  constructor(
+    private readonly envio: PortalEnvioService,
+    private readonly acessoEmail: PortalAcessoEmailService,
+  ) {}
 
   /**
    * A PRÉVIA DO LOTE: nome e destino MASCARADO por pessoa, e quem fica de fora vem marcado.
@@ -125,10 +129,20 @@ export class PortalEnvioController {
    * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   @Post("admissao/:admissaoId")
-  enviar(
+  async enviar(
     @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
     @CurrentUser() user: AuthUser,
   ) {
+    /*
+     * ITEM 1 (roteamento do reenvio): quem está SEM CPF (marcador PROV) não consegue passar na porta
+     * clássica (CPF + nascimento), que é onde o link clássico cai, então reenviar o link para ele era
+     * mandá-lo para uma tela onde ele trava. `rotearReenvioSemCpf` resolve isso ANTES do envio: para
+     * o PROV, manda o CONVITE DE PRIMEIRO ACESSO (porta de e-mail) e devolve o desfecho; para quem
+     * tem CPF real, devolve `null` e o envio do link segue EXATAMENTE como antes. A régua de emissão
+     * (`enviarParaAdmissao`, trava do FLUXO 2, carimbo) não é tocada.
+     */
+    const convite = await this.acessoEmail.rotearReenvioSemCpf(admissaoId);
+    if (convite) return convite;
     return this.envio.enviarParaAdmissao(admissaoId, user.id, "MANUAL");
   }
 

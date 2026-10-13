@@ -17,6 +17,7 @@ import {
   type ConfirmacaoDeCodigoResposta,
   type IdentidadeDoAcessoResposta,
   type MotivoDaTravaDeAcesso,
+  type ResultadoDoConvitePrimeiroAcesso,
   type SolicitacaoDeCodigoResposta,
   type TravaDeAcessoItem,
 } from "@ea/shared-types";
@@ -46,7 +47,7 @@ import {
   hashDoEmail,
   normalizarEmail,
 } from "../domain/portal-acesso-email";
-import { corpoDoEmailDoCodigo } from "../domain/portal-envio";
+import { corpoDoConviteDePrimeiroAcesso, corpoDoEmailDoCodigo, mascararEmail } from "../domain/portal-envio";
 import type { PortalMotivo } from "../domain/portal-evento";
 import { AdmissoesService } from "../admissoes/admissoes.service";
 import { FAROIS_FORA_DO_PAINEL } from "./portal-painel.service";
@@ -1017,6 +1018,90 @@ export class PortalAcessoEmailService {
     await this.reconciliarCpfProvisorioDaEsteira(desfecho.candidatoId, cpf);
 
     return this.despacharLink(desfecho.candidatoId, contexto);
+  }
+
+  /**
+   * ══ ITEM 1: ROTEIA O REENVIO DE QUEM ESTÁ SEM CPF (marcador PROV) PARA A PORTA DE E-MAIL ══════
+   *
+   * É a CAMADA FINA do roteamento: o botão "Enviar por e-mail" do Gerenciador cai aqui ANTES de
+   * `enviarParaAdmissao`. Quem tem CPF REAL não é desta porta, e o método devolve `null` para o
+   * caminho normal seguir com o link clássico (CPF + nascimento). Quem carrega o marcador PROV
+   * recebe o CONVITE DE PRIMEIRO ACESSO: a URL NUA do Portal (sem token), que abre a porta de
+   * e-mail, onde o CPF é GRAVADO (`identidade` -> `corrigirCpf`) e só então o link de verdade sai.
+   * Assim o candidato sem CPF deixa de cair na porta clássica, que ele nunca consegue passar.
+   *
+   * ┌─ O QUE ELE DELIBERADAMENTE NÃO FAZ ────────────────────────────────────────────────────────┐
+   * │ NÃO cunha link, NÃO toca `portal_links`, NÃO passa pela trava do FLUXO 2 nem pelas contagens │
+   * │ do painel: a decisão de emissão continua inteira em `PortalEnvioService`. Aqui só sai um     │
+   * │ e-mail de convite, pelo mesmo correio das outras portas. A régua "é provisório?" é a MESMA   │
+   * │ `ehCpfProvisorio` da ponte de reconciliação, reusada, nunca uma segunda leitura do marcador. │
+   * │ §A.6: o endereço do candidato NUNCA é logado; a resposta leva o destino MASCARADO.           │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  async rotearReenvioSemCpf(admissaoId: string): Promise<ResultadoDoConvitePrimeiroAcesso | null> {
+    // A DECISÃO "ESTÁ SEM CPF?" É DELEGADA ao `AdmissoesService` (ator do lado da esteira), pela MESMA
+    // razão da ponte de reconciliação: este serviço público tem trava de teste de NÃO tocar a coluna
+    // de CPF da esteira (`portal-acesso-email.travas`, trava 1). Ele descobre a admissão pelo vínculo
+    // e DELEGA a leitura do marcador. Admissão inexistente volta `false`, então este método se abstém
+    // (devolve null) e `enviarParaAdmissao` lança o NotFound de sempre, sem um segundo caminho de erro.
+    // COM CPF REAL também se abstém: o caminho normal (link clássico) segue.
+    const semCpf = await this.admissoes.ehAdmissaoSemCpf(admissaoId);
+    if (!semCpf) return null;
+
+    // O e-mail vem da ficha do FUNIL (`as_candidatos`), que é a MESMA que a porta de e-mail resolve
+    // no `solicitar`: é com esse endereço que o candidato vai entrar. Ficha anonimizada não conta.
+    const [vinculo] = await this.db
+      .select({ email: asCandidatos.email, nome: asCandidatos.nome })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .where(and(eq(asCandidaturas.admissaoId, admissaoId), isNull(asCandidatos.anonimizadoEm)))
+      // Uma admissão viva se liga a UM candidato (chave cpf + vaga), então o vínculo é único na
+      // prática. A ordenação deixa o `.limit(1)` DETERMINÍSTICO mesmo que uma anomalia de dado
+      // ponha dois vínculos no mesmo `admissao_id`: pega sempre o mais recente, nunca um arbitrário.
+      .orderBy(desc(asCandidaturas.criadoEm))
+      .limit(1);
+
+    const email = (vinculo?.email ?? "").trim();
+    if (!email) {
+      // Sem e-mail no funil a porta de e-mail não resolve o candidato, então o convite não teria
+      // para onde ir. NÃO cai no link clássico (ele também não serve para quem está sem CPF): o
+      // time precisa completar o cadastro, e a tela diz isso.
+      return {
+        convitePrimeiroAcesso: true,
+        enviado: false,
+        motivo: "SEM_EMAIL_NO_FUNIL",
+        destinoMascarado: null,
+      };
+    }
+
+    const base = (this.config.get<string>("PORTAL_LINK_BASE_URL") ?? "/portal").trim();
+    const mensagem = corpoDoConviteDePrimeiroAcesso({ nome: vinculo?.nome ?? "", url: base });
+
+    // Correio inerte (homolog/preview): recusa sem fingir que mandou. A tela diz CANAL_INDISPONIVEL.
+    if (!this.correio.configurado()) {
+      return {
+        convitePrimeiroAcesso: true,
+        enviado: false,
+        motivo: "CANAL_INDISPONIVEL",
+        destinoMascarado: mascararEmail(email),
+      };
+    }
+
+    let saiu = false;
+    try {
+      saiu = await this.correio.enviarLink(email, mensagem);
+    } catch (erro) {
+      // §A.6: só o nome da classe do erro. A mensagem pode carregar o endereço.
+      this.log.error(`excecao inesperada ao enviar o convite de primeiro acesso: ${(erro as Error).name}`);
+      saiu = false;
+    }
+
+    return {
+      convitePrimeiroAcesso: true,
+      enviado: saiu,
+      motivo: saiu ? null : "FALHA_NO_ENVIO",
+      destinoMascarado: mascararEmail(email),
+    };
   }
 
   /**

@@ -31,7 +31,9 @@ import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { copiarTexto, AVISO_COPIA_FALHOU } from "@/lib/copiar-texto";
 import { EnviarLinkModal } from "@/components/portal/EnviarLinkModal";
 import {
+  ehConvitePrimeiroAcesso,
   enviarLinkDaAdmissao,
+  fraseDoConvite,
   fraseDoLinkParaCopiar,
   fraseDoResultado,
   gerarLinkParaCopiar,
@@ -265,9 +267,12 @@ export default function PortalLinksPage() {
   const [copia, setCopia] = useState<"" | "copiado" | "falhou">("");
   /** O envio por e-mail em voo, por admissão, e o desfecho do último. */
   const [enviandoEmail, setEnviandoEmail] = useState<string | null>(null);
-  const [envioFeito, setEnvioFeito] = useState<{ nome: string; ok: boolean; texto: string } | null>(
-    null,
-  );
+  const [envioFeito, setEnvioFeito] = useState<{
+    nome: string;
+    ok: boolean;
+    texto: string;
+    convite: boolean;
+  } | null>(null);
   /** A busca de quem ainda NÃO tem link, que é a porta do primeiro envio. */
   const [buscandoSemLink, setBuscandoSemLink] = useState(false);
   /** A ficha de LEITURA do olho. É a própria linha da tabela: nada é buscado em outro lugar. */
@@ -647,10 +652,14 @@ export default function PortalLinksPage() {
       setErro(null);
       try {
         const r = await enviarLinkDaAdmissao(l.admissaoId, token);
+        const convite = ehConvitePrimeiroAcesso(r);
         setEnvioFeito({
           nome: l.nome,
           ok: r.enviado,
-          texto: fraseDoResultado(r, formatarDataHora(r.expiraEm)),
+          convite,
+          // ITEM 1: quem está sem CPF foi roteado para a porta de e-mail (convite de primeiro
+          // acesso); o desfecho vem discriminado e a frase é a do convite, não a do link clássico.
+          texto: convite ? fraseDoConvite(r) : fraseDoResultado(r, formatarDataHora(r.expiraEm)),
         });
         // O link nasceu (ou o anterior foi trocado): a linha mudou de estado e a lista relê.
         if (r.enviado) await carregar();
@@ -1874,7 +1883,15 @@ export default function PortalLinksPage() {
           className="max-w-lg"
           ariaLabel="Envio Do Link Do Portal"
         >
-          <h3>{envioFeito.ok ? "Link Do Portal Enviado" : "O Link Não Foi Enviado"}</h3>
+          <h3>
+            {envioFeito.convite
+              ? envioFeito.ok
+                ? "Convite De Primeiro Acesso Enviado"
+                : "O Convite Não Foi Enviado"
+              : envioFeito.ok
+                ? "Link Do Portal Enviado"
+                : "O Link Não Foi Enviado"}
+          </h3>
           <p className="psub mt-1">{caixaAlta(envioFeito.nome)}</p>
           <p className="mt-3 text-[12.5px] text-dim">{envioFeito.texto}</p>
           <div className="mt-5 flex justify-end">

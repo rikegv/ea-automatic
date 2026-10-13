@@ -384,6 +384,102 @@ export function corpoDoEmailDoLink(dados: DadosDoEmailDoLink): EmailDoLink {
   return { assunto, texto: linhas.join("\n"), html };
 }
 
+/** Os dados do convite de primeiro acesso. Repare no que NÃO está aqui: CPF, nascimento, matrícula. */
+export interface DadosDoConviteDePrimeiroAcesso {
+  nome: string;
+  /** O endereço NU do Portal (sem token no fragmento): a porta de e-mail abre só com ele. */
+  url: string;
+}
+
+/**
+ * O CONVITE DE PRIMEIRO ACESSO, para quem foi enviado à admissão SEM CPF (marcador PROV).
+ *
+ * ┌─ POR QUE ELE É DIFERENTE DO E-MAIL DO LINK, e a diferença é a régua inteira ────────────────┐
+ * │ O e-mail do link (`corpoDoEmailDoLink`) leva a URL COM token: abre a porta clássica, que     │
+ * │ pede CPF e nascimento e CONFERE contra o cadastro. Quem está sem CPF (a ficha tem o marcador │
+ * │ PROV) NUNCA casa ali, então aquele link não serve. Este convite leva a URL NUA do Portal,    │
+ * │ sem token: ela abre a PORTA DE E-MAIL, onde o candidato prova a caixa por e-mail e código e  │
+ * │ aí informa CPF e nascimento, que GRAVAM o cadastro em vez de conferir. Depois disso a porta  │
+ * │ de e-mail dispara o link de verdade.                                                         │
+ * │                                                                                               │
+ * │ §A.6: SEM CPF, SEM NASCIMENTO, SEM MATRÍCULA e SEM o nome do cliente, a mesma minimização do │
+ * │ e-mail do link. A URL nua não é credencial: ela só leva à tela que pede o e-mail do próprio  │
+ * │ candidato. Reusa os helpers deste arquivo (escapar, primeiro nome), por isso mora aqui.      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.11: sem travessão. §A.24: o assunto é TÍTULO (Title Case); o corpo é frase.
+ */
+export function corpoDoConviteDePrimeiroAcesso(
+  dados: DadosDoConviteDePrimeiroAcesso,
+): EmailDoLink {
+  const nome = primeiroNome(dados.nome);
+  const saudacao = nome ? `Olá, ${nome}!` : "Olá!";
+  const assunto = "Primeiro Acesso Ao Portal Do Candidato";
+
+  const linhas = [
+    saudacao,
+    "",
+    "Seu início começa aqui, e estamos felizes em ter você com a gente.",
+    "",
+    "Para enviar os seus documentos de admissão, faça o seu primeiro acesso ao Portal do Candidato pelo endereço abaixo:",
+    "",
+    dados.url,
+    "",
+    "Na tela, informe o seu e-mail para receber um código de acesso. Depois de confirmar o código, você informa o seu CPF e a sua data de nascimento, e o portal abre para você enviar os documentos.",
+    "",
+    "Este endereço é o seu acesso ao Portal. Se precisar de ajuda, fale com o seu contato do RH pelo telefone (11) 3549-6446.",
+    "",
+    "Este e-mail é automático e não recebe respostas.",
+    "",
+    "Se você não está em processo de admissão conosco, pode ignorar esta mensagem.",
+    "",
+    "Equipe De Admissão, Grupo Soulan",
+  ];
+
+  const urlSegura = escaparHtml(dados.url);
+  const saudacaoSegura = escaparHtml(saudacao);
+
+  const html = [
+    "<!doctype html>",
+    '<html lang="pt-BR"><head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">',
+    "<style>",
+    "@media (max-width:480px){",
+    ".ea-body{padding:24px 18px 8px !important;}",
+    ".ea-ola{font-size:20px !important;}",
+    ".ea-btn{display:block !important;}",
+    "}",
+    "</style>",
+    "</head>",
+    '<body style="margin:0;background:#eef3f8;font-family:\'Montserrat\',Arial,Helvetica,sans-serif;">',
+    '<div style="max-width:600px;margin:0 auto;padding:24px 16px;">',
+    '<div style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(13,43,69,.08);">',
+    '<div style="background:#1A4895;padding:28px 24px;text-align:center;">',
+    `<img src="cid:${LOGO_SOULAN_CID}" alt="Grupo Soulan" style="height:46px;width:auto;display:inline-block;">`,
+    "</div>",
+    '<div class="ea-body" style="padding:32px 28px 12px;color:#0d2b45;font-size:15px;line-height:1.65;font-family:\'Montserrat\',Arial,Helvetica,sans-serif;">',
+    `<p class="ea-ola" style="font-size:22px;font-weight:700;color:#1A4895;margin:0 0 14px;">${saudacaoSegura}</p>`,
+    '<p style="margin:0 0 14px;">Seu início começa aqui, e estamos felizes em ter você com a gente.</p>',
+    '<p style="margin:0 0 14px;">Para enviar os seus documentos de admissão, faça o seu primeiro acesso ao Portal do Candidato, clicando no botão abaixo:</p>',
+    '<div style="text-align:center;padding:14px 0 22px;">',
+    `<a class="ea-btn" href="${urlSegura}" style="display:inline-block;padding:15px 34px;background:#1A4895;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;font-size:16px;">Fazer Meu Primeiro Acesso</a>`,
+    "</div>",
+    '<div style="font-size:13px;color:#557089;background:#f6f9fc;border-radius:8px;padding:12px 14px;margin:18px 0;">Na tela, informe o seu e-mail para receber um código de acesso. Depois de confirmar o código, você informa o seu CPF e a sua data de nascimento, e o portal abre para enviar os documentos.</div>',
+    '<div style="font-size:13px;color:#0d2b45;background:#eef7dc;border-left:4px solid #AAD12F;border-radius:8px;padding:12px 14px;margin:18px 0;">Este e-mail é automático e não recebe respostas. Se precisar de ajuda, fale com o RH pelo telefone <strong style="color:#1A4895;">(11) 3549-6446</strong>.</div>',
+    '<p style="font-size:13px;color:#557089;margin:0 0 14px;">Se você não está em processo de admissão conosco, pode ignorar esta mensagem.</p>',
+    '<p style="font-weight:600;color:#0d2b45;margin-top:18px;">Equipe De Admissão, Grupo Soulan</p>',
+    "</div>",
+    "</div>",
+    '<div style="text-align:center;color:#90a3b6;font-size:12px;padding:18px 16px 4px;">Grupo Soulan, Recursos Humanos</div>',
+    "</div>",
+    "</body></html>",
+  ].join("");
+
+  return { assunto, texto: linhas.join("\n"), html };
+}
+
 /**
  * O E-MAIL DO CÓDIGO DA PORTA DE E-MAIL. Mesma forma do irmão de cima, conteúdo OPOSTO.
  *
