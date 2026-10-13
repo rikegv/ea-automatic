@@ -21303,3 +21303,62 @@ ar (sem conflito ativo). O link vivo do Edson (`9f674b60`, lacuna de EMISSÃO, n
 
 **Nada ficou aberto nesta frente.** Item 1 no ar; item 2 já estava no ar (não reconstruído); item 3
 (Edson) destravado por operação reversível.
+
+---
+
+## 2026-10-13 — P0 Portal: primeiro acesso por e-mail alcançável da tela de CPF [COMMIT d495cc6, no ar]
+
+**P0 do diretor (operação travada).** Candidatos sem CPF (ex.: Brenda, admissão `75406b6b`) recebem
+link do Portal e caem na tela que pede CPF + nascimento, que confere contra o cadastro e nunca casa:
+ficam presos. O Item 1 (reenvio PROV, commit 1004c79) só trocou o botão de REENVIO; o link clássico
+já entregue continua apontando para a tela de CPF.
+
+**Estado medido em produção (read-only, §A.6):** 92 admissões vivas, 16 PROV, **12 presas** (PROV
+vivas com link clássico vivo no Gerenciador), TODAS com e-mail no funil. Brenda: PROV, farol vivo,
+tem e-mail, sem data de nascimento, com link clássico vivo.
+
+**Por que NÃO foi conserto por detecção automática na porta de entrada.** Desenhei e construí um
+endpoint público `portal/modo-de-acesso` (detecta PROV pelo token e abre o e-mail). **Descartado e
+revertido** porque a barreira pública (`ea-bridge-fernando/portal-soulan.conf`, Apache fail-closed)
+allowlista por **caminho EXATO ancorado** (`ProxyPassMatch "^(/api/portal/identificar)$"` etc.), medido
+vivo: `identificar/recuperacao/acesso-email/*` = 400 (passam), `modo-de-acesso` = 404. Rota nova morre
+no ingress, e a barreira é infra do box do Fernando, fora do alcance da fábrica (§A.0). O portal-app
+público também tem allowlist própria de rewrite por caminho exato (`apps/portal-app/next.config.mjs`).
+
+**Conserto aplicado (puro frontend, usa rotas JÁ liberadas).** A tela de CPF (`TelaDeIdentificacao`)
+ganhou a ação "Ainda não tem o CPF cadastrado? Faça o primeiro acesso pelo e-mail", que abre a porta
+de e-mail (já no ar e allowlistada: `acesso-email/solicitar|confirmar|identidade`), onde o candidato
+prova a caixa e informa CPF + nascimento, que são GRAVADOS (reusa corrigirCpf). Conserta o DESTINO,
+então vale para QUALQUER via que gerou o link e para TODO link já entregue (os 12 presos). Recorte: 4
+arquivos (`page.tsx`, `Identificacao.tsx` + 2 specs). Nenhuma rota, nenhum endpoint, nenhuma leitura
+de CPF nova. A tela de CPF segue o default do link; o e-mail é opt-in explícito.
+
+**Gate.** typecheck 0, lint 0, specs tocadas verdes (EntradaSemLink 7/7 com o guard atualizado para o
+novo desenho + corrigido o literal do teste 3, que era red pré-existente de indentação; Identificacao
+15/15 com 2 testes novos do botão). Reds pré-existentes NÃO meus: `AcessoPorEmail.spec` ("Confirme Seus
+Dados" x "Criar Cadastro", drift em origin/main) e o `portal-painel.cobertura-independente` (backend).
+
+**Auditoria (§A.38).** `seguranca` APROVADO a versão com endpoint (adversarial: §A.6 ok, sem oráculo,
+sem escrita); essa versão foi revertida. `tester` fechou gaps da versão com endpoint. A versão FINAL
+(botão) é puro frontend sem superfície de CPF/auth/credencial, então não dispara o gatilho §A.38; a
+porta de e-mail que ela abre já foi auditada no Item 2.
+
+**Publicação.** d495cc6 em origin/main. Deploy em DOIS alvos: (1) `publicar-producao.sh` (§A.49, main
+app :3010/:3020, serve d495cc6); (2) **o portal-app público (`ea-portal-app` :3021, que o túnel
+`clientesportalsoulan.com.br` serve) NÃO é coberto pelo publicar-producao**, então rebuildei o
+`.next-prod` a partir do `ea-build` (origin/main limpo, deps emprestadas por symlink do checkout
+principal, para NÃO buildar no tree sujo), troquei o artefato com backup (`.next-prod.bak-20261013-203539`)
+e reiniciei `ea-portal-app`. Health 3021/portal 200, hostname público 200, texto do botão no chunk servido.
+
+**Prova visual §A.13 no Portal PÚBLICO de produção.** Playwright em `clientesportalsoulan.com.br/portal`:
+tela de CPF com o botão + o clique abre a porta de e-mail. Screenshots enviados ao diretor.
+
+**Lacuna de processo registrada (para o diretor / frente do Portal público):** o deploy do portal-app
+público é MANUAL e fora do `publicar-producao.sh`; o design (`docs/DESENHO-PORTAL-APP-PROPRIO-TUNEL.md`)
+diz "restart coordenado pelo Rike". Fiz o rebuild+restart sob a autorização P0 ("pode subir pelo fluxo,
+rota do sistema"), com backup. Vale automatizar o portal-app no publicar-producao numa frente própria.
+
+**Proposto, NÃO feito (decisão do diretor):** (a) reenviar aos 12 presos o convite nu (e-mail, para
+chegarem direto na porta sem clicar) usando o caminho do Item 1, é ação externa a candidatos reais;
+(b) detecção AUTOMÁTICA por token (o endpoint que reverti) exigiria o Fernando acrescentar
+`/api/portal/modo-de-acesso` à allowlist da barreira + ao rewrite do portal-app.
