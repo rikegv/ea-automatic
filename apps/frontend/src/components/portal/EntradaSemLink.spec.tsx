@@ -76,16 +76,31 @@ describe("O CAMINHO DO LINK CONTINUA INTACTO, provado sobre o fonte da página",
   // aqui: no ambiente de DOM ele não é uma URL de arquivo.
   const fonte = readFileSync(resolve(process.cwd(), "src/app/portal/page.tsx"), "utf8");
 
-  it("a escolha aparece UMA vez, e dentro do estado `semFragmento`", () => {
+  it("a escolha aparece em DOIS caminhos: sem fragmento e no opt-in de primeiro acesso por e-mail", () => {
+    // P0 (link de quem está sem CPF cai na tela de CPF e trava): a porta de e-mail passou a ser
+    // alcançável TAMBÉM a partir da tela de identificação, por um opt-in explícito. Por isso a
+    // escolha aparece agora em DOIS pontos. O invariante que importa continua travado abaixo: com
+    // fragmento, o DEFAULT do `!sessao` segue sendo a tela de CPF; o e-mail só abre se o candidato
+    // pedir.
     const usos = fonte.match(/<EntradaSemLink/g) ?? [];
-    expect(usos).toHaveLength(1);
+    expect(usos).toHaveLength(2);
 
-    const inicio = fonte.indexOf("if (semFragmento) {");
-    const fim = fonte.indexOf("if (erroFatal) {");
-    expect(inicio).toBeGreaterThan(-1);
-    expect(fim).toBeGreaterThan(inicio);
-    const bloco = fonte.slice(inicio, fim);
-    expect(bloco).toContain("<EntradaSemLink");
+    // 1) No estado `semFragmento` (quem chega sem link nenhum).
+    const inicioSem = fonte.indexOf("if (semFragmento) {");
+    const fimSem = fonte.indexOf("if (erroFatal) {");
+    expect(inicioSem).toBeGreaterThan(-1);
+    expect(fimSem).toBeGreaterThan(inicioSem);
+    expect(fonte.slice(inicioSem, fimSem)).toContain("<EntradaSemLink");
+
+    // 2) No opt-in `entrarPeloEmail`, DENTRO do `!sessao`, ao lado (não no lugar) da tela de CPF.
+    const inicioSessao = fonte.indexOf("if (!sessao) {");
+    const fimSessao = fonte.indexOf("if (carregando) {");
+    expect(inicioSessao).toBeGreaterThan(-1);
+    expect(fimSessao).toBeGreaterThan(inicioSessao);
+    const blocoSessao = fonte.slice(inicioSessao, fimSessao);
+    expect(blocoSessao).toContain("if (entrarPeloEmail) {");
+    expect(blocoSessao).toContain("<EntradaSemLink");
+    expect(blocoSessao).toContain("<TelaDeIdentificacao");
   });
 
   it("nenhum outro estado do render foi tocado pela porta de e-mail", () => {
@@ -124,6 +139,6 @@ describe("O CAMINHO DO LINK CONTINUA INTACTO, provado sobre o fonte da página",
     expect(fonte).toContain("window.history.replaceState");
     // Com fragmento, `semFragmento` NÃO liga: é o `else if (!link)` que o liga. Se alguém trocar
     // essa condição, o caminho do link passa a cair na escolha, que é justamente o que não pode.
-    expect(fonte).toContain("} else if (!link) {\n      setSemFragmento(true);");
+    expect(fonte).toContain("} else if (!link) {\n        setSemFragmento(true);");
   });
 });

@@ -428,6 +428,14 @@ export default function PortalDoCandidatoPage() {
   const [bloqueado, setBloqueado] = useState(false);
 
   /**
+   * O CANDIDATO ESCOLHEU O PRIMEIRO ACESSO POR E-MAIL a partir da tela de CPF. É a saída de quem
+   * ainda não tem CPF no cadastro (marcador PROV): a conferência de CPF + nascimento nunca casa
+   * para ele, e a porta de e-mail (que prova a caixa e GRAVA o CPF) é a única que o deixa entrar.
+   * A mesma `EntradaSemLink` do caminho sem fragmento, que já abre no acesso por e-mail.
+   */
+  const [entrarPeloEmail, setEntrarPeloEmail] = useState(false);
+
+  /**
    * O PC É ACRÉSCIMO, NUNCA BASE. A partir de 1024px a MESMA trilha vira duas colunas: o tabuleiro
    * some do topo e desce pela esquerda, e o documento da vez ocupa a direita. Nada de componente
    * paralelo de PC: é uma bandeira, lida pelos mesmos `Tabuleiro` e `CasaAtual`, com a mesma régua
@@ -1052,6 +1060,31 @@ export default function PortalDoCandidatoPage() {
   }
 
   if (!sessao) {
+    // O CANDIDATO PEDIU O PRIMEIRO ACESSO POR E-MAIL (sem CPF cadastrado): a porta de e-mail abre no
+    // lugar da tela de CPF, reusando a mesma `EntradaSemLink` do caminho sem fragmento.
+    if (entrarPeloEmail) {
+      return (
+        <Casca centralizado>
+          <EntradaSemLink
+            instrucaoDoLink={
+              <div className="flex flex-col items-center text-center">
+                <IconeLink cor={AZUL} tamanho={38} />
+                <h1 className="font-display mt-4 text-xl font-bold text-slate-900">
+                  Abra O Link De Novo
+                </h1>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                  Para o seu primeiro acesso, use o seu e-mail: a gente envia um código para
+                  confirmar que é você e então você informa o seu CPF e a data de nascimento.
+                </p>
+                <p className="mt-3 text-[13px] leading-relaxed text-slate-500">
+                  Se o e-mail não chegar, fale com o RH que está acompanhando a sua admissão.
+                </p>
+              </div>
+            }
+          />
+        </Casca>
+      );
+    }
     return (
       <Casca semCartao>
         <TelaDeIdentificacao
@@ -1060,6 +1093,7 @@ export default function PortalDoCandidatoPage() {
           erro={erroIdentificacao}
           aviso={avisoSessao}
           bloqueado={bloqueado}
+          aoEntrarPeloEmail={() => setEntrarPeloEmail(true)}
         />
       </Casca>
     );

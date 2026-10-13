@@ -164,6 +164,32 @@ describe("INVARIANTE 5: o teto de tentativas (bloqueado) trava o submit e manté
   });
 });
 
+describe("P0: o primeiro acesso por e-mail é alcançável a partir da tela de CPF", () => {
+  const AFFORD = /primeiro acesso pelo e-mail/i;
+
+  it("quando `aoEntrarPeloEmail` é dado, a afordância aparece e o clique a aciona", () => {
+    const aoEntrarPeloEmail = vi.fn();
+    render(
+      <TelaDeIdentificacao
+        aoIdentificar={vi.fn(async () => true)}
+        aoPedirAjuda={vi.fn(async () => "")}
+        erro={null}
+        aviso={null}
+        aoEntrarPeloEmail={aoEntrarPeloEmail}
+      />,
+    );
+    const botao = screen.getByRole("button", { name: AFFORD });
+    expect(botao).toBeTruthy();
+    fireEvent.click(botao);
+    expect(aoEntrarPeloEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("sem `aoEntrarPeloEmail`, a afordância não aparece (a tela de sempre fica intacta)", () => {
+    montar();
+    expect(screen.queryByRole("button", { name: AFFORD })).toBeNull();
+  });
+});
+
 describe("INVARIANTE 6: os avisos do servidor são exibidos como vieram, sem reescrita", () => {
   it("o erro de não casamento aparece com o texto do servidor", () => {
     const texto = "Não encontramos esses dados. Confira e tente de novo.";

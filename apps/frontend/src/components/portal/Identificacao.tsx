@@ -169,6 +169,13 @@ interface Props {
    * e o botão saem de cena; a válvula do RH continua aberta, porque ela é a única saída que resta.
    */
   bloqueado?: boolean;
+  /**
+   * ABRE O PRIMEIRO ACESSO POR E-MAIL. Para quem ainda não tem CPF no cadastro (marcador PROV): a
+   * conferência de CPF + nascimento desta tela nunca casa para ele, então a saída é a porta de
+   * e-mail, onde ele prova a caixa e informa o CPF, que ali é GRAVADO. Opcional: quando ausente, a
+   * tela é a de sempre.
+   */
+  aoEntrarPeloEmail?: () => void;
 }
 
 export function TelaDeIdentificacao({
@@ -177,6 +184,7 @@ export function TelaDeIdentificacao({
   erro,
   aviso,
   bloqueado = false,
+  aoEntrarPeloEmail,
 }: Props) {
   const [cpf, setCpf] = useState("");
   const [dataNascimento, setDataNascimento] = useState("");
@@ -357,6 +365,18 @@ export function TelaDeIdentificacao({
             Pedimos esses dados só para confirmar que é você. Este link é pessoal: guarde só para
             você.
           </Nota>
+
+          {aoEntrarPeloEmail ? (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={aoEntrarPeloEmail}
+                className="min-h-11 text-center text-sm font-semibold text-portal-primaria underline underline-offset-2"
+              >
+                Ainda não tem o CPF cadastrado? Faça o primeiro acesso pelo e-mail.
+              </button>
+            </div>
+          ) : null}
 
           <div className="flex flex-col items-center gap-3 border-t border-portal-linha pt-4 md:flex-row md:justify-between">
             {recado ? (
