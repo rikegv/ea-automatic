@@ -123,6 +123,26 @@ export function moverEtapaEmLote(
   });
 }
 
+/**
+ * AGENDAR ENTREVISTA EM MASSA (ITEM 4). POST, como a rota individual de entrevista: registra um FATO.
+ *
+ * O MESMO instante (data e hora) para todos os selecionados. A etapa de cada linha NÃO vai no corpo:
+ * é a ETAPA ATUAL de cada candidatura, resolvida no backend, espelhando o agendamento individual da
+ * tela (que marca na etapa onde a pessoa está). Quem não estiver numa etapa de entrevista volta em
+ * `falhas`. Devolve `AsResultadoEmMassa`, como os outros lotes, para o mesmo `ResultadoLoteModal`.
+ */
+export function agendarEntrevistaEmLote(
+  candidaturaIds: string[],
+  agendadaEm: string,
+  token: string | null,
+): Promise<AsResultadoEmMassa> {
+  return apiFetch<AsResultadoEmMassa>("/as/candidatos/candidaturas/lote/entrevista", {
+    method: "POST",
+    token,
+    body: { candidaturaIds, agendadaEm },
+  });
+}
+
 // ── A LEITURA DO RESULTADO ──────────────────────────────────────────────────
 
 /** O tom com que o resultado do lote se apresenta. É ele que decide o ícone e a cor da faixa. */

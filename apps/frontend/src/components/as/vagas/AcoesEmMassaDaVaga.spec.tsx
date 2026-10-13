@@ -23,11 +23,13 @@ import type { AsCandidaturaItem, VagaListItem } from "@ea/shared-types";
  * só "pronto" esconderia exatamente quem ficou de fora.
  */
 
-const { finalizarPosicaoEmLote, registrarSaidaEmLote, moverEtapaEmLote } = vi.hoisted(() => ({
-  finalizarPosicaoEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
-  registrarSaidaEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
-  moverEtapaEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
-}));
+const { finalizarPosicaoEmLote, registrarSaidaEmLote, moverEtapaEmLote, agendarEntrevistaEmLote } =
+  vi.hoisted(() => ({
+    finalizarPosicaoEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
+    registrarSaidaEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
+    moverEtapaEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
+    agendarEntrevistaEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
+  }));
 
 /**
  * AS ROTAS POR FILTRO (modo "todos do filtro", sem teto). Elas devolvem CONTAGEM (`{afetados,
@@ -116,7 +118,24 @@ vi.mock("@/lib/as-motivos-descarte", () => ({
 vi.mock("@/lib/as-candidatos-lote", async () => {
   const real =
     await vi.importActual<typeof import("@/lib/as-candidatos-lote")>("@/lib/as-candidatos-lote");
-  return { ...real, finalizarPosicaoEmLote, registrarSaidaEmLote, moverEtapaEmLote };
+  return { ...real, finalizarPosicaoEmLote, registrarSaidaEmLote, moverEtapaEmLote, agendarEntrevistaEmLote };
+});
+
+/**
+ * QUAIS ETAPAS ACEITAM ENTREVISTA vem do catálogo (`GET /as/etapas/com-entrevista`), dublado aqui
+ * para o botão "Agendar entrevista" (ITEM 4) aparecer no teste. O resto do módulo é o de verdade
+ * (`etapaAceitaEntrevista` e `instanteDoCampo` são puros; dublá-los faria o teste afirmar o dublê).
+ */
+vi.mock("@/lib/as-entrevistas", async () => {
+  const real = await vi.importActual<typeof import("@/lib/as-entrevistas")>("@/lib/as-entrevistas");
+  return {
+    ...real,
+    useEtapasComEntrevista: () => ({
+      codigos: ["ENTREVISTA_SOULAN", "ENTREVISTA_CLIENTE"],
+      carregando: false,
+      erro: null,
+    }),
+  };
 });
 
 import { AcoesEmMassaDaVaga } from "./AcoesEmMassaDaVaga";
@@ -403,6 +422,39 @@ describe("o resultado do lote", () => {
     expect(screen.getByText(/1 linha aplicada/)).toBeTruthy();
     expect(screen.getByText("Beltrana De Tal")).toBeTruthy();
     expect(screen.getByText(/já está em Triagem/)).toBeTruthy();
+  });
+});
+
+describe("agendar entrevista em massa (ITEM 4)", () => {
+  it("NÃO oferece o botão quando ninguém da seleção está numa etapa de entrevista", () => {
+    montar([candidatura({ etapa: "TRIAGEM" })]);
+    expect(screen.queryByText(/Agendar entrevista/i)).toBeNull();
+  });
+
+  it("aplica o MESMO instante ao lote, chamando agendarEntrevistaEmLote com os ids e o token", async () => {
+    montar([
+      candidatura({ id: "cand-1", etapa: "ENTREVISTA_SOULAN" }),
+      candidatura({ id: "cand-2", candidatoNome: "Beltrana", etapa: "ENTREVISTA_CLIENTE" }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /agendar entrevista \(2\)/i }));
+
+    const campo = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(campo, { target: { value: "2026-10-20T10:00" } });
+
+    fireEvent.click(
+      screen.getAllByRole("button").find((b) => (b.textContent ?? "").trim() === "Agendar entrevista") as HTMLElement,
+    );
+
+    await waitFor(() => expect(agendarEntrevistaEmLote).toHaveBeenCalledTimes(1));
+    const [ids, agendadaEm, token] = agendarEntrevistaEmLote.mock.calls[0] as unknown as [
+      string[],
+      string,
+      string,
+    ];
+    expect([...ids].sort()).toEqual(["cand-1", "cand-2"]);
+    expect(typeof agendadaEm).toBe("string");
+    expect(agendadaEm.length).toBeGreaterThan(0);
+    expect(token).toBe("t");
   });
 });
 

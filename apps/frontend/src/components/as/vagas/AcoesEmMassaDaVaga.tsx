@@ -64,11 +64,17 @@ import {
 } from "@/lib/as-candidatos";
 import { rotuloDaEtapa, useEtapas } from "@/lib/as-etapas";
 import {
+  agendarEntrevistaEmLote,
   finalizarPosicaoEmLote,
   moverEtapaEmLote,
   registrarSaidaEmLote,
   type SaidaEmLote,
 } from "@/lib/as-candidatos-lote";
+import {
+  etapaAceitaEntrevista,
+  instanteDoCampo,
+  useEtapasComEntrevista,
+} from "@/lib/as-entrevistas";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
 import {
@@ -88,7 +94,7 @@ import { useStatusVaga, vagaEmProcesso } from "@/lib/as-status-vaga";
 import { cn } from "@/lib/cn";
 
 /** Qual confirmação está aberta. `null` é a barra sozinha, sem nada perguntado ainda. */
-type Acao = "FINALIZAR" | "MOVER" | "DESVINCULAR" | "ENVIAR" | "SHORTLIST";
+type Acao = "FINALIZAR" | "MOVER" | "DESVINCULAR" | "ENVIAR" | "SHORTLIST" | "AGENDAR";
 
 /**
  * O MOTIVO DO DESVÍNCULO, as duas saídas sem êxito. As etiquetas são as MESMAS palavras da ação
@@ -173,6 +179,19 @@ export function AcoesEmMassaDaVaga({
   const ids = selecionadas.map((c) => c.id);
   const podeFinalizar = selecionadas.some((c) => podeFinalizarPosicao(c.situacao));
   const podeDecidirAlgo = selecionadas.some((c) => podeDecidir(c.situacao));
+  /*
+   * ─ AGENDAR ENTREVISTA EM MASSA (ITEM 4): o botão só aparece quando há seleção EM ETAPA DE
+   *   ENTREVISTA ──────────────────────────────────────────────────────────────────────────────────
+   *
+   * Quais etapas aceitam entrevista vem do CATÁLOGO (`useEtapasComEntrevista`), como no agendamento
+   * individual, nunca de um literal. Oferecer o gesto quando NINGUÉM da seleção está numa etapa de
+   * entrevista seria um botão que só sabe falhar (o backend recusaria cada linha). Quem está numa
+   * etapa de entrevista é vivo, então não há conferência de situação a mais a fazer aqui.
+   */
+  const { codigos: codigosComEntrevista } = useEtapasComEntrevista();
+  const algumComEntrevista = selecionadas.some((c) =>
+    etapaAceitaEntrevista(c.etapa, codigosComEntrevista),
+  );
   /** O teto do lote é do contrato compartilhado, e a barra o diz ANTES de a recusa de 400 chegar. */
   const acimaDoTeto = ids.length > AS_MAXIMO_POR_LOTE;
 
@@ -288,6 +307,23 @@ export function AcoesEmMassaDaVaga({
                   <Icon name="arr" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
                   {`Mover no funil (${selecionadas.length})`}
                 </Button>
+                {/* AGENDAR ENTREVISTA EM MASSA (ITEM 4): só aparece quando há gente numa etapa de
+                    entrevista. O mesmo horário para todos; cada um na sua etapa atual. */}
+                {algumComEntrevista && (
+                  <Button
+                    variant="secondary"
+                    className="shrink-0 px-3 py-2"
+                    disabled={processando}
+                    title="Agenda a mesma data e horário de entrevista para todos os selecionados que estão numa etapa de entrevista."
+                    onClick={() => {
+                      setErro(null);
+                      setAcao("AGENDAR");
+                    }}
+                  >
+                    <Icon name="clock" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+                    {`Agendar entrevista (${selecionadas.length})`}
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
                   className="shrink-0 px-3 py-2"
@@ -364,6 +400,22 @@ export function AcoesEmMassaDaVaga({
           onCancelar={() => setAcao(null)}
           onConfirmar={(etapa) =>
             void executar("Mover Etapa Em Massa", () => moverEtapaEmLote(ids, etapa, token))
+          }
+        />
+      )}
+
+      {acao === "AGENDAR" && (
+        <AgendarEntrevistaEmLoteModal
+          selecionadas={selecionadas}
+          codigosComEntrevista={codigosComEntrevista}
+          processando={processando}
+          erro={erro}
+          bloqueado={acimaDoTeto}
+          onCancelar={() => setAcao(null)}
+          onConfirmar={(agendadaEm) =>
+            void executar("Agendar Entrevista Em Massa", () =>
+              agendarEntrevistaEmLote(ids, agendadaEm, token),
+            )
           }
         />
       )}
@@ -640,6 +692,79 @@ function MoverEmLoteModal({
       {jaEstao > 0 && (
         <AvisoDaSelecao>
           {frasePessoas(jaEstao)} da seleção já estão em {rotuloDaEtapa(etapa, etapas)}.
+        </AvisoDaSelecao>
+      )}
+    </ModalDeLote>
+  );
+}
+
+/**
+ * ─ AGENDAR ENTREVISTA EM MASSA (ITEM 4 do diretor) ─────────────────────────────────────────────
+ *
+ * ESPELHA O AGENDAMENTO INDIVIDUAL, só aplicado a vários: UM campo de data e hora (`datetime-local`),
+ * o MESMO instante para todos. A etapa de cada pessoa é a atual dela (o backend resolve), então a
+ * seleção pode misturar etapas; quem NÃO está numa etapa de entrevista volta na lista de falhas, e a
+ * tela avisa antes com a mesma régua do catálogo (`etapaAceitaEntrevista`). Sem campo de local: o
+ * agendamento não tem local (decisão de schema), e o individual que este espelha também não.
+ *
+ * SEM `AvisoDeVolume` NEM TETO PRÓPRIO além do `AS_MAXIMO_POR_LOTE` que a barra já aplica: é lote de
+ * ids marcados, não "todos do filtro". §A.11 (sem travessão), §A.24 (título em title case).
+ */
+function AgendarEntrevistaEmLoteModal({
+  selecionadas,
+  codigosComEntrevista,
+  processando,
+  erro,
+  bloqueado,
+  onCancelar,
+  onConfirmar,
+}: {
+  selecionadas: AsCandidaturaItem[];
+  codigosComEntrevista: string[];
+  processando: boolean;
+  erro: string | null;
+  bloqueado: boolean;
+  onCancelar: () => void;
+  onConfirmar: (agendadaEm: string) => void;
+}) {
+  const [quando, setQuando] = useState("");
+  const instante = instanteDoCampo(quando);
+  /** Quem da seleção está numa etapa de entrevista (os alvos reais); o resto volta em falhas. */
+  const alvos = selecionadas.filter((c) => etapaAceitaEntrevista(c.etapa, codigosComEntrevista)).length;
+  const foraDeEntrevista = selecionadas.length - alvos;
+
+  return (
+    <ModalDeLote
+      titulo="Agendar Entrevista Em Massa"
+      apoio={`${frasePessoas(alvos)} da seleção recebem a mesma data e horário de entrevista, cada uma na etapa em que está.`}
+      acao="Agendar entrevista"
+      processando={processando}
+      erro={erro}
+      impedido={bloqueado || alvos === 0 || instante === null}
+      onCancelar={onCancelar}
+      onConfirmar={() => instante && onConfirmar(instante)}
+    >
+      <Secao titulo="Data E Horário">
+        {/* UM CAMPO SÓ (`datetime-local`), como no agendamento individual: data e hora juntas evitam
+            o estado impossível "hora sem dia". §A.35 recorta o `<select>` cru, não este controle. */}
+        <input
+          type="datetime-local"
+          className="ds-input w-full sm:w-[280px]"
+          value={quando}
+          disabled={processando}
+          onChange={(e) => setQuando(e.target.value)}
+          aria-label="Data e horário da entrevista para o lote"
+        />
+        <p className="mt-2 text-[11.5px] text-faint">
+          O mesmo horário vale para todas as pessoas da seleção. Registrar uma entrevista que já
+          aconteceu é permitido, e quem já tinha entrevista marcada na etapa tem a data substituída.
+        </p>
+      </Secao>
+
+      {foraDeEntrevista > 0 && (
+        <AvisoDaSelecao>
+          {frasePessoas(foraDeEntrevista)} da seleção não estão numa etapa de entrevista e vão voltar
+          na lista de falhas. Só {frasePessoas(alvos)} recebem o agendamento.
         </AvisoDaSelecao>
       )}
     </ModalDeLote>
