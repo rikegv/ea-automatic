@@ -21251,3 +21251,55 @@ próprio; §A.32 avisado ao diretor antes. Diretor validou: "Validado, pode publ
 **Teardown.** Preview 3164/3165 derrubado e banco `ea_automatic_preview_3164` dropado após a publicação.
 
 **Nada ficou aberto.** Os 6 itens no ar; worktree da frente consumido.
+
+---
+
+## 2026-10-13 — Portal dos candidatos: reenvio de quem está sem CPF cai no convite de primeiro acesso [COMMIT 1004c79, no ar]
+
+**O que entrou (ITEM 1 do acesso do candidato).** O botão "Reenviar o link" sempre mandava o link da
+porta clássica (CPF + nascimento). Quem está sem CPF (marcador PROV) nunca passa nessa porta e trava
+sem gravar o CPF. A porta de e-mail, que grava e reconcilia o CPF (reusa `corrigirCpf`, já no ar
+desde 06 a 09/out), só era alcançável pela URL nua, para onde ninguém era roteado. Este commit roteia,
+no reenvio, o candidato SEM CPF e com farol VIVO para o convite de primeiro acesso por e-mail; quem
+tem CPF real segue pelo link clássico, sem mudança. Camada fina na porta de e-mail: não toca
+`enviarParaAdmissao`, a trava do FLUXO 2 nem as contagens do painel. A decisão reusa `ehCpfProvisorio`
+(nenhum caminho paralelo) e a porta de e-mail não passa a ler a coluna de CPF da esteira.
+
+**Recorte §A.49 (10 arquivos, git add nominal).** Backend: `admissoes.service.ts` (`ehAdmissaoSemCpf`
+= farol vivo && cpf PROV), `portal/portal-acesso-email.service.ts` (`rotearReenvioSemCpf`),
+`portal/portal-envio.controller.ts` (roteia antes do envio), `domain/portal-envio.ts`
+(`corpoDoConviteDePrimeiroAcesso`), `portal/portal-reenvio-sem-cpf.tester.spec.ts` (novo). Frontend:
+`lib/portal-envio-link.ts`, `app/(app)/admin/portal-links/page.tsx`, `components/portal/EnviarLinkModal.tsx`,
+`lib/portal-envio-link.convite.spec.ts` (novo). Shared-types: `index.ts` (interface
+`ResultadoDoConvitePrimeiroAcesso` + `MOTIVOS_DE_RECUSA_DO_CONVITE`, ADITIVO, não toca
+`LinhaDoPainelPortal`). Base era c4ef28d; `origin/main` avançou para 590b737 (frente Central das Vagas,
+sem sobreposição) durante o gate, rebaseado limpo antes do push.
+
+**Gate (§A.21).** typecheck shared+backend+frontend 0; lint 0 nos 10 arquivos; specs novas 17/17 + 6/6.
+O 1 red do painel (`portal-painel.cobertura-independente`, "LINHA tem os campos de LinhaDoPainelPortal")
+é PRÉ-EXISTENTE do origin/main (drift do tipo x serviço): meu diff não toca `LinhaDoPainelPortal` nem
+`portal-painel.service.ts`, confirmado por git diff. Não corrigido (§A.14).
+
+**Auditoria (§A.38).** `seguranca`: APROVADO (adversarial): §A.6 ok (convite sem CPF/credencial, URL
+nua, destino mascarado, log só classe), RBAC ok, trava 1 da porta de e-mail preservada, zero escrita
+no banco; 1 recomendação não-veto (orderBy no limit(1)) aplicada. `tester` independente: achou gap
+real (o marcador PROV também é de DECLINOU/RESCISAO), fechado confinando o roteamento a farol vivo;
+demais gaps cobertos.
+
+**Prova em produção (§A.13/§A.6).** Artefato servido contém o roteamento (controller chama
+`rotearReenvioSemCpf` antes de `enviarParaAdmissao`; `ehAdmissaoSemCpf` e `MOTIVOS` no dist). Medição
+read-only com os predicados DEPLOYADOS sobre o banco de produção: 90 admissões vivas, 14 PROV vivas
+roteiam para o CONVITE de primeiro acesso, 76 com CPF real vivas seguem o LINK clássico. Sem envio de
+e-mail e sem escrita. O diretor valida o ponta a ponta com candidato real.
+
+**Publicação.** Flag READY criada e removida em torno do push; deploy por `scripts/publicar-producao.sh`
+(§A.49, worktree pristino de origin/main, troca de artefato, health 3011/3010 OK, backup
+`*.bak-20261013-185933`). Autorização: diretor deu "base limpa, pode subir".
+
+**Coordenação.** Toque fino no `portal-envio.controller.ts` + mensagem do botão do Gerenciador +
+interface aditiva em shared-types é área que a Emissão 0155 também mexe; a sessão dela estava fora do
+ar (sem conflito ativo). O link vivo do Edson (`9f674b60`, lacuna de EMISSÃO, não de CPF) emitido em
+12/10 é território da Emissão 0155, a repassar.
+
+**Nada ficou aberto nesta frente.** Item 1 no ar; item 2 já estava no ar (não reconstruído); item 3
+(Edson) destravado por operação reversível.
