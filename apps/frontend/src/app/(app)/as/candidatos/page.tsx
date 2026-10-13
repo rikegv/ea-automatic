@@ -140,6 +140,8 @@ interface Linha {
 interface FiltroCentral {
   nome?: string;
   cpf?: string;
+  /** Telefone por dígitos, busca parcial. Viaja no corpo do POST como o CPF (§A.6). */
+  telefone?: string;
   origem?: AsCandidatoOrigem;
   vagaId?: string;
   escopo: "andamento" | "historico";
@@ -167,6 +169,7 @@ const buscarPaginaDeCandidatos: BuscadorDePagina<
     {
       nome: f.nome,
       cpf: f.cpf,
+      telefone: f.telefone,
       origem: f.origem,
       vagaId: f.vagaId,
       escopo: f.escopo,
@@ -255,6 +258,7 @@ export default function CentralDeCandidatosPage() {
   const codigosDeEtapa = useMemo(() => catalogoEtapas.map((e) => e.codigo), [catalogoEtapas]);
   const [fCandidatos, setFCandidatos] = useState<string[]>([]);
   const [cpfBusca, setCpfBusca] = useState("");
+  const [telefoneBusca, setTelefoneBusca] = useState("");
   const [fVaga, setFVaga] = useState("");
   const [fCliente, setFCliente] = useState("");
   const [fEtapa, setFEtapa] = useState("");
@@ -321,6 +325,7 @@ export default function CentralDeCandidatosPage() {
       aplicarFiltro({
         nome: busca.trim() || undefined,
         cpf: cpfBusca.replace(/\D/g, "") || undefined,
+        telefone: telefoneBusca.replace(/\D/g, "") || undefined,
         origem: fOrigem || undefined,
         vagaId: fVaga || undefined,
         escopo,
@@ -332,7 +337,7 @@ export default function CentralDeCandidatosPage() {
       });
     }, 300);
     return () => clearTimeout(t);
-  }, [busca, cpfBusca, fOrigem, fVaga, escopo, fCliente, fEtapa, filtroDoCardAtivo, aplicarFiltro]);
+  }, [busca, cpfBusca, telefoneBusca, fOrigem, fVaga, escopo, fCliente, fEtapa, filtroDoCardAtivo, aplicarFiltro]);
 
   /**
    * RECARREGAR APÓS UMA MUTAÇÃO. O hook não expõe um "refetch" explícito; reaplicar o filtro (merge
@@ -491,6 +496,7 @@ export default function CentralDeCandidatosPage() {
       {
         nome: busca.trim() || undefined,
         cpf: cpfBusca.replace(/\D/g, "") || undefined,
+        telefone: telefoneBusca.replace(/\D/g, "") || undefined,
         origem: fOrigem || undefined,
         vagaId: fVaga || undefined,
         escopo: "andamento",
@@ -510,7 +516,7 @@ export default function CentralDeCandidatosPage() {
     return () => {
       vivo = false;
     };
-  }, [escopo, busca, cpfBusca, fOrigem, fVaga, fCliente, fEtapa, token, revalidacao]);
+  }, [escopo, busca, cpfBusca, telefoneBusca, fOrigem, fVaga, fCliente, fEtapa, token, revalidacao]);
 
   const vagaPorId = useMemo(() => new Map(vagas.map((v) => [v.id, v])), [vagas]);
 
@@ -825,6 +831,7 @@ export default function CentralDeCandidatosPage() {
   const filtrosAtivos =
     (fCandidatos.length ? 1 : 0) +
     (cpfBusca ? 1 : 0) +
+    (telefoneBusca ? 1 : 0) +
     (fVaga ? 1 : 0) +
     (fCliente ? 1 : 0) +
     (fEtapa ? 1 : 0) +
@@ -833,6 +840,7 @@ export default function CentralDeCandidatosPage() {
   function limparFiltros() {
     setFCandidatos([]);
     setCpfBusca("");
+    setTelefoneBusca("");
     setFVaga("");
     setFCliente("");
     setFEtapa("");
@@ -900,6 +908,20 @@ export default function CentralDeCandidatosPage() {
               <p className="mt-1 text-[11.5px] text-faint">
                 A busca por CPF é exata e o número viaja no corpo da requisição, nunca no endereço
                 da página.
+              </p>
+            </FiltroCampo>
+            <FiltroCampo label="Buscar por telefone">
+              <input
+                className="ds-input"
+                value={telefoneBusca}
+                onChange={(e) => setTelefoneBusca(e.target.value)}
+                placeholder="(00) 00000-0000"
+                inputMode="tel"
+                aria-label="Buscar por telefone"
+              />
+              <p className="mt-1 text-[11.5px] text-faint">
+                A busca por telefone é por dígitos e parcial, então achar pelo final do número
+                funciona. O número viaja no corpo da requisição, nunca no endereço da página.
               </p>
             </FiltroCampo>
             <FiltroCampo label="Vaga">

@@ -49,6 +49,8 @@ export interface BuscaCandidatos {
   nome?: string;
   /** §A.6: viaja NO CORPO do POST. Nunca em URL, nunca em query string. */
   cpf?: string;
+  /** Telefone por dígitos, busca parcial. §A.6: viaja NO CORPO do POST, como o CPF. */
+  telefone?: string;
   /**
    * DE QUAL SISTEMA A PESSOA VEIO, e SÓ isso (fechamento da fundação, 17/09/2026).
    *
@@ -128,6 +130,7 @@ export function buscarCandidatos(
   const body: Record<string, string | boolean | number> = {};
   if (filtros.nome?.trim()) body.nome = filtros.nome.trim();
   if (filtros.cpf?.trim()) body.cpf = filtros.cpf.trim();
+  if (filtros.telefone?.trim()) body.telefone = filtros.telefone.trim();
   if (filtros.origem) body.origem = filtros.origem;
   if (filtros.vagaId) body.vagaId = filtros.vagaId;
   // ESCOPO/CLIENTE/ETAPA viajam ao servidor (paginacao no servidor): entram na base da busca. Campo
@@ -595,6 +598,26 @@ export function reverterEnvioParaAdmissao(
   return apiFetch<AsCandidaturaItem>(
     `/as/candidatos/candidaturas/${candidaturaId}/reverter-envio`,
     { method: "POST", token },
+  );
+}
+
+/**
+ * ─ VOLTAR O STATUS DE QUEM FOI APROVADO, SEM REPROVAR ANTES (ITEM 5 do diretor) ─────────────────
+ *
+ * A candidatura APROVADO volta a `ATIVO` (em seleção) e a pessoa vai para a ETAPA que o consultor
+ * ESCOLHEU: diferente da reversão de envio (que mantém a etapa), aqui o destino é uma escolha, então
+ * a `etapa` viaja no corpo. Quem fez vem da SESSÃO, nunca do corpo (é trilha). POST, como `aprovar`: a
+ * reversão registra um FATO novo do processo. O `AsCandidaturaItem` atualizado volta, mas a tela
+ * recarrega porque a OCUPAÇÃO da vaga mudou (uma posição a mais livre).
+ */
+export function reverterAprovacao(
+  candidaturaId: string,
+  etapa: string,
+  token: string | null,
+): Promise<AsCandidaturaItem> {
+  return apiFetch<AsCandidaturaItem>(
+    `/as/candidatos/candidaturas/${candidaturaId}/reverter-aprovacao`,
+    { method: "POST", token, body: { etapa } },
   );
 }
 
