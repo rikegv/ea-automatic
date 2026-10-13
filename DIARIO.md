@@ -21195,3 +21195,59 @@ Validado na tela pelo diretor ("Aprovado pode subir").
 :3124 caíram 404 com um terceiro :3126 no ar). Contorno desta frente: preview isolado em :3130 de uma
 cópia do frontend com `.next` próprio e `node_modules` symlinkado. Vale isolar o `.next` por preview no
 script um dia.
+
+## 2026-10-13 — Central das Vagas: 6 itens (seleção, permissão, modal, telefone, voltar aprovação, agendar em massa)
+
+**O que entrou.** Frente "Central das Vagas" (fábrica nova), só domínio A&S (candidatos/vagas), construída
+sobre worktree LIMPO em `origin/main` @ c4ef28d. Seis itens, dois em onda:
+- **Item 5 (bug seleção):** a seleção múltipla no painel "Gestão da Vaga > Ver Candidatos" deixou de
+  zerar quando se limpa a busca/filtro. Agora acumula numa memória `marcadas: Map<id,obj>` e só cai no
+  "limpar seleção" ou após a ação; "todos do filtro" cai ao trocar recorte; trocar de ABA ainda remonta
+  por key. Reverte a régua anterior ec2ea83.
+- **Item 6 (permissão):** mover em massa para consultor COMUM. Diretor decidiu "já está certo, nada a
+  fazer". Confirmado (seguranca) que `origin/main` NÃO tem trava de papel no mover em massa e a trilha
+  grava o ator. ZERO código.
+- **Item 1 (UI):** modal "Gestão da Vaga" maximizado (margem 16px, tabela deixa de ser espremida). NÃO
+  estava em `origin/main` (a frente modal-vaga anterior nunca commitou), reconstruído aqui.
+- **Item 2 (filtro):** "Buscar Por Telefone" na Central de Candidatos, busca parcial por dígitos
+  espelhando o CPF, no corpo do POST (§A.6); back normaliza o gravado com regexp_replace e varre
+  `telefones` com unnest.
+- **Item 3 (feature):** voltar APROVADO para a seleção sem reprovar, escolhendo a etapa destino, qualquer
+  consultor, trilha de/para + autor. Seção "Voltar Para A Seleção" no MoverCandidaturaModal.
+- **Item 4 (feature):** agendar entrevista em massa, mesmo instante, etapa atual de cada um, SEM campo
+  local (decisão do diretor: espelhar o individual). Botão nas ações em massa, só com seleção em etapa
+  de entrevista.
+
+**Commits (recorte §A.14, add nominal arquivo por arquivo, 5 commits em cima do origin/main por worktree
+limpo, §A.49).** `dcf2d6e` backend (candidatos.dto/service/controller + domain/candidatura + 3 specs:
+itens 2/3/4, rotas sem @Roles coerente com o módulo A&S); `5fb1ecb` painel (VagaPainelModal + 2 specs:
+itens 1 e 5, mesmo arquivo); `a631b17` front item 2 (as/candidatos/page + lib/as-candidatos); `9407f16`
+front item 3 (MoverCandidaturaModal + lib/as-vaga-acoes); `731ab16` front item 4 (AcoesEmMassaDaVaga +
+spec + lib/as-candidatos-lote). Push fast-forward `c4ef28d..731ab16`.
+
+**Deploy (§A.49).** `scripts/publicar-producao.sh` buildou do `origin/main` @ 731ab16 em worktree
+pristino e trocou os artefatos. Health OK: **backend 3011/api/health 200 em 7s, frontend 3010/login 200
+em 0s**. Produção servindo `731ab16`; backup/rollback em `ea-release-portal/*.bak-20261013-184825`
+(commit anterior servido c28d8e0).
+
+**Gate (§A.21/§A.25).** typecheck back+front RC=0; eslint dos meus arquivos RC=0 (o
+`react-hooks/exhaustive-deps` da linha 174 do MoverCandidaturaModal é um eslint-disable PRÉ-EXISTENTE em
+`origin/main`, intocado no meu diff; "rule not found" é artefato de rodar eslint fora do `next lint`).
+Specs: reverter-aprovacao 12, agendar-entrevista-lote 2, escopo+telefone 8 (back, 22); recorte-e-seleção,
+janela-e-seleção.tester, AcoesEmMassaDaVaga (front, 51). O próprio `next build` do artefato compilou
+todas as 60 páginas sem erro.
+
+**Auditoria (§A.38).** `seguranca`: APROVADO itens 2/3/4 + item 6 confirmado, SEM veto (PII só no corpo/
+parametrizado, autoria da sessão, ausência de @Roles coerente com o módulo). `tester` independente:
+achou gaps de cobertura (ação em massa sobre acumulado, persistência em página/ordenação, limpar, modal
+agendar, telefone dígitos-vazios) e TODOS os de alta/média foram fechados; item 3 já adequado.
+
+**Validação do diretor (§A.13/§A.25).** Prova visual dos 6 itens capturada e enviada ao diretor (prints
+em `~/ost-as-vagas-modal-maximizado-prints/out-central-vagas/`, harness `captura-central-vagas.mjs` +
+`captura-itens-2-3.mjs`, fora do repositório). Preview foi em porta separada (3164/3165, banco próprio
+`ea_automatic_preview_3164`, clone da homolog intocada) porque a frente era não-commitada em branch
+próprio; §A.32 avisado ao diretor antes. Diretor validou: "Validado, pode publicar".
+
+**Teardown.** Preview 3164/3165 derrubado e banco `ea_automatic_preview_3164` dropado após a publicação.
+
+**Nada ficou aberto.** Os 6 itens no ar; worktree da frente consumido.
