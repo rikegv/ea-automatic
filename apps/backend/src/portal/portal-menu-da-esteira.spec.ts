@@ -36,8 +36,13 @@ const HANDLERS = Object.getOwnPropertyNames(PortalPendenciasController.prototype
 );
 
 describe("nenhuma ação do Portal fica sem menu", () => {
-  it("a controller tem os três handlers esperados", () => {
-    expect(HANDLERS.sort()).toEqual(["situacao", "solicitarReenvio", "zerarTentativas"]);
+  it("a controller tem os quatro handlers esperados", () => {
+    expect(HANDLERS.sort()).toEqual([
+      "reabrirRecebido",
+      "situacao",
+      "solicitarReenvio",
+      "zerarTentativas",
+    ]);
   });
 
   it.each(HANDLERS)("`%s` é reivindicada por um menu, e não fica aberta", (handler) => {

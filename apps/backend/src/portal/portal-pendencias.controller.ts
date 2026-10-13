@@ -50,6 +50,21 @@ export class PortalPendenciasController {
   }
 
   /**
+   * O time REABRE UM DOCUMENTO RECEBIDO PELO PORTAL (envio do candidato em análise). Par do descarte
+   * para o caminho do `portal_credenciais`: move o marco pela porta única (`REABERTURA_AUDITORIA`),
+   * a casa do Portal volta a "Escolher um arquivo", e fica o rastro de reprovação do time no envio.
+   * Fluxo normal, do consultor, SEM `@Roles`, no mesmo padrão de `solicitar-reenvio`.
+   */
+  @Post(":admissaoId/:tipoDocumentoId/reabrir-recebido")
+  reabrirRecebido(
+    @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
+    @Param("tipoDocumentoId", ParseUUIDPipe) tipoDocumentoId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.pendencias.reabrirDocumentoRecebidoPortal(admissaoId, tipoDocumentoId, user);
+  }
+
+  /**
    * O Master zera as tentativas. Exceção, com rastro de quem destravou e quando.
    *
    * SÓ DEPOIS DA QUEDA (decisão do diretor): a trava está no serviço, que é onde ela vale. A tela

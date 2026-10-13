@@ -113,9 +113,12 @@ describe("Exigencia 3: a contagem continua sendo a EMISSAO, dentro da trava", ()
     ).toBe(false);
   });
 
-  it("a tabela da cota continua com UM escritor so em todo o backend", () => {
-    // §A.40 regra 3, a pergunta fixa do briefing: quem mais escreve este dado. Hoje a resposta e
-    // `portal-credencial.service.ts` e mais ninguem, e o hibrido nao pode abrir uma segunda porta.
+  it("portal_credenciais tem só os DOIS escritores aprovados em todo o backend", () => {
+    // §A.40 regra 3, a pergunta fixa do briefing: quem mais escreve este dado. São DOIS, ambos
+    // aprovados pelo diretor, e nenhum terceiro pode abrir porta: (1) a IA do Portal, que confirma e
+    // reprova o envio do candidato, e (2) o TIME, ao REABRIR um documento recebido pela aba Portal da
+    // Auditoria (frente Auditoria -> Portal: carimba reprovado_em como rastro "rejeitado pelo time" e
+    // move o marco pela porta única). A segunda porta só reprova envio EM ABERTO, dentro da reabertura.
     const arquivos: string[] = [];
     (function varrer(dir: string) {
       for (const nome of readdirSync(dir)) {
@@ -131,7 +134,10 @@ describe("Exigencia 3: a contagem continua sendo a EMISSAO, dentro da trava", ()
     });
 
     expect(escritores.map((a) => a.replace(`${SRC}/`, "")).sort()).toEqual([
+      // A IA do Portal (confirma/reprova o envio do candidato) — o escritor de sempre.
       "portal/portal-credencial.service.ts",
+      // O TIME, ao reabrir um documento RECEBIDO pela aba Portal da Auditoria (decisão do diretor).
+      "portal/portal-pendencias.service.ts",
     ]);
   });
 });

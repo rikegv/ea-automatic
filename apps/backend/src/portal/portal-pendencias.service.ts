@@ -158,6 +158,89 @@ export class PortalPendenciasService {
     return this.liberar("REABERTURA_AUDITORIA", alvo, user, "PORTAL_REABERTURA_AUDITORIA");
   }
 
+  /**
+   * O ADM REABRE UM DOCUMENTO RECEBIDO PELO PORTAL (envio do candidato em análise), na aba Portal da
+   * Auditoria. É o SEGUNDO caminho da reabertura, par do descarte: o descarte reabre o documento
+   * VALIDADO na esteira (`documento-arquivo.service.ts`); este reabre o que o candidato ENVIOU PELO
+   * PORTAL e ainda está "recebido/em análise" (envio confirmado, não reprovado, em aberto em
+   * `portal_credenciais`), que não vira arquivo coletado na esteira e por isso o descarte não alcança.
+   *
+   * ══ POR QUE NÃO É `solicitarReenvio` ══════════════════════════════════════════════════════════
+   *
+   * `solicitarReenvio` exige a pendência JÁ CAÍDA na fila do time (`noTime`), e um documento recebido
+   * em análise tem zero reprovação, então `noTime` é falso e aquela porta recusa. A premissa da
+   * guarda ("o candidato pode enviar sozinho") é FALSA aqui: ele já enviou, e a trava de um-arquivo-
+   * por-tipo o impede de reenviar sozinho. Esta ação dispensa a guarda e move o marco pela MESMA
+   * porta única (`REABERTURA_AUDITORIA`): a casa do Portal volta a "Escolher um arquivo", o teto é
+   * devolvido inteiro e a cota `reaberturas_time` NÃO é consumida (métrica do Master limpa, §A.9).
+   *
+   * ══ O RASTRO "REJEITADO PELO TIME", E POR QUE O MARCO VEM ANTES DO CARIMBO ═════════════════════
+   *
+   * A ação TAMBÉM carimba `reprovado_em` no envio recebido, criando o caminho do TIME reprovar um
+   * envio do Portal (hoje só a IA do Portal escreve `reprovado_em`). Fica o rastro de que o time
+   * rejeitou aquele envio.
+   *
+   * As duas escritas (mover o marco e carimbar a reprovação) NÃO são atômicas: são dois statements, e
+   * reaproveitar `reabrirPorAuditoria` sem tocá-lo é o que mantém a porta única intacta. A ORDEM é
+   * então o que garante a segurança na falha parcial. O marco vem PRIMEIRO: se o carimbo falhar
+   * depois (erro transitório de banco), a casa do candidato JÁ voltou para "Escolher um arquivo" e o
+   * teto JÁ foi devolvido, e o único que se perde é o rastro naquele envio, nunca uma tentativa do
+   * candidato. A ordem inversa (carimbo primeiro) tinha a janela oposta e insegura: um `reprovado_em`
+   * commitado sem o marco mover CONTA no teto (ele fica POSTERIOR ao marco antigo) e queima uma
+   * tentativa de quem a reabertura existia para destravar.
+   *
+   * O carimbo mesmo assim NÃO entra na contagem do teto (§A.9): `reprovado_em` recebe um instante do
+   * banco lido ANTES de mover o marco (`rejeitadoEm`), então é estritamente ANTERIOR ao novo marco, e
+   * a contagem é marco-relativa com `>` estrito. É a mesma garantia de antes, agora sem a janela de
+   * falha parcial insegura. §A.6: ids e carimbo, nunca PII.
+   */
+  async reabrirDocumentoRecebidoPortal(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    user: AuthUser,
+  ) {
+    const marcoAtual = await this.marcoDaPendencia(admissaoId, tipoDocumentoId);
+    if (!(await this.temEnvioRecebidoEmAberto(admissaoId, tipoDocumentoId, marcoAtual))) {
+      throw new BadRequestException(
+        "Não há documento recebido pelo Portal aguardando análise para reabrir aqui. O candidato já pode enviar.",
+      );
+    }
+    // O INSTANTE DA REJEIÇÃO DO TIME, lido do banco ANTES de mover o marco. O novo marco é lido com
+    // `now()` DEPOIS deste, então `rejeitadoEm` é estritamente anterior a ele e a reprovação não conta
+    // no teto (§A.9). É um instante real (o início da ação), não um recuo artificial.
+    const rejeitadoEm = await this.agoraDoBanco();
+    // PORTA ÚNICA primeiro: move o marco (REABERTURA_AUDITORIA, devolve o teto, não consome a cota do
+    // time). A casa do Portal volta a "Escolher um arquivo" já por conta do marco: o envio recebido
+    // fica anterior a ele e some de "em aberto", independentemente do carimbo abaixo.
+    const resposta = await this.reabrirPorAuditoria(admissaoId, tipoDocumentoId, user);
+    // O RASTRO "REJEITADO PELO TIME", carimbado DEPOIS do marco e com instante anterior a ele. Atinge
+    // só o envio que estava em aberto nesta pendência (confirmado, não reprovado, posterior ao marco
+    // ANTIGO). BEST-EFFORT de propósito: a reabertura (o que destrava o candidato) já aconteceu acima,
+    // e o carimbo é só o rastro; falhar aqui não pode desfazer o que já valeu nem queimar tentativa.
+    // Mesma filosofia do `liberar`, onde a trilha vem depois do marco e a falha dela não o reverte.
+    try {
+      await this.db
+        .update(portalCredenciais)
+        .set({ reprovadoEm: rejeitadoEm })
+        .where(
+          and(
+            eq(portalCredenciais.admissaoId, admissaoId),
+            eq(portalCredenciais.tipoDocumentoId, tipoDocumentoId),
+            sql`${portalCredenciais.confirmadoEm} is not null`,
+            sql`${portalCredenciais.reprovadoEm} is null`,
+            marcoAtual ? gt(portalCredenciais.confirmadoEm, marcoAtual) : sql`true`,
+          ),
+        );
+    } catch {
+      // §A.6: id da admissão e código do tipo, nunca PII. A reabertura em si está feita.
+      this.log.warn(
+        `reabertura do recebido feita, mas o carimbo de reprovacao do time falhou na admissao ` +
+          `${admissaoId}, tipo ${resposta.codigoTipoDocumento}`,
+      );
+    }
+    return resposta;
+  }
+
   async zerarTentativas(admissaoId: string, tipoDocumentoId: string, user: AuthUser) {
     const alvo = await this.carregarPendencia(admissaoId, tipoDocumentoId);
 
@@ -198,7 +281,58 @@ export class PortalPendenciasService {
    */
   async situacao(admissaoId: string, tipoDocumentoId: string) {
     const alvo = await this.carregarPendencia(admissaoId, tipoDocumentoId);
-    return this.resposta(alvo, alvo.reprovacoes);
+    const base = this.resposta(alvo, alvo.reprovacoes);
+    // SINAL PARA A ABA PORTAL DA AUDITORIA: há documento RECEBIDO pelo Portal aguardando análise
+    // (envio confirmado, não reprovado, em aberto). É o que habilita a ação "Reabrir Documento
+    // Recebido", par do descarte para o caminho do `portal_credenciais`. §A.6: booleano, sem PII.
+    const recebidoEmAberto = await this.temEnvioRecebidoEmAberto(
+      admissaoId,
+      tipoDocumentoId,
+      alvo.liberadoEm,
+    );
+    return { ...base, recebidoEmAberto };
+  }
+
+  /** O marco da última reabertura desta pendência (`liberado_em`), ou nulo. */
+  private async marcoDaPendencia(
+    admissaoId: string,
+    tipoDocumentoId: string,
+  ): Promise<Date | null> {
+    const [pendencia] = await this.db
+      .select({ liberadoEm: portalPendenciasNoTime.liberadoEm })
+      .from(portalPendenciasNoTime)
+      .where(
+        and(
+          eq(portalPendenciasNoTime.admissaoId, admissaoId),
+          eq(portalPendenciasNoTime.tipoDocumentoId, tipoDocumentoId),
+        ),
+      );
+    return pendencia?.liberadoEm ?? null;
+  }
+
+  /**
+   * HÁ ENVIO RECEBIDO PELO PORTAL EM ABERTO? Envio do candidato confirmado, não reprovado e posterior
+   * ao marco, a mesma régua de `PortalCredencialService.enviosEmAbertoDaPendencia`. É o estado
+   * "recebido/em análise" que o ADM reabre por esta porta. §A.6: só contagem.
+   */
+  private async temEnvioRecebidoEmAberto(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    marco: Date | null,
+  ): Promise<boolean> {
+    const [linha] = await this.db
+      .select({ emAberto: sql<number>`count(*)::int` })
+      .from(portalCredenciais)
+      .where(
+        and(
+          eq(portalCredenciais.admissaoId, admissaoId),
+          eq(portalCredenciais.tipoDocumentoId, tipoDocumentoId),
+          sql`${portalCredenciais.confirmadoEm} is not null`,
+          sql`${portalCredenciais.reprovadoEm} is null`,
+          marco ? gt(portalCredenciais.confirmadoEm, marco) : sql`true`,
+        ),
+      );
+    return (linha?.emAberto ?? 0) > 0;
   }
 
   /**

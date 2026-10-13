@@ -95,12 +95,21 @@ describe("1. quem escreve `documentos_admissao.estado = PENDENTE` continua sendo
     ).not.toMatch(/\.update\(documentosAdmissao\)/);
   });
 
-  it("não nasceu rota de reabertura sob `portal/` (a barreira allowlista aquele prefixo)", () => {
+  it("a reabertura vive sob `esteira/` (time autenticado), NUNCA sob o prefixo `/portal/` do candidato", () => {
+    // A barreira do candidato allowlista só `/api/portal/<rota>`; `esteira/` fica fora dela, no
+    // território autenticado. A reabertura do documento recebido pela aba Portal da Auditoria é uma
+    // rota do TIME (frente Auditoria -> Portal, decisão do diretor), e por isso vive sob `esteira/` e
+    // nunca é `@Public()`. O que o canário barra é a reabertura escapar para o prefixo do candidato.
     const controllers = readdirSync(__dirname).filter((f) => f.endsWith(".controller.ts"));
     for (const c of controllers) {
       const fonte = semComentarios(readFileSync(join(__dirname, c), "utf8"));
-      expect(fonte, `${c} expôs a reabertura do documento sob o prefixo do candidato`).not.toMatch(
-        /reabrir-?documento|reabrirDocumento/i,
+      const exoeReabertura = /reabrir-?recebido|reabrirRecebido|reabrirDocumento/i.test(fonte);
+      if (!exoeReabertura) continue;
+      expect(fonte, `${c}: reabertura exposta fora do prefixo esteira/ do time`).toMatch(
+        /@Controller\(["'`]esteira\//,
+      );
+      expect(fonte, `${c}: reabertura não pode ser @Public (alcançável pelo candidato)`).not.toMatch(
+        /@Public\(\)/,
       );
     }
   });

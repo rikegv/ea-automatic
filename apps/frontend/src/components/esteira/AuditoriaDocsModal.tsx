@@ -115,6 +115,8 @@ interface SituacaoPortalBruta {
     reaberturasDoTimeRestantes: number;
   } | null;
   devolveriaAoReabrir: number | Record<string, number>;
+  /** Há documento RECEBIDO pelo Portal aguardando análise (envio confirmado, não reprovado). */
+  recebidoEmAberto?: boolean;
 }
 
 /** A mesma situação, já normalizada para o que a tela precisa dizer ANTES do clique. */
@@ -127,6 +129,8 @@ interface SituacaoPortal {
   devolveMaster: number;
   /** Quantas reaberturas o TIME ainda tem nesta pendência. `null` quando o backend ainda não sabe. */
   reaberturasDoTimeRestantes: number | null;
+  /** Há documento recebido pelo Portal aguardando análise, reabrível pelo time. */
+  recebidoEmAberto: boolean;
 }
 
 /** Normaliza a resposta do backend, aceitando as duas formas de `devolveriaAoReabrir`. */
@@ -143,6 +147,7 @@ function normalizarPortal(b: SituacaoPortalBruta): SituacaoPortal {
     // Pendência nunca reaberta não traz o contador, e aí a tela NÃO inventa um número: ela
     // simplesmente não avisa sobre o fim das reaberturas, que é o comportamento honesto.
     reaberturasDoTimeRestantes: b.reabertura?.reaberturasDoTimeRestantes ?? null,
+    recebidoEmAberto: b.recebidoEmAberto ?? false,
   };
 }
 
@@ -650,6 +655,48 @@ export function AuditoriaDocsModal({
   );
 
   /**
+   * PORTAL — reabrir um documento RECEBIDO pelo candidato que ainda está em análise. É o par do
+   * descarte para o caminho do envio pelo Portal: a casa do candidato volta a "Escolher um arquivo" e
+   * fica o rastro de que o time reabriu o envio. Confirma antes, porque o candidato terá de reenviar.
+   */
+  const reabrirRecebido = useCallback(
+    async (tipoDocumentoId: string, nomeDoc: string) => {
+      const ok = window.confirm(
+        `Reabrir o documento "${nomeDoc}" recebido pelo Portal?\n\nUse quando o envio do candidato ` +
+          `estiver errado ou ilegível. A casa dele volta para "Escolher um arquivo" e ele precisará ` +
+          `enviar de novo. Fica o registro de que o time reabriu este documento.`,
+      );
+      if (!ok) return;
+      setPortalAgindo(tipoDocumentoId);
+      setPortalErro((e) => ({ ...e, [tipoDocumentoId]: "" }));
+      try {
+        const r = await apiFetch<SituacaoPortalBruta>(
+          `/esteira/pendencias-portal/${admissaoId}/${tipoDocumentoId}/reabrir-recebido`,
+          { method: "POST", token },
+        );
+        setPortalPorTipo((atual) => ({ ...atual, [tipoDocumentoId]: normalizarPortal(r) }));
+        setPortalFeito((f) => ({
+          ...f,
+          [tipoDocumentoId]:
+            "Documento reaberto. O candidato pode enviar este documento de novo pelo Portal.",
+        }));
+        mudou();
+        await recarregarDetalhe();
+        await recarregarProgresso();
+      } catch (e) {
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : "Falha de rede ao reabrir o documento recebido. Verifique a conexão e tente de novo.";
+        setPortalErro((er) => ({ ...er, [tipoDocumentoId]: msg }));
+      } finally {
+        setPortalAgindo(null);
+      }
+    },
+    [admissaoId, token, mudou, recarregarDetalhe, recarregarProgresso],
+  );
+
+  /**
    * OST A / Bloco 4 — ORDEM DE LEITURA do modal: primeiro os documentos com VEREDITO, depois os
    * recebidos que ainda não foram auditados, e por último os NÃO RECEBIDOS. Dentro de cada faixa a
    * ordem alfabética do backend é preservada (ordenação estável).
@@ -1024,7 +1071,11 @@ export function AuditoriaDocsModal({
                   const portal = tipoId ? portalPorTipo[tipoId] : undefined;
                   const feito = tipoId ? portalFeito[tipoId] : undefined;
                   const erroPortal = tipoId ? portalErro[tipoId] : undefined;
-                  if (!portal || (!portal.noTime && !feito && !erroPortal)) return null;
+                  if (
+                    !portal ||
+                    (!portal.noTime && !portal.recebidoEmAberto && !feito && !erroPortal)
+                  )
+                    return null;
                   const agindo = portalAgindo === tipoId;
                   const restantesTime = portal.reaberturasDoTimeRestantes;
                   const semReaberturaDoTime = restantesTime === 0;
@@ -1097,6 +1148,35 @@ export function AuditoriaDocsModal({
                               Zerar tentativas
                             </button>
                           )}
+                        </div>
+                      )}
+
+                      {/* RECEBIDO PELO PORTAL, EM ANÁLISE: o candidato enviou e a casa dele está
+                          "Documento recebido". Reabrir aqui é o par do descarte para o caminho do
+                          envio pelo Portal: move o marco pela porta única (devolve o teto, não
+                          consome a cota do time) e a casa volta a "Escolher um arquivo". Só aparece
+                          quando ainda NÃO caiu para a fila do time (senão valem as ações acima). */}
+                      {portal.recebidoEmAberto && !portal.noTime && (
+                        <div className="flex flex-col gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Pill tone="in">Recebido Pelo Portal</Pill>
+                            <span className="text-[12.5px] text-dim">
+                              O candidato enviou este documento pelo Portal e ele está em análise.
+                              Reabrir devolve a casa para ele enviar de novo.
+                            </span>
+                          </div>
+                          <div>
+                            <button
+                              type="button"
+                              className={cn(BTN_TEXTO, "hover:text-text")}
+                              disabled={!tipoId || agindo}
+                              title="Reabrir o documento recebido pelo Portal: a casa do candidato volta a Escolher um arquivo e fica o registro de que o time reabriu"
+                              onClick={() => tipoId && void reabrirRecebido(tipoId, d.nome)}
+                            >
+                              {agindo ? <Spinner /> : <Icon name="undo" className="h-4 w-4" />}
+                              Reabrir documento recebido
+                            </button>
+                          </div>
                         </div>
                       )}
 
