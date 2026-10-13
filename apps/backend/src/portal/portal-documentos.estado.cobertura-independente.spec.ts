@@ -46,8 +46,10 @@ type LinhaDoc = {
   dica: string | null;
   conferenciaId: string | null;
   conferenciaCampos: CampoExtraidoPortal[] | null;
-  conferenciaVeredito: Veredito;
   conferenciaConfirmadoEm: Date | null;
+  conferenciaVeredito: Veredito;
+  // O marco da reabertura (`portal_pendencias_no_time.liberado_em`), ou nulo quando nunca reaberta.
+  liberadoEm: Date | null;
 };
 
 function campo(valor: string, extra: Partial<CampoExtraidoPortal> = {}): CampoExtraidoPortal {
@@ -94,6 +96,7 @@ function doc(parcial: Partial<LinhaDoc> & { codigo: string }): LinhaDoc {
     conferenciaCampos: parcial.conferenciaCampos ?? (temConf ? [] : null),
     conferenciaVeredito: parcial.conferenciaVeredito ?? null,
     conferenciaConfirmadoEm: parcial.conferenciaConfirmadoEm ?? null,
+    liberadoEm: parcial.liberadoEm ?? null,
   };
 }
 
@@ -256,6 +259,48 @@ describe("AJUSTE 2: AGUARDANDO_VALIDACAO quando a IA leu e o candidato não conf
     const passo = await primeiroPasso(doc({ codigo: "RG", estadoDocumento: "AGUARDANDO_AUDITORIA" }));
     expect(passo.estado).toBe("EM_ANALISE");
     expect(passo.conferencia).toBeNull();
+  });
+
+  // ── DEADLOCK DA REABERTURA (bug de produção): AGUARDANDO_AUDITORIA resíduo + pendência reaberta ──
+  // O candidato errou até o teto, o time REABRIU por SOLICITACAO_REENVIO (devolve o teto, sem envio
+  // novo), a conferência já foi expurgada (§A.6) e o estado ficou parado em AGUARDANDO_AUDITORIA.
+  // Sem o sinal `foiReaberta` a casa voltava "em análise" para sempre e o candidato nunca reenviava.
+  it("AGUARDANDO_AUDITORIA de pendência REABERTA, sem envio em aberto, vira PENDENTE (reenviável)", async () => {
+    const passo = await primeiroPasso(
+      doc({
+        codigo: "COMPROVANTE_RESIDENCIA",
+        estadoDocumento: "AGUARDANDO_AUDITORIA",
+        envioEmAberto: false,
+        reprovacoes: 0, // a reabertura devolveu o teto: não está noTime
+        liberadoEm: new Date("2026-10-13T12:35:56Z"),
+      }),
+    );
+    expect(passo.estado).toBe("PENDENTE");
+  });
+
+  it("pendência reaberta mas COM envio em aberto segue EM_ANALISE (o novo envio está em análise)", async () => {
+    const passo = await primeiroPasso(
+      doc({
+        codigo: "COMPROVANTE_RESIDENCIA",
+        estadoDocumento: "AGUARDANDO_AUDITORIA",
+        envioEmAberto: true,
+        reprovacoes: 0,
+        liberadoEm: new Date("2026-10-13T12:35:56Z"),
+      }),
+    );
+    expect(passo.estado).toBe("EM_ANALISE");
+  });
+
+  it("upload do TIME (AGUARDANDO_AUDITORIA, NUNCA reaberto, sem envio) segue EM_ANALISE, não vira enviável", async () => {
+    const passo = await primeiroPasso(
+      doc({
+        codigo: "COMPROVANTE_ESCOLARIDADE",
+        estadoDocumento: "AGUARDANDO_AUDITORIA",
+        envioEmAberto: false,
+        liberadoEm: null, // nunca caiu para a fila do time nem foi reaberta
+      }),
+    );
+    expect(passo.estado).toBe("EM_ANALISE");
   });
 
   it("conferência existe mas SEM campos lidos ainda continua EM_ANALISE", async () => {

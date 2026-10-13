@@ -19,6 +19,7 @@ import {
   dicasDocumento,
   documentosAdmissao,
   portalConferencia,
+  portalPendenciasNoTime,
   portalTermoAceite,
   reguaDocumental,
   tiposDocumento,
@@ -281,6 +282,11 @@ export class PortalDocumentosService {
         conferenciaVeredito: portalConferencia.veredito,
         conferenciaConfirmadoEm: portalConferencia.confirmadoEm,
         conferenciaId: portalConferencia.id,
+        // O MARCO DA REABERTURA desta pendência (`liberado_em`), ou nulo quando nunca foi reaberta.
+        // É o sinal de que o time mandou o candidato reenviar: sem ele, um documento preso em
+        // `AGUARDANDO_AUDITORIA` (envio antigo reprovado, conferência já expurgada) ficaria "em
+        // análise" para sempre e a casa de reenvio nunca reabriria. Ver `estadoDoPasso`.
+        liberadoEm: portalPendenciasNoTime.liberadoEm,
       })
       .from(documentosAdmissao)
       // AS DUAS CONDIÇÕES SÃO AS MESMAS DA EMISSÃO (veto D-1), e a segunda não é zelo: a emissão
@@ -341,6 +347,19 @@ export class PortalDocumentosService {
           eq(portalConferencia.tipoDocumentoId, documentosAdmissao.tipoDocumentoId),
         ),
       )
+      /*
+       * A PENDÊNCIA DO TIME, SÓ PELO MARCO (`liberado_em`). `leftJoin` porque a maioria das casas
+       * nunca caiu para a fila do time (sem linha aqui), e casa sem pendência continua normal. A
+       * chave (admissão + tipo) é única na tabela, então não multiplica linha. Só o `liberado_em`
+       * interessa aqui: ele diz se a pendência FOI REABERTA, o sinal que `estadoDoPasso` usa.
+       */
+      .leftJoin(
+        portalPendenciasNoTime,
+        and(
+          eq(portalPendenciasNoTime.admissaoId, documentosAdmissao.admissaoId),
+          eq(portalPendenciasNoTime.tipoDocumentoId, documentosAdmissao.tipoDocumentoId),
+        ),
+      )
       .where(eq(documentosAdmissao.admissaoId, admissaoId));
 
     const porTipo = new Map<string, (typeof linhas)[number]>();
@@ -398,6 +417,11 @@ export class PortalDocumentosService {
       // reabre. DISPLAY-ONLY: a decisão de "há tentativa" é de `tentativas` (dono do número que
       // tranca), não de `portal_conferencia`.
       const reprovadoNoPortal = veredito?.valido === false && tentativas.restantes > 0;
+      // FOI REABERTA? O time moveu o marco (`liberado_em`) desta pendência. Um documento preso em
+      // `AGUARDANDO_AUDITORIA` cujo envio foi reprovado e cuja pendência o time REABRIU precisa
+      // voltar a ser enviável; sem este sinal a casa ficava "em análise" para sempre (deadlock real
+      // em produção). O upload do time (sem marco) continua "em análise", intocado.
+      const foiReaberta = linha.liberadoEm != null;
       passos.push({
         codigoTipoDocumento: linha.codigo,
         nome: linha.nome,
@@ -410,6 +434,7 @@ export class PortalDocumentosService {
           cabeOutroArquivo,
           reprovadoNoPortal,
           aguardandoValidacao,
+          foiReaberta,
         ),
         tentativas,
         // §A.6: texto de CONFIGURAÇÃO escrito pelo diretor, não dado de pessoa. Ele já foi
@@ -514,9 +539,21 @@ export class PortalDocumentosService {
  * confirmado, há campos), para alinhar 1:1 com o `envio.fase === "conferir"` que a tela reidrata.
  *
  * A PRECEDÊNCIA, explícita: ENTREGUE > noTime > (reprovadoNoPortal -> AJUSTAR) > (aguardandoValidacao
- * -> AGUARDANDO_VALIDACAO) > (em aberto -> EM_ANALISE) > INCONFORME/PENDENTE. O sinal vem de
- * `portal_conferencia`, mas quem diz "há tentativa" é o dono do número que tranca (`tentativas`),
- * nunca a conferência (C10).
+ * -> AGUARDANDO_VALIDACAO) > (em aberto -> EM_ANALISE) > (AGUARDANDO_AUDITORIA não reaberta ->
+ * EM_ANALISE) > INCONFORME/PENDENTE. O sinal vem de `portal_conferencia`, mas quem diz "há tentativa"
+ * é o dono do número que tranca (`tentativas`), nunca a conferência (C10).
+ *
+ * ══ O SINAL `foiReaberta`, e por que ele destrava o AGUARDANDO_AUDITORIA ════════════════════════
+ *
+ * O enum `AGUARDANDO_AUDITORIA` significava "em análise" sozinho, e isso MASCARAVA o reenvio depois
+ * da reabertura. O caso real, medido em produção: o candidato envia, erra três vezes (teto), a
+ * pendência cai para o time, o time REABRE por `SOLICITACAO_REENVIO` (devolve o teto), mas o estado
+ * do documento fica parado em `AGUARDANDO_AUDITORIA` e a conferência já foi expurgada (§A.6). Sem
+ * envio em aberto, sem veredito, a casa caía no enum e voltava "em análise" PARA SEMPRE, e o
+ * candidato não tinha como reenviar. `foiReaberta` (`portal_pendencias_no_time.liberado_em` não
+ * nulo) é a diferença entre esse resíduo e um envio de verdade: reaberta e sem envio em aberto, a
+ * casa volta a ser enviável. O `AGUARDANDO_AUDITORIA` de um UPLOAD DO TIME (nunca reaberto) fica
+ * "em análise", porque ali de fato o time está conferindo e o candidato não deve reenviar por cima.
  */
 function estadoDoPasso(
   estadoDocumento: string,
@@ -524,13 +561,23 @@ function estadoDoPasso(
   cabeOutroArquivo: boolean,
   reprovadoNoPortal: boolean,
   aguardandoValidacao: boolean,
+  foiReaberta: boolean,
 ): EstadoPassoPortal {
   if (estadoDocumento === "ENTREGUE") return "ACEITO";
   if (noTime) return "NO_TIME";
   if (reprovadoNoPortal) return "AJUSTAR";
   if (aguardandoValidacao) return "AGUARDANDO_VALIDACAO";
-  if (estadoDocumento === "AGUARDANDO_AUDITORIA") return "EM_ANALISE";
+  // "EM ANÁLISE" É O ENVIO EM ABERTO, não o enum do banco. Existe arquivo nosso chegado e sem
+  // desfecho (`!cabeOutroArquivo`), então é `EM_ANALISE`. Esta pergunta vem ANTES do enum para que
+  // o enum só decida quando NÃO há envio em aberto.
   if (!cabeOutroArquivo) return "EM_ANALISE";
+  // O ENUM `AGUARDANDO_AUDITORIA` só vale como "em análise" enquanto a pendência NÃO foi reaberta.
+  // Reaberta e SEM envio em aberto (o `!cabeOutroArquivo` acima já saiu), o enum é um RESÍDUO do
+  // envio velho (reprovado, conferência expurgada) e a casa tem de voltar a ser enviável. Sem esta
+  // condição o documento reaberto pelo time ficava "em análise" para sempre (deadlock medido em
+  // produção: pendência reaberta por SOLICITACAO_REENVIO, estado parado em AGUARDANDO_AUDITORIA).
+  // O upload do TIME (AGUARDANDO_AUDITORIA, nunca reaberto) continua "em análise", intocado.
+  if (estadoDocumento === "AGUARDANDO_AUDITORIA" && !foiReaberta) return "EM_ANALISE";
   if (estadoDocumento === "INCONFORME") return "AJUSTAR";
   return "PENDENTE";
 }
