@@ -297,6 +297,18 @@ export class BuscarCandidatosDto {
   @MaxLength(11)
   cpf?: string;
 
+  /**
+   * TELEFONE, no corpo (§A.6: dado pessoal nunca viaja em query). Busca PARCIAL por dígitos: achar
+   * pelo final do número é o uso real, e telefone NÃO é chave de identidade como o CPF, então uma
+   * busca parcial aqui não é vazamento (a lista, aliás, não devolve telefone). O `@Transform` deixa
+   * só dígitos; o service normaliza o lado gravado (que pode ter máscara) e compara com `like`.
+   */
+  @IsOptional()
+  @Transform(soDigitos)
+  @IsString()
+  @MaxLength(20)
+  telefone?: string;
+
   @IsOptional()
   @IsIn(AS_CANDIDATO_ORIGEM as unknown as string[])
   origem?: AsCandidatoOrigem;
@@ -637,6 +649,19 @@ export class MoverEtapaDto {
    * banco recusa em última instância. O que sobra aqui é a checagem de FORMA, que continua sendo
    * responsabilidade do DTO: string, não vazia, dentro do tamanho da coluna.
    */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  etapa!: CandidaturaEtapa;
+}
+
+/**
+ * VOLTAR O STATUS DE QUEM FOI APROVADO (ITEM 5 do diretor). O consultor ESCOLHE a etapa de destino: a
+ * forma é a mesma de `MoverEtapaDto` (string, não vazia, no tamanho da coluna), e QUEM valida a etapa
+ * contra o catálogo vivo é o service (`exigirEtapaAtiva`). A autoria vem da sessão, nunca do corpo.
+ */
+export class ReverterAprovacaoDto {
   @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
   @MinLength(1)
@@ -1105,6 +1130,25 @@ export class MoverEtapaEmLoteDto {
   @MinLength(1)
   @MaxLength(40)
   etapa!: CandidaturaEtapa;
+}
+
+/**
+ * ─ AGENDAR ENTREVISTA EM MASSA (ITEM 4 do diretor): `marcarEntrevista`, N vezes ─────────────────
+ *
+ * ESPELHA O AGENDAMENTO INDIVIDUAL, só aplicado a vários: o MESMO instante (data e hora) para todos
+ * os selecionados. Não há campo `etapa` aqui porque, como no individual da tela, a entrevista é
+ * marcada na ETAPA ATUAL de cada candidatura (o service a deriva por linha): a seleção costuma
+ * misturar etapas, e quem não estiver numa etapa de entrevista volta na lista de falhas.
+ *
+ * `agendadaEm` é o mesmo `@IsISO8601` do individual (passado é aceito, mesma razão). Sem local: o
+ * agendamento não tem campo de local (decisão de schema), e o individual que este espelha também não.
+ */
+export class AgendarEntrevistaEmLoteDto {
+  @ListaEmMassa()
+  candidaturaIds!: string[];
+
+  @IsISO8601()
+  agendadaEm!: string;
 }
 
 /**

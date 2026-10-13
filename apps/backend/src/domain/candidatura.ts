@@ -255,6 +255,26 @@ export function podeReverterEnvio(s: CandidaturaSituacao): boolean {
   return s === SITUACAO_QUE_A_REVERSAO_DESFAZ;
 }
 
+/**
+ * ─ VOLTAR O STATUS DE QUEM FOI APROVADO, SEM REPROVAR ANTES (ITEM 5 do diretor, 13/10/2026) ─────
+ *
+ * A situação que esta reversão desfaz é a APROVADO: hoje, para "voltar" um aprovado, era preciso
+ * reprovar/descartar primeiro, o que é ruído na trilha de um erro de clique. A reversão leva de volta
+ * a `ATIVO` (em seleção) e a pessoa é posta na ETAPA que o consultor escolher (não só a anterior): o
+ * funil não é trilho. É ação OPERACIONAL, de qualquer consultor, como a reversão de envio.
+ *
+ * As constantes vivem aqui, no domínio, pelo mesmo motivo de `podeReverterEnvio`: régua escrita
+ * dentro do service é régua que a próxima porta esquece de consultar.
+ */
+export const SITUACAO_QUE_A_REVERSAO_DE_APROVACAO_DESFAZ = "APROVADO" as const satisfies CandidaturaSituacao;
+
+/** Para onde a candidatura volta ao ter a aprovação revertida: `ATIVO`, em seleção. */
+export const SITUACAO_APOS_REVERTER_APROVACAO = "ATIVO" as const satisfies CandidaturaSituacao;
+
+export function podeReverterAprovacao(s: CandidaturaSituacao): boolean {
+  return s === SITUACAO_QUE_A_REVERSAO_DE_APROVACAO_DESFAZ;
+}
+
 // ── O DESVÍNCULO QUE DESFAZ UMA ENTREGA ─────────────────────────────────────
 
 /**

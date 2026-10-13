@@ -114,4 +114,36 @@ describe("escopo/cliente/etapa sao predicados server-side, na BASE da lista e do
       expect(w, "a etapa entra na BASE dos KPIs").toContain("TRIAGEM");
     }
   });
+
+  // ─ ITEM 2: FILTRO POR TELEFONE (busca parcial por dígitos) ──────────────────────────────────────
+  it("SEM telefone, a consulta não normaliza telefone nem varre a lista de telefones (baseline)", async () => {
+    const banco = cenario();
+    await banco.service.buscar({});
+    const w = banco.paginada?.where ?? "";
+    expect(w).not.toContain("unnest");
+    expect(w).not.toContain("regexp_replace");
+  });
+
+  it("telefone com dígitos VAZIOS (só não-dígitos) não vira filtro, como o nome vazio", async () => {
+    const banco = cenario();
+    // `""` (ou o que o @Transform(soDigitos) do DTO reduziria a vazio) não deve recortar nada.
+    await banco.service.buscar({ telefone: "" });
+    const w = banco.paginada?.where ?? "";
+    expect(w).not.toContain("unnest");
+    expect(w).not.toContain("regexp_replace");
+  });
+
+  it("telefone recorta a lista por dígitos, normalizando o lado gravado e varrendo os telefones", async () => {
+    const banco = cenario();
+    await banco.service.buscar({ telefone: "99887" });
+
+    const w = banco.paginada?.where ?? "";
+    // normaliza o lado gravado (que pode ter máscara) antes de comparar...
+    expect(w, "normaliza o telefone gravado por dígitos").toContain("regexp_replace");
+    // ...no escalar `telefone` E em cada item da lista `telefones`...
+    expect(w, "varre também a lista de telefones do candidato").toContain("unnest");
+    // ...com busca PARCIAL (like), pelos dígitos recebidos.
+    expect(w, "a busca é parcial (like) pelos dígitos").toContain("99887");
+    expect(w).toContain("like");
+  });
 });

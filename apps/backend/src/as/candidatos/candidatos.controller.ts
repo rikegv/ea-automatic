@@ -47,6 +47,7 @@ import {
   AplicarImportCurriculoDto,
   BuscarCandidatosDto,
   CandidaturasDaVagaDto,
+  AgendarEntrevistaEmLoteDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
   FinalizarPosicaoDto,
@@ -60,6 +61,7 @@ import {
   RegistrarContatoDto,
   RegistrarSaidaDto,
   ReprovarPeloClienteDto,
+  ReverterAprovacaoDto,
   RegistrarSaidaEmLoteDto,
   RegistrarSaidaPorFiltroDto,
   TrocarVagaDto,
@@ -246,6 +248,20 @@ export class CandidatosController {
   @Patch("candidaturas/lote/etapa")
   moverEtapaEmLote(@Body() dto: MoverEtapaEmLoteDto, @CurrentUser() user: AuthUser) {
     return this.candidatos.moverEtapaEmLote(dto, user.id);
+  }
+
+  /**
+   * AGENDAR ENTREVISTA EM MASSA (ITEM 4 do diretor): o MESMO instante para os selecionados, cada um na
+   * sua etapa atual. POST, como a rota individual de entrevista: registra um FATO (a entrevista). SEM
+   * `@Roles`, como todo o módulo e como o agendamento individual: é operação de quem opera a vaga.
+   * Quem agendou vem da SESSÃO (`user.id`), nunca do corpo.
+   */
+  @Post("candidaturas/lote/entrevista")
+  agendarEntrevistaEmLote(
+    @Body() dto: AgendarEntrevistaEmLoteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.agendarEntrevistaEmLote(dto, user.id);
   }
 
   /**
@@ -452,6 +468,25 @@ export class CandidatosController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.candidatos.reverterEnvioParaAdmissao(id, user.id);
+  }
+
+  /**
+   * VOLTAR O STATUS DE QUEM FOI APROVADO (ITEM 5 do diretor): a candidatura APROVADO volta a `ATIVO`
+   * (em seleção) e a pessoa vai para a ETAPA escolhida no corpo, sem precisar reprovar antes. A
+   * posição que a aprovação ocupava volta a ficar livre.
+   *
+   * SEM `@Roles`, como a aprovação que ela desfaz e a reversão de envio: é ação OPERACIONAL de
+   * qualquer consultor. Quem restringe o módulo é o menu `as-candidatos` no `MenuGuard`. Quem reverteu
+   * vem da SESSÃO (`user.id`), nunca do corpo: é trilha, não campo de formulário. POST porque registra
+   * um FATO novo do processo (a aprovação foi desfeita), e o corpo traz só a etapa de destino.
+   */
+  @Post("candidaturas/:id/reverter-aprovacao")
+  reverterAprovacao(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: ReverterAprovacaoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.reverterAprovacao(id, dto, user.id);
   }
 
   /**

@@ -83,6 +83,9 @@ import {
   podeReverterEnvio,
   SITUACAO_APOS_REVERTER_ENVIO,
   SITUACAO_QUE_A_REVERSAO_DESFAZ,
+  podeReverterAprovacao,
+  SITUACAO_APOS_REVERTER_APROVACAO,
+  SITUACAO_QUE_A_REVERSAO_DE_APROVACAO_DESFAZ,
   oficiaisAindaAbertas,
   tetoDoLado,
   type PosicaoLado,
@@ -148,6 +151,7 @@ import type {
   FinalizarPosicaoDto,
   FinalizarPosicaoEmLoteDto,
   FinalizarPosicaoPorFiltroDto,
+  AgendarEntrevistaEmLoteDto,
   MarcarEntrevistaDto,
   MoverEtapaDto,
   MoverEtapaEmLoteDto,
@@ -157,6 +161,7 @@ import type {
   RegistrarSaidaEmLoteDto,
   RegistrarSaidaPorFiltroDto,
   ReprovarPeloClienteDto,
+  ReverterAprovacaoDto,
   TrocarVagaDto,
   TrocarVagaEmLoteDto,
   TrocarVagaPorFiltroDto,
@@ -637,6 +642,29 @@ export class CandidatosService {
         );
       }
       filtros.push(eq(asCandidatos.cpf, cpf));
+    }
+
+    /*
+     * TELEFONE: busca PARCIAL por dígitos (ITEM 2). O `@Transform` do DTO já deixou só dígitos; aqui
+     * normalizamos o lado GRAVADO (que pode ter máscara: parênteses, traço, espaço) com
+     * `regexp_replace`, e comparamos com `like`. Procura tanto no escalar `telefone` (o principal)
+     * quanto em CADA número de `telefones` (a lista do import por currículo), para achar a pessoa por
+     * qualquer um dos seus números. Dígitos vazios (campo com só não-dígitos) não viram filtro, como o
+     * nome vazio: telefone não é identidade, então ausência de critério não é a recusa que o CPF faz.
+     * §A.6: o número viaja parametrizado no `where`, nunca em log, e a lista continua sem devolver telefone.
+     */
+    const telefoneDigitos = (dto.telefone ?? "").trim();
+    if (telefoneDigitos) {
+      const likeTelefone = `%${telefoneDigitos}%`;
+      filtros.push(
+        sql`(
+          regexp_replace(coalesce(${asCandidatos.telefone}, ''), '[^0-9]', '', 'g') like ${likeTelefone}
+          or exists (
+            select 1 from unnest(${asCandidatos.telefones}) as _tel(v)
+            where regexp_replace(_tel.v, '[^0-9]', '', 'g') like ${likeTelefone}
+          )
+        )`,
+      );
     }
 
     const nome = dto.nome?.trim();
@@ -2762,6 +2790,105 @@ export class CandidatosService {
     return this.candidatura(candidaturaId);
   }
 
+  /**
+   * ─ VOLTAR O STATUS DE QUEM FOI APROVADO, SEM REPROVAR ANTES (ITEM 5 do diretor, 13/10/2026) ─────
+   *
+   * Hoje, para "voltar" um aprovado, era preciso reprová-lo/descartá-lo antes, o que suja a trilha de
+   * um simples erro de clique. Esta porta leva a candidatura APROVADO de volta a `ATIVO` (em seleção) e
+   * põe a pessoa na ETAPA que o consultor ESCOLHEU (não só a anterior: o funil não é trilho). A trilha
+   * registra o de/para da etapa e QUEM fez (`porId`, da sessão, nunca do corpo).
+   *
+   * É IRMÃ DE `reverterEnvioParaAdmissao`, e repete o mesmo padrão a de propósito (método próprio,
+   * `update` próprio, sem `@Roles`: ação OPERACIONAL de qualquer consultor). A diferença é que aqui a
+   * ETAPA MUDA (a escolhida), então, ao contrário da reversão de envio, a vaga precisa estar EM
+   * PROCESSO: gravar um evento de funil numa vaga encerrada é a incoerência que `moverEtapa` já barra.
+   *
+   * §A.6: nada de CPF/PII. A reversão só SUBTRAI ocupação (APROVADO ocupava posição; `ATIVO` não),
+   * então, como em `reverterEnvioParaAdmissao`, a corrida é fechada por `situacao` no `where`, sem lock
+   * novo: nenhuma ordem de execução infla contagem. A marca de posição é limpa pela mesma razão do
+   * conserto 2 (quem está em seleção não carrega marca de posição).
+   */
+  async reverterAprovacao(
+    candidaturaId: string,
+    dto: ReverterAprovacaoDto,
+    porId: string,
+  ): Promise<AsCandidaturaItem> {
+    const c = await this.db.query.asCandidaturas.findFirst({
+      where: eq(asCandidaturas.id, candidaturaId),
+    });
+    if (!c) throw new NotFoundException("Candidatura não encontrada.");
+
+    // A GUARDA QUE DÁ A FRASE a quem clicou: só quem está APROVADO tem aprovação a voltar. A tela pode
+    // estar desatualizada (outra pessoa já moveu) ou o clique foi na linha errada.
+    if (!podeReverterAprovacao(c.situacao)) {
+      throw new ConflictException(
+        "Esta candidatura não está aprovada, então não há aprovação a voltar. Atualize a tela.",
+      );
+    }
+
+    // A VAGA PRECISA ESTAR EM PROCESSO, pela mesma régua de `moverEtapa`: a pessoa volta para uma etapa
+    // do funil, e funil só anda em vaga com processo em andamento.
+    const { regua } = await this.insumosDaDerivacao();
+    const vagaDaCandidatura = await this.db.query.vagas.findFirst({
+      where: eq(vagas.id, c.vagaId),
+    });
+    if (!vagaDaCandidatura) throw new NotFoundException("Vaga da candidatura não encontrada.");
+    if (!papelDeVagaEmProcesso(regua.linha(vagaDaCandidatura.status).papel)) {
+      throw new ConflictException(
+        `Esta vaga está em "${regua.rotulo(vagaDaCandidatura.status)}" e não tem processo em andamento. A vaga acabou, então não é possível voltar ninguém para o funil dela.`,
+      );
+    }
+
+    // A ETAPA DE DESTINO EXISTE E ESTÁ ATIVA? Runtime, contra o catálogo VIVO do diretor (a mesma
+    // conferência de `moverEtapa`). Qualquer etapa ativa serve, inclusive a atual: o que muda que vale
+    // é a SITUAÇÃO (APROVADO -> ATIVO); a etapa é a escolha de para onde a pessoa volta.
+    await this.etapas.exigirEtapaAtiva(dto.etapa);
+
+    await this.db.transaction(async (tx) => {
+      const [revertida] = await tx
+        .update(asCandidaturas)
+        .set({
+          situacao: SITUACAO_APOS_REVERTER_APROVACAO,
+          etapa: dto.etapa,
+          // A aprovação não tinha motivo de descarte; limpar é defensivo e espelha a reversão de envio.
+          motivoDescarte: null,
+          // Quem volta para a seleção NÃO carrega marca de posição (invariante do conserto 2).
+          posicaoLado: null,
+          atualizadoEm: new Date(),
+        })
+        // A SITUAÇÃO NO `where` é o que faz a leitura valer no instante da ESCRITA: uma aprovação ou
+        // finalização concorrente da MESMA candidatura não termina com a trilha contradizendo a linha.
+        .where(
+          and(
+            eq(asCandidaturas.id, candidaturaId),
+            eq(asCandidaturas.situacao, SITUACAO_QUE_A_REVERSAO_DE_APROVACAO_DESFAZ),
+          ),
+        )
+        .returning({ id: asCandidaturas.id });
+
+      // Não afetou linha: alguém mudou a situação entre a leitura e a escrita. Recusar (não no-op), pela
+      // mesma régua da guarda de cima, e o `throw` desfaz a transação inteira (nenhum evento órfão).
+      if (!revertida) {
+        throw new ConflictException(
+          "Esta candidatura não está mais aprovada, então não há aprovação a voltar. Atualize a tela.",
+        );
+      }
+
+      // O RASTRO, na MESMA transação: o de/para da etapa e quem fez. `situacao: ATIVO` faz o evento se
+      // ler como "voltou para a seleção", não como um movimento comum de funil.
+      await tx.insert(asCandidaturaEtapas).values({
+        candidaturaId,
+        etapaDe: c.etapa,
+        etapaPara: dto.etapa,
+        situacao: SITUACAO_APOS_REVERTER_APROVACAO,
+        motivo: null,
+        porId,
+      });
+    });
+
+    return this.candidatura(candidaturaId);
+  }
+
   // ── AS AÇÕES EM MASSA ─────────────────────────────────────────────────────
 
   /**
@@ -2960,6 +3087,35 @@ export class CandidatosService {
     return this.emLote(dto.candidaturaIds, (candidaturaId) =>
       this.moverEtapa(candidaturaId, { etapa: dto.etapa }, porId),
     );
+  }
+
+  /**
+   * ─ AGENDAR ENTREVISTA EM MASSA (ITEM 4 do diretor): `marcarEntrevista`, N vezes ────────────────
+   *
+   * O MESMO instante para todos os selecionados, cada um na SUA etapa atual. Como os demais lotes,
+   * ela não implementa nada: chama a `marcarEntrevista` individual linha a linha, herdando as três
+   * guardas dela (candidatura viva, vaga em processo, etapa com entrevista) e o `onConflictDoUpdate`
+   * que remarca. A etapa de cada linha é a ATUAL da candidatura, lida aqui (a individual a recebe no
+   * dto): a seleção mistura etapas, e quem não estiver numa etapa de entrevista volta em `falhas` com
+   * a frase do catálogo, sem derrubar o lote. §A.6: a falha volta por id, com motivo de PROCESSO.
+   */
+  agendarEntrevistaEmLote(
+    dto: AgendarEntrevistaEmLoteDto,
+    porId: string,
+  ): Promise<AsResultadoEmMassa> {
+    return this.emLote(dto.candidaturaIds, async (candidaturaId) => {
+      // A ETAPA DE CADA LINHA É A ATUAL DA CANDIDATURA (espelho do individual da tela, que marca na
+      // etapa onde a pessoa está). Lida aqui porque a `marcarEntrevista` a recebe pelo dto.
+      const c = await this.db.query.asCandidaturas.findFirst({
+        where: eq(asCandidaturas.id, candidaturaId),
+      });
+      if (!c) throw new NotFoundException("Candidatura não encontrada.");
+      await this.marcarEntrevista(
+        candidaturaId,
+        { etapa: c.etapa, agendadaEm: dto.agendadaEm },
+        porId,
+      );
+    });
   }
 
   /**
