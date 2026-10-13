@@ -236,10 +236,10 @@ export function VagaPainelModal({
         if (popoverAbertoNoEscape.current) return;
         onClose();
       }}
-      className="max-w-[1280px] p-0"
+      className="!max-w-none !max-h-[calc(100vh-2rem)] h-[calc(100vh-2rem)] p-0"
       ariaLabel="Painel da vaga"
     >
-      <div className="flex max-h-[88vh] flex-col">
+      <div className="flex h-full flex-col">
         {/* ── TOPO FIXO: quem é a vaga e em que pé ela está ───────────────── */}
         <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
           <div className="eyebrow !mb-1">Atração e Seleção</div>
@@ -485,6 +485,49 @@ function ListaDeCandidaturasDaVaga({
   const alvo: AlvoPorFiltroDaVaga = { vagaId: vaga.id, ...pag.filtro };
   const selecao = useSelecaoServidor<AlvoPorFiltroDaVaga>({ filtro: alvo, total: pag.total });
 
+  /**
+   * ─ A SELEÇÃO MANUAL PERSISTE ENTRE BUSCAS, FILTROS, PÁGINAS E ORDENAÇÃO (ITEM 5, decisão do
+   *   diretor, 13/10/2026) ──────────────────────────────────────────────────────────────────────
+   *
+   * O consultor marca alguém, LIMPA A BUSCA para procurar o próximo e marca outro: as marcas de antes
+   * FICAM. A seleção ACUMULA até a confirmação (ou o "limpar seleção"). Isto REVERTE a régua anterior
+   * (ec2ea83), que zerava a seleção a cada recorte para não deixar "seleção invisível"; o diretor
+   * decidiu que, para o fluxo de escolher um a um em buscas sucessivas, o acúmulo vale mais. A barra
+   * mostra o TOTAL acumulado e o "limpar seleção" segue à mão, que é o que torna o acúmulo visível.
+   *
+   * Como um id marcado pode estar FORA da página/recorte corrente, a memória guarda o OBJETO de cada
+   * marcada (não só o id): é dele que saem o nome e a situação que a barra e as confirmações mostram.
+   * O Set de ids do hook e esta memória andam SEMPRE juntos (todo toque passa por `alternarMarcada` ou
+   * `limparSelecao`), então não divergem. O modo "todos do filtro" é à parte: ele é do recorte
+   * corrente, cai ao trocar o recorte, e enquanto ligado a memória fica vazia.
+   */
+  const [marcadas, setMarcadas] = useState<Map<string, AsCandidaturaItem>>(() => new Map());
+
+  function alternarMarcada(c: AsCandidaturaItem) {
+    selecao.alternar(c.id);
+    setMarcadas((atual) => {
+      const proximo = new Map(atual);
+      if (proximo.has(c.id)) proximo.delete(c.id);
+      else proximo.set(c.id, c);
+      return proximo;
+    });
+  }
+
+  function limparSelecao() {
+    selecao.limpar();
+    setMarcadas(new Map());
+  }
+
+  function alternarTodosDoFiltro() {
+    if (selecao.todosDoFiltro) {
+      limparSelecao();
+    } else {
+      // "Todos do filtro" SUBSTITUI a seleção manual: a memória zera e o modo liga.
+      setMarcadas(new Map());
+      selecao.selecionarTodosDoFiltro();
+    }
+  }
+
   // O RESUMO SOBE PARA O PAINEL desenhar as contagens das abas. `kpis` só troca quando o filtro
   // muda; como o resumo é da vaga INTEIRA, o número das abas não oscila com a busca.
   useEffect(() => {
@@ -525,7 +568,7 @@ function ListaDeCandidaturasDaVaga({
     setAdicionarLoteAberto(false);
     setMoverAlvo(null);
     setFinalizarAlvo(null);
-    selecao.limpar();
+    limparSelecao();
     pag.setFiltro({});
     onMudou();
   }
@@ -538,23 +581,23 @@ function ListaDeCandidaturasDaVaga({
    * e contagem da vaga) para refletir a mudança por trás do modal. Quem fecha o modal é o "Fechar".
    */
   function aposAcaoMover() {
-    selecao.limpar();
+    limparSelecao();
     pag.setFiltro({});
     onMudou();
   }
 
-  // O RECORTE, VINDO DA BARRA, VIRA FILTRO SERVER-SIDE. Mudar o recorte limpa a seleção: o conjunto
-  // mudou, e manter marcas de um recorte anterior seria seleção invisível (a régua do diretor).
+  // O RECORTE, VINDO DA BARRA, VIRA FILTRO SERVER-SIDE. A SELEÇÃO MANUAL PERSISTE entre recortes
+  // (ITEM 5): marcar, limpar a busca e marcar de novo acumula. Só o modo "todos do filtro" cai aqui,
+  // porque ele é do recorte que acabou de mudar; o acúmulo um a um não é.
   function mudarRecorte(r: RecorteDoPainel) {
     pag.setFiltro({ busca: r.busca, filtroSituacao: r.situacoes, filtroEtapa: r.etapas });
-    selecao.limpar();
+    if (selecao.todosDoFiltro) limparSelecao();
   }
 
-  // Navegar de página limpa a seleção manual, pela mesma razão: as linhas marcadas saem da vista.
-  // O "todos do filtro" continua valendo, porque ele é sobre o conjunto, não sobre a página.
+  // Navegar de página NÃO limpa a seleção (ITEM 5): a seleção manual acumula entre páginas, e o
+  // "todos do filtro" já valia sobre o conjunto inteiro, não sobre a página.
   function irPara(n: number) {
     pag.irParaPagina(n);
-    selecao.limpar();
   }
 
   /** A ordenação server-side, embrulhada no formato que o `ColunaOrdenavel` já conhece (§A.29). */
@@ -563,7 +606,7 @@ function ListaDeCandidaturasDaVaga({
     ordem: pag.ordenarPor ? { chave: pag.ordenarPor, dir: pag.direcao ?? "asc" } : null,
     alternar: (chave: string) => {
       pag.setOrdenacao(chave);
-      selecao.limpar();
+      // A seleção PERSISTE ao reordenar (ITEM 5): a ordem muda, o conjunto marcado não.
     },
   };
 
@@ -584,9 +627,10 @@ function ListaDeCandidaturasDaVaga({
     etapas: pag.filtro.filtroEtapa ?? [],
   };
 
-  // Os objetos marcados vêm da página corrente (a seleção manual é limpa ao navegar, então todo id
-  // marcado está à vista). O modo "todos do filtro" NÃO usa estes objetos: ele manda o filtro.
-  const selecionadasObjs = pag.itens.filter((c) => selecao.selecionados.has(c.id));
+  // Os objetos marcados vêm da MEMÓRIA acumulada (ITEM 5), não da página corrente: um marcado pode
+  // estar fora do recorte/página atual e ainda assim contar. O modo "todos do filtro" NÃO usa estes
+  // objetos (a memória fica vazia nele): ele manda o filtro.
+  const selecionadasObjs = [...marcadas.values()];
 
   const totalPaginas = pag.totalPaginas;
   const apoioLista =
@@ -647,7 +691,7 @@ function ListaDeCandidaturasDaVaga({
         quantidade={selecao.quantidadeSelecionada}
         filtro={alvo}
         token={token}
-        onLimpar={() => selecao.limpar()}
+        onLimpar={limparSelecao}
         onFeito={aposAcao}
       />
 
@@ -683,10 +727,8 @@ function ListaDeCandidaturasDaVaga({
         catalogoEtapas={catalogoEtapas}
         selecionados={selecao.selecionados}
         todosDoFiltro={selecao.todosDoFiltro}
-        onAlternar={(id) => selecao.alternar(id)}
-        onToggleTodos={() =>
-          selecao.todosDoFiltro ? selecao.limpar() : selecao.selecionarTodosDoFiltro()
-        }
+        onAlternar={(c) => alternarMarcada(c)}
+        onToggleTodos={alternarTodosDoFiltro}
         onFicha={(c) => setFichaId(c.candidatoId)}
         onMover={(c) => setMoverAlvo(c)}
         onFinalizar={(c) => setFinalizarAlvo(c)}
@@ -942,7 +984,8 @@ function TabelaCandidaturas({
   selecionados: Set<string>;
   /** Modo "aplicar a todos do filtro": as linhas aparecem marcadas e o individual fica travado. */
   todosDoFiltro: boolean;
-  onAlternar: (id: string) => void;
+  /** Recebe a candidatura inteira: a seleção manual acumula o OBJETO, não só o id (ITEM 5). */
+  onAlternar: (c: AsCandidaturaItem) => void;
   onToggleTodos: () => void;
   onFicha: (c: AsCandidaturaItem) => void;
   onMover: (c: AsCandidaturaItem) => void;
@@ -1028,7 +1071,7 @@ function TabelaCandidaturas({
                     <input
                       type="checkbox"
                       checked={marcada}
-                      onChange={() => onAlternar(c.id)}
+                      onChange={() => onAlternar(c)}
                       disabled={todosDoFiltro || !decide}
                       className="h-4 w-4 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
                       aria-label={

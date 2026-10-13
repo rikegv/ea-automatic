@@ -209,4 +209,30 @@ describe("a página no servidor e o selecionar todos do filtro", () => {
     expect(contadorDaBarra()).toBe(0);
     expect(caixaDeTodos().checked).toBe(false);
   });
+
+  // ITEM 5: a seleção MANUAL persiste ao mudar de PÁGINA (gap do tester).
+  it("a seleção manual persiste ao navegar entre PÁGINAS, acumulando (ITEM 5)", async () => {
+    await montar();
+    // Marca a primeira linha da página 1.
+    const caixaLinha1 = document.querySelector<HTMLInputElement>('tbody tr input[type="checkbox"]')!;
+    fireEvent.click(caixaLinha1);
+    expect(contadorDaBarra()).toBe(1);
+
+    // Vai para a próxima página.
+    const proxima = screen.getByRole("button", { name: /próxima/i });
+    fireEvent.click(proxima);
+    await waitFor(() =>
+      expect(
+        (document.querySelector("tbody tr td:nth-child(2)")?.textContent ?? "").trim(),
+      ).toBe("Candidato 0101"),
+    );
+
+    // A marca da página 1 sobrevive: o contador continua em 1.
+    expect(contadorDaBarra()).toBe(1);
+
+    // Marca uma linha na página 2: acumula para 2.
+    const caixaLinhaPag2 = document.querySelector<HTMLInputElement>('tbody tr input[type="checkbox"]')!;
+    fireEvent.click(caixaLinhaPag2);
+    expect(contadorDaBarra()).toBe(2);
+  });
 });

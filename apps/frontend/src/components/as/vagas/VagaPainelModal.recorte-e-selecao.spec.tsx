@@ -17,11 +17,14 @@ import {
  * nome, a situação e a etapa viram FILTRO server-side, as contagens das abas vêm do `resumo` (a
  * ocupação da vaga inteira) e a seleção em massa opera sobre o CONJUNTO INTEIRO do recorte.
  *
- * ┌─ A RÉGUA CENTRAL, pinada pelo diretor (invariante ec2ea83) ─────────────────────────────────┐
+ * ┌─ A RÉGUA CENTRAL, atualizada pelo diretor (ITEM 5, 13/10/2026) ─────────────────────────────┐
  * │ "Selecionar todos" e as contagens operam sobre o CONJUNTO INTEIRO do filtro, nunca sobre a    │
- * │ página. E mudar o recorte (ou de aba, ou de página) LIMPA a seleção manual: seleção que        │
- * │ sobrevive a um recorte que a escondeu é seleção invisível, e invisível é como o lote atinge    │
- * │ gente que ninguém está vendo.                                                                  │
+ * │ página. E a seleção MANUAL PERSISTE entre buscas, filtros, páginas e ordenação: o consultor    │
+ * │ marca um, limpa a busca para achar o próximo e marca outro, ACUMULANDO até a confirmação.      │
+ * │ Isto reverte a régua anterior (ec2ea83), que zerava a seleção a cada recorte; o diretor        │
+ * │ decidiu que o acúmulo vale mais para o fluxo de escolher um a um em buscas sucessivas. Só o     │
+ * │ modo "todos do filtro" cai ao trocar o recorte, porque ele é do recorte corrente. Trocar de     │
+ * │ ABA ainda zera (o sub-componente remonta por `key={aba}`): cada aba tem a sua seleção.         │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * O MOCK IMITA O SERVIDOR: recebe o filtro, recorta uma base de nove candidaturas e devolve a
@@ -33,10 +36,20 @@ import {
  */
 
 const { buscarCandidaturasDaVaga } = vi.hoisted(() => ({ buscarCandidaturasDaVaga: vi.fn() }));
+const { moverEtapaEmLote } = vi.hoisted(() => ({ moverEtapaEmLote: vi.fn() }));
 
 vi.mock("@/lib/as-candidatos", async () => {
   const real = await vi.importActual<typeof import("@/lib/as-candidatos")>("@/lib/as-candidatos");
   return { ...real, buscarCandidaturasDaVaga };
+});
+
+// A ação em massa é dublada para CAPTURAR os ids enviados: é o que prova que a seleção ACUMULADA
+// (inclusive quem saiu do recorte) chega à ação (ITEM 5, gap do tester).
+vi.mock("@/lib/as-candidatos-lote", async () => {
+  const real = await vi.importActual<typeof import("@/lib/as-candidatos-lote")>(
+    "@/lib/as-candidatos-lote",
+  );
+  return { ...real, moverEtapaEmLote };
 });
 
 vi.mock("@/lib/auth-context", async () => {
@@ -263,6 +276,11 @@ function cabecalhoDeCandidato(): HTMLElement {
   return screen.getByRole("button", { name: "Candidato" });
 }
 
+/** Um botão da barra/modal cujo texto casa o regex (ex.: "Mover no funil (2)"). */
+function botaoDaBarra(texto: RegExp): HTMLElement | undefined {
+  return screen.getAllByRole("button").find((b) => texto.test((b.textContent ?? "").trim()));
+}
+
 function caixaDeTodos(): HTMLInputElement {
   return screen.getByLabelText(/^Selecionar todos/i) as HTMLInputElement;
 }
@@ -377,7 +395,7 @@ describe("a página e o recorte vêm do servidor", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-// 2. A SELEÇÃO: TODOS DO FILTRO = TOTAL, E O RECORTE A LIMPA
+// 2. A SELEÇÃO: TODOS DO FILTRO = TOTAL, E A MANUAL ACUMULA ENTRE RECORTES (ITEM 5)
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 describe("a seleção opera sobre o conjunto do filtro", () => {
@@ -397,25 +415,43 @@ describe("a seleção opera sobre o conjunto do filtro", () => {
     expect(contadorDaBarra()).toBe(3);
   });
 
-  it("mudar o recorte LIMPA a seleção manual (nada sobrevive invisível)", async () => {
+  it("mudar o recorte PERSISTE a seleção manual, acumulando (ITEM 5)", async () => {
     await montar();
-    marcar("Ana Paula Ribeiro");
-    marcar("Cláudia Nogueira");
+    marcar("Ana Paula Ribeiro"); // TRIAGEM
+    marcar("Cláudia Nogueira"); // CAPTACAO
     expect(contadorDaBarra()).toBe(2);
 
     porEtapa("Triagem");
     await waitFor(() => expect(nomesVisiveis()).toEqual(["Ana Paula Ribeiro", "Bruno Carvalho"]));
-    // A seleção foi limpa: o conjunto mudou, e marca de um recorte anterior seria invisível.
-    expect(contadorDaBarra()).toBe(0);
+    // Cláudia saiu da vista (CAPTACAO fora do recorte), mas SEGUE selecionada: o acúmulo persiste.
+    expect(contadorDaBarra()).toBe(2);
+    // Ana Paula, ainda à vista, continua marcada; Bruno, que entrou no recorte, não foi marcado.
+    expect(caixaDaLinha("Ana Paula Ribeiro").checked).toBe(true);
+    expect(caixaDaLinha("Bruno Carvalho").checked).toBe(false);
   });
 
-  it("a BUSCA também limpa a seleção manual", async () => {
+  it("a BUSCA também PERSISTE a seleção, e marcar na nova busca acumula (ITEM 5)", async () => {
     await montar();
     marcar("Ana Paula Ribeiro");
     expect(contadorDaBarra()).toBe(1);
     buscar("bruno");
     await waitFor(() => expect(nomesVisiveis()).toEqual(["Bruno Carvalho"]));
+    // Limpar/trocar a busca não zera o que já foi selecionado.
+    expect(contadorDaBarra()).toBe(1);
+    // Marcar Bruno na nova busca ACUMULA sobre Ana Paula (que está fora da vista agora).
+    marcar("Bruno Carvalho");
+    expect(contadorDaBarra()).toBe(2);
+  });
+
+  it('"todos do filtro" cai ao trocar o recorte, pois é do recorte corrente (ITEM 5)', async () => {
+    await montar();
+    fireEvent.click(caixaDeTodos());
+    expect(contadorDaBarra()).toBe(BASE.length);
+    porEtapa("Triagem");
+    await waitFor(() => expect(nomesVisiveis()).toEqual(["Ana Paula Ribeiro", "Bruno Carvalho"]));
+    // O modo "todos" é do recorte que mudou: ele cai (não vira "todos do novo recorte" sozinho).
     expect(contadorDaBarra()).toBe(0);
+    expect(caixaDeTodos().checked).toBe(false);
   });
 
   it("a caixa da linha encerrada nasce desabilitada; a da linha viva, habilitada", async () => {
@@ -424,6 +460,71 @@ describe("a seleção opera sobre o conjunto do filtro", () => {
     expect(caixaDaLinha("Ícaro Machado").disabled).toBe(true); // DESISTIU
     expect(caixaDaLinha("Ana Paula Ribeiro").disabled).toBe(false); // ATIVO
     expect(caixaDaLinha("Décio Araújo").disabled).toBe(false); // ALOCADO ainda decide
+  });
+
+  it("a seleção persiste ao REORDENAR (ITEM 5): a ordem muda, a marca não", async () => {
+    await montar();
+    marcar("Ana Paula Ribeiro");
+    expect(contadorDaBarra()).toBe(1);
+    fireEvent.click(cabecalhoDeCandidato());
+    await waitFor(() => expect(nomesVisiveis()[0]).toBe("Ana Paula Ribeiro"));
+    // Reordenar não zera a seleção acumulada.
+    expect(contadorDaBarra()).toBe(1);
+  });
+
+  it('"limpar seleção" zera a seleção acumulada (ITEM 5)', async () => {
+    await montar();
+    marcar("Ana Paula Ribeiro");
+    marcar("Cláudia Nogueira");
+    expect(contadorDaBarra()).toBe(2);
+    fireEvent.click(screen.getByText(/limpar seleção/i));
+    expect(contadorDaBarra()).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// 2b. A AÇÃO EM MASSA OPERA SOBRE O CONJUNTO ACUMULADO, INCLUSIVE FORA DO RECORTE (ITEM 5)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("a ação em massa recebe a seleção acumulada, inclusive quem saiu do recorte", () => {
+  it("marcar em recortes diferentes e mover no funil envia TODOS os ids, inclusive o fora da vista", async () => {
+    moverEtapaEmLote.mockResolvedValue({ aplicadas: 2, falhas: [] });
+    await montar();
+
+    // Marca Cláudia (CAPTACAO) e Ana Paula (TRIAGEM) sem filtro.
+    marcar("Cláudia Nogueira");
+    marcar("Ana Paula Ribeiro");
+    expect(contadorDaBarra()).toBe(2);
+
+    // Recorta para TRIAGEM: Cláudia SAI da vista, mas segue selecionada (o contador fica em 2).
+    porEtapa("Triagem");
+    await waitFor(() => expect(nomesVisiveis()).toEqual(["Ana Paula Ribeiro", "Bruno Carvalho"]));
+    expect(contadorDaBarra()).toBe(2);
+    // O botão da barra reflete o acumulado (2), não a página (1 visível selecionada).
+    const botaoMover = botaoDaBarra(/^Mover no funil \(2\)$/);
+    expect(botaoMover).toBeTruthy();
+
+    // Abre a confirmação, escolhe a etapa de destino e confirma.
+    fireEvent.click(botaoMover!);
+    const gatilhoEtapa = gatilhoDoFiltro(/etapa de destino/i, "ETAPA DE DESTINO");
+    fireEvent.click(gatilhoEtapa);
+    const opcao = within(screen.getByRole("listbox"))
+      .getAllByRole("option")
+      .find((el) => (el.textContent ?? "").trim() === "Entrevista Soulan")!;
+    fireEvent.click(opcao);
+    // O botão de confirmar do modal tem o texto exato "Mover no funil" (sem a contagem).
+    const confirmar = screen
+      .getAllByRole("button")
+      .find((b) => (b.textContent ?? "").trim() === "Mover no funil")!;
+    fireEvent.click(confirmar);
+
+    // A ação recebeu os DOIS ids: Ana Paula (c1, à vista) E Cláudia (c3, fora do recorte).
+    await waitFor(() => expect(moverEtapaEmLote).toHaveBeenCalledTimes(1));
+    const [idsEnviados] = moverEtapaEmLote.mock.calls[0] as unknown as [string[], string, string];
+    expect([...idsEnviados].sort()).toEqual(["c1", "c3"]);
+
+    // Depois da ação, a seleção acumulada é zerada (aposAcao -> limparSelecao).
+    await waitFor(() => expect(contadorDaBarra()).toBe(0));
   });
 });
 
