@@ -435,6 +435,8 @@ export function abstencaoDoLink(r: LinkDoPortalParaCopiar): boolean {
 
 /** O TÍTULO do desfecho, em Title Case (§A.24). Nenhum deles usa a palavra "falha". */
 export function tituloDoLinkParaCopiar(r: LinkDoPortalParaCopiar): string {
+  // AJUSTE 3: o PROV (sem CPF) recebe o link direcionado para a porta de e-mail, não o clássico.
+  if (r.gerado && r.direcionadoParaEmail) return "Link De Primeiro Acesso";
   if (r.gerado) return "Link Do Portal";
   if (abstencaoDoLink(r)) return "O Candidato Já Está Usando O Link";
   return "Nenhum Link Novo Foi Gerado";
@@ -446,5 +448,11 @@ export function tituloDoLinkParaCopiar(r: LinkDoPortalParaCopiar): string {
  */
 export function fraseDoLinkParaCopiar(r: LinkDoPortalParaCopiar, quando: string): string {
   if (!r.gerado) return fraseDaRecusa(r.motivo);
+  // AJUSTE 3: o link do PROV (sem CPF) abre DIRETO a porta de acesso por e-mail. Não tem prazo de
+  // 72h (não há token) e não revogou link nenhum, então a frase NÃO fala em "vale até" nem em
+  // "o link anterior deixou de valer": ela diz o que este link é e como o candidato conclui.
+  if (r.direcionadoParaEmail) {
+    return "Este candidato está sem CPF, então este link abre direto a tela de acesso por e-mail. Copie e mande pelo canal que você preferir. Ele entra pelo e-mail, recebe um código, informa o CPF e a data de nascimento, e o portal abre.";
+  }
   return `Copie e mande ao candidato pelo canal que você preferir. O link vale até ${quando} e some desta tela quando você fechar esta janela. Qualquer link anterior deste candidato deixou de valer agora.`;
 }

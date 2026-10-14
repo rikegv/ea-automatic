@@ -16,6 +16,7 @@ import {
   normalizeCpf,
   type ConfirmacaoDeCodigoResposta,
   type IdentidadeDoAcessoResposta,
+  type LinkDoPortalParaCopiar,
   type MotivoDaTravaDeAcesso,
   type ResultadoDoConvitePrimeiroAcesso,
   type SolicitacaoDeCodigoResposta,
@@ -1043,6 +1044,59 @@ export class PortalAcessoEmailService {
   }
 
   /**
+   * A BASE PÚBLICA DO PORTAL (`PORTAL_LINK_BASE_URL`), SEM FRAGMENTO. É a URL NUA que abre a porta
+   * de acesso por e-mail: a mesma que o convite de primeiro acesso usa no corpo do e-mail. Sem a
+   * env (homolog/preview sem vhost) sai relativa (`/portal`), que é visivelmente incompleta de
+   * propósito, molde de `PortalIdentidadeService.urlDoLink`. Dono único dentro deste serviço, para
+   * o convite e o link direcionado não divergirem no primeiro ajuste.
+   */
+  private baseDoPortal(): string {
+    // A BARRA FINAL É APARADA, igual ao link clássico (`PortalIdentidadeService.urlDoLink`): se a
+    // env vier `.../portal/`, o link direcionado e o convite têm de bater byte a byte com a base do
+    // clássico, senão `.../portal/` e `.../portal` divergem e um dos dois pode não cair na porta.
+    return (this.config.get<string>("PORTAL_LINK_BASE_URL") ?? "/portal").trim().replace(/\/+$/, "");
+  }
+
+  /**
+   * ══ AJUSTE 3: O LINK PARA COPIAR, DIRECIONADO PELO ESTADO DO CANDIDATO ════════════════════════
+   *
+   * É a IRMÃ de `rotearReenvioSemCpf` para o botão de COPIAR do Gerenciador: o handler de copiar
+   * (`PortalEnvioController.gerarLink`) cai aqui ANTES de `PortalEnvioService.gerarLinkParaCopiar`.
+   * Quem tem CPF REAL não é desta porta, e o método devolve `null` para o caminho normal seguir
+   * com o link CLÁSSICO (token no fragmento, tela de CPF + nascimento). Quem carrega o marcador
+   * PROV recebe a URL NUA do Portal: ela abre DIRETO a porta de acesso por e-mail, o único caminho
+   * que o candidato sem CPF consegue concluir. O link copiado passa a bater com o estado dele.
+   *
+   * ┌─ O QUE ELE DELIBERADAMENTE NÃO FAZ, espelhando `rotearReenvioSemCpf` ───────────────────────┐
+   * │ NÃO cunha link, NÃO toca `portal_links`, NÃO revoga nada, NÃO grava trilha. A URL devolvida  │
+   * │ é a ENTRADA PÚBLICA do Portal (`/portal` sem token), a mesma que qualquer visitante da       │
+   * │ internet alcança: NÃO é credencial, então não há o que carimbar nem o que proteger. A        │
+   * │ decisão de emissão com token continua inteira em `PortalEnvioService`, intocada, para o      │
+   * │ caminho com CPF real. §A.6: nada é logado; a URL nua não carrega identidade.                 │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A régua "está sem CPF?" é a MESMA `ehAdmissaoSemCpf` (`ehFarolVivo && ehCpfProvisorio`) que o
+   * reenvio delega ao `AdmissoesService`, reusada, nunca uma segunda leitura do marcador. Admissão
+   * inexistente ou com CPF real volta `false`, e aí o método se abstém (devolve `null`): o caminho
+   * clássico segue, com o seu próprio recorte de farol (`SEM_ADMISSAO`) e a abstenção S15 intactos.
+   */
+  async linkDirecionadoSemCpf(admissaoId: string): Promise<LinkDoPortalParaCopiar | null> {
+    const semCpf = await this.admissoes.ehAdmissaoSemCpf(admissaoId);
+    if (!semCpf) return null;
+    return {
+      gerado: true,
+      motivo: null,
+      // A URL NUA abre a porta de e-mail (sem `#t=`): a página do Portal, sem fragmento, mostra a
+      // `EntradaSemLink`, que é exatamente o acesso por e-mail.
+      link: this.baseDoPortal(),
+      // SEM VENCIMENTO: a porta de e-mail não tem token de 72h. O frontend discrimina por este bit
+      // e NÃO mostra prazo nem "o link anterior deixou de valer" (nada foi revogado aqui).
+      expiraEm: null,
+      direcionadoParaEmail: true,
+    };
+  }
+
+  /**
    * ══ ITEM 1: ROTEIA O REENVIO DE QUEM ESTÁ SEM CPF (marcador PROV) PARA A PORTA DE E-MAIL ══════
    *
    * É a CAMADA FINA do roteamento: o botão "Enviar por e-mail" do Gerenciador cai aqui ANTES de
@@ -1096,8 +1150,7 @@ export class PortalAcessoEmailService {
       };
     }
 
-    const base = (this.config.get<string>("PORTAL_LINK_BASE_URL") ?? "/portal").trim();
-    const mensagem = corpoDoConviteDePrimeiroAcesso({ nome: vinculo?.nome ?? "", url: base });
+    const mensagem = corpoDoConviteDePrimeiroAcesso({ nome: vinculo?.nome ?? "", url: this.baseDoPortal() });
 
     // Correio inerte (homolog/preview): recusa sem fingir que mandou. A tela diz CANAL_INDISPONIVEL.
     if (!this.correio.configurado()) {

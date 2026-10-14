@@ -5420,6 +5420,14 @@ export interface LinkDoPortalParaCopiar {
   link: string | null;
   /** ISO do vencimento (72h). Nulo quando nada foi gerado. */
   expiraEm: string | null;
+  /**
+   * VERDADEIRO QUANDO O CANDIDATO ESTÁ SEM CPF (marcador PROV): o link copiado é a URL NUA do
+   * Portal, que abre DIRETO a porta de acesso por e-mail, e não o link clássico com token (que
+   * cairia na tela de CPF, onde o PROV nunca passa). Nestes casos `link` vem preenchido, `expiraEm`
+   * é nulo (a porta de e-mail não tem token de 72h) e nenhum link anterior foi revogado: a URL é a
+   * mesma entrada pública do Portal, não uma credencial. Ausente/falso é o link clássico de sempre.
+   */
+  direcionadoParaEmail?: boolean;
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════

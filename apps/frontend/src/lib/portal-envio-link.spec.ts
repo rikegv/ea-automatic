@@ -263,3 +263,40 @@ describe("o link para copiar", () => {
     expect(fraseDoLinkParaCopiar(r, "30/09/2026 09:00")).not.toContain("http");
   });
 });
+
+describe("AJUSTE 3: o link direcionado do candidato SEM CPF (PROV)", () => {
+  // O backend devolve a URL NUA do Portal com `direcionadoParaEmail: true` e SEM vencimento: a
+  // frente é o Gerenciador entregar o link que bate com o caminho que o PROV consegue concluir.
+  function direcionado(p: Partial<LinkDoPortalParaCopiar> = {}): LinkDoPortalParaCopiar {
+    return copiavel({
+      link: "https://clientesportalsoulan.com.br/portal",
+      expiraEm: null,
+      direcionadoParaEmail: true,
+      ...p,
+    });
+  }
+
+  it("o título é de PRIMEIRO ACESSO, não o do link clássico", () => {
+    expect(tituloDoLinkParaCopiar(direcionado())).toBe("Link De Primeiro Acesso");
+    // Sanidade: sem o bit, continua sendo o link clássico de sempre.
+    expect(tituloDoLinkParaCopiar(copiavel())).toBe("Link Do Portal");
+  });
+
+  it("a frase NÃO fala em prazo nem em link anterior revogado: nada foi emitido nem derrubado", () => {
+    const f = fraseDoLinkParaCopiar(direcionado(), "não informado");
+    expect(f).not.toContain("vale até");
+    expect(f).not.toContain("deixou de valer");
+    expect(f).not.toContain("não informado");
+    // Ela DIZ o que o candidato faz: entra pelo e-mail e informa CPF + data de nascimento.
+    expect(f).toContain("e-mail");
+    expect(f).toContain("CPF");
+  });
+
+  it("§A.11: a frase direcionada não usa travessão", () => {
+    expect(fraseDoLinkParaCopiar(direcionado(), "não informado")).not.toContain("—");
+  });
+
+  it("§A.6: a frase direcionada não derrama a URL", () => {
+    expect(fraseDoLinkParaCopiar(direcionado(), "não informado")).not.toContain("http");
+  });
+});

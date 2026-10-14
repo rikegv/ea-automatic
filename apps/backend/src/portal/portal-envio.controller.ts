@@ -172,12 +172,21 @@ export class PortalEnvioController {
    * `domain/menus.ts`.
    */
   @Post("admissao/:admissaoId/link")
-  gerarLink(
+  async gerarLink(
     @Res({ passthrough: true }) res: Response,
     @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
     @CurrentUser() user: AuthUser,
   ) {
     res.set({ "Cache-Control": "no-store, private" });
+    /*
+     * AJUSTE 3 (link direcionado): o candidato SEM CPF (marcador PROV) não passa na porta clássica
+     * (CPF + nascimento), que é onde o link clássico com token cai. `linkDirecionadoSemCpf` resolve
+     * isso ANTES da emissão: para o PROV devolve a URL NUA do Portal (abre direto a porta de e-mail)
+     * SEM cunhar token nem revogar nada; para quem tem CPF real devolve `null` e a emissão do link
+     * clássico segue EXATAMENTE como antes. Espelha o roteamento do `enviar` logo acima.
+     */
+    const direcionado = await this.acessoEmail.linkDirecionadoSemCpf(admissaoId);
+    if (direcionado) return direcionado;
     return this.envio.gerarLinkParaCopiar(admissaoId, user.id);
   }
 }
