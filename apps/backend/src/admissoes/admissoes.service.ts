@@ -100,6 +100,7 @@ import { derivarCpfProvisorioPorCandidato } from "../domain/identidade-provisori
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PortalEnvioService } from "../portal/portal-envio.service";
+import { PortalLinkRetryService } from "../portal/portal-link-retry.service";
 import { recomputeFarolGlobal } from "./farol";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { FAROIS_VIVOS, pendenciasObrigatorias } from "../domain/admissao";
@@ -445,6 +446,11 @@ export class AdmissoesService {
     // `carga-0308`) constroem `new AdmissoesService(db)` e não enviam link nenhum. Sem ele, a
     // liberação segue igual e o aviso ao candidato simplesmente não é disparado.
     @Optional() private readonly portalEnvio?: PortalEnvioService,
+    // OPCIONAL pelo mesmo motivo dos acima (scripts de carga e specs constroem `new AdmissoesService(db)`).
+    // É quem tira a emissão do silêncio (frente A.1): classifica o desfecho, carimba o estado de falha
+    // em `admissoes`, grava a trilha e enfileira o retry. Ausente, a liberação segue igual e o aviso não
+    // deixa rastro (comportamento antigo), que é o que os scripts/testes sem portal esperam.
+    @Optional() private readonly portalLinkRetry?: PortalLinkRetryService,
   ) {}
 
   /**
@@ -829,6 +835,26 @@ export class AdmissoesService {
       }
     } catch {
       // best-effort: persistir o padrão de benefício nunca invalida uma admissão já criada.
+    }
+
+    // A.2 — LACUNA DO WIZARD. A admissão criada pelo wizard (F6) nasce EM_ADMISSAO e NUNCA passa por
+    // `liberar`, onde mora o gancho de emissão: sem isto, o candidato de um wizard legítimo jamais
+    // receberia o link do Portal. Dispara SÓ para o wizard HUMANO: `user` presente e origem MANUAL
+    // (ou ausente). O webhook do Pandapé entra por `create` com origem PANDAPE (não dispara), e a
+    // pré-admissão nem passa por aqui; a trava de fluxo-2 no envio é defesa em profundidade. FORA da
+    // transação e best-effort (mesmo molde do gancho da liberação, §A.5): falha de envio não desfaz a
+    // admissão já criada, vira estado consultável + retry.
+    if (this.portalEnvio && user && (!opts?.origem || opts.origem === "MANUAL")) {
+      try {
+        const envio = await this.portalEnvio.enviarParaAdmissao(resultado.admissaoId, user.id, "AUTOMATICO");
+        if (!envio.enviado && envio.motivo) {
+          this.logger.warn(`link do portal nao saiu na criacao do wizard: ${envio.motivo}`);
+        }
+        await this.portalLinkRetry?.registrarResultado(resultado.admissaoId, user.id, envio);
+      } catch (erro) {
+        this.logger.error(`falha inesperada ao enviar o link do portal na criacao do wizard: ${(erro as Error).name}`);
+        await this.portalLinkRetry?.registrarExcecao(resultado.admissaoId, user.id);
+      }
     }
 
     return resultado;
@@ -1360,8 +1386,14 @@ export class AdmissoesService {
         if (!envio.enviado && envio.motivo) {
           this.logger.warn(`link do portal nao saiu na liberacao: ${envio.motivo}`);
         }
+        // FIM DO SILENCIO (frente A.1): carimba/limpa o estado consultavel, grava a trilha e, na
+        // falha transitoria, enfileira o retry. Best-effort (o serviço não lança): a LIBERAÇÃO é o
+        // fato, o aviso é efeito colateral, e agora a falha deixa RASTRO em vez de sumir no log.
+        await this.portalLinkRetry?.registrarResultado(admissaoId, user.id, envio);
       } catch (erro) {
         this.logger.error(`falha inesperada ao enviar o link do portal na liberacao: ${(erro as Error).name}`);
+        // A excecao nao some mais: vira estado de falha (b) carimbado + retry enfileirado.
+        await this.portalLinkRetry?.registrarExcecao(admissaoId, user.id);
       }
     }
 
@@ -2039,8 +2071,12 @@ export class AdmissoesService {
           if (!envio.enviado && envio.motivo) {
             this.logger.warn(`link do portal nao saiu na liberacao em lote: ${envio.motivo}`);
           }
+          // FIM DO SILENCIO (frente A.1), uma a uma: carimba/limpa o estado, grava a trilha e, na
+          // falha transitoria, enfileira o retry. Best-effort, nao derruba o lote.
+          await this.portalLinkRetry?.registrarResultado(admissaoId, user.id, envio);
         } catch (erro) {
           this.logger.error(`falha inesperada ao enviar o link do portal na liberacao em lote: ${(erro as Error).name}`);
+          await this.portalLinkRetry?.registrarExcecao(admissaoId, user.id);
         }
       }
     }

@@ -40,6 +40,12 @@ function linha(p: Partial<LinhaDoPainelPortal> = {}): LinhaDoPainelPortal {
     ultimoAcessoEm: "2026-09-19T12:00:00.000Z",
     estadoLink: "VIVO",
     origemEnvio: "AUTOMATICO",
+    // Campos do drift do painel (Auditoria -> Portal) declarados no contrato nesta frente: o serviço
+    // sempre os devolve, então a linha completa do fake também os traz. `linkFalhaMotivo` é opcional
+    // (a linha com link vivo não tem falha), então fica fora do default e entra por `...p` quando o
+    // teste do recorte "Sem Link" precisar.
+    origemAdmissao: "MANUAL",
+    consultorQueEnviou: null,
     ...p,
   };
 }

@@ -4810,6 +4810,12 @@ export interface ContadoresDoPainelPortal {
   naoAcessaram: number;
   concluiram: number;
   intervencaoHumana: number;
+  /**
+   * LIBERADOS MAS SEM LINK VIVO (frente A.1): foram liberados, a emissão automática falhou (estado
+   * carimbado em `admissoes`) e NÃO há link vivo. População DISJUNTA do funil acima (que é só quem
+   * TEM link vivo). É o card que o ADM clica para ver quem ficou sem o link e reemitir dali.
+   */
+  semLink: number;
 }
 
 /** Uma linha da lista: onde aquele candidato está, agora. */
@@ -4846,6 +4852,20 @@ export interface LinhaDoPainelPortal {
    * coluna passaria a descrever uma entrega que não é a que está de pé.
    */
   origemEnvio: OrigemDeEnvioDoLink | null;
+  /**
+   * O CÓDIGO do motivo da falha de emissão (frente A.1), ou `null`/ausente para as linhas normais
+   * (que têm link vivo). Só as linhas do recorte "semLink" o trazem: é o que diz ao ADM por que o
+   * link não saiu (ex.: `EMAIL_INVALIDO`), para ele corrigir e reemitir. §A.6: só o código fechado.
+   */
+  linkFalhaMotivo?: string | null;
+  /**
+   * Drift PRÉ-EXISTENTE da frente do painel (Auditoria -> Portal): o serviço já devolvia estes dois
+   * na linha, mas o contrato não os declarava, e por isso a cobertura ficava vermelha no origin/main.
+   * Declarados aqui, sem reescrever nem reordenar o contrato. De/para a origem da admissão do link
+   * vigente, e quem enviou esse link (ou nulo para o emitido antes da trilha do consultor).
+   */
+  origemAdmissao: "ATRACAO_SELECAO" | "MANUAL";
+  consultorQueEnviou: string | null;
 }
 
 /** A página da lista. Teto no servidor: a base tem milhares de admissões. */
@@ -4960,6 +4980,10 @@ export const RECORTES_DO_PAINEL_PORTAL = [
   "naoAcessaram",
   "concluiram",
   "intervencaoHumana",
+  // SEM LINK VIVO (frente A.1). DIFERENTE dos outros quatro: eles recortam DENTRO do universo com
+  // link vivo; este troca o universo para a população liberada-sem-link (consulta própria no
+  // servidor). O ADM clica para ver quem ficou sem o link e reemitir.
+  "semLink",
 ] as const;
 export type RecorteDoPainelPortal = (typeof RECORTES_DO_PAINEL_PORTAL)[number];
 

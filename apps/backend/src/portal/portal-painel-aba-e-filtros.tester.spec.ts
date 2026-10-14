@@ -264,6 +264,9 @@ describe("1. o funil é do universo inteiro; a aba recorta só a LISTA", () => {
       // a1, a2 (sobre-entrega) e c2 (concluiu depois de cair para o time). c1 tem régua VAZIA.
       concluiram: 3,
       intervencaoHumana: 1,
+      // `semLink` (frente A.1): o banco de mentirinha conta as admissões com link do recorte (as seis
+      // deste POVO), sem modelar o carimbo de falha. É o sexto contador do funil.
+      semLink: 6,
     });
   });
 

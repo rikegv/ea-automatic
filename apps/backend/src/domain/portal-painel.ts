@@ -102,6 +102,13 @@ export interface ContadoresDoPainel {
   naoAcessaram: number;
   concluiram: number;
   intervencaoHumana: number;
+  /**
+   * LIBERADOS MAS SEM LINK VIVO (frente A.1). NÃO sai dos `fatos` (que são o universo com link
+   * vivo): é uma população DISJUNTA, contada por consulta própria (`portal_link_falha_em IS NOT NULL`
+   * e sem link vivo), e por isso entra como parâmetro em vez de `noCard`. É o card/recorte que o ADM
+   * clica para ver quem ficou sem o link e reemitir.
+   */
+  semLink: number;
 }
 
 /**
@@ -139,7 +146,12 @@ export interface ContadoresDoPainel {
  * o time E ter concluído depois (o time resolveu e o documento entrou). Os cinco não somam
  * `encaminhados`, e apresentá-los como fatias de uma pizza seria a leitura errada.
  */
-export function contarPainel(fatos: readonly FatoDaAdmissaoNoPainel[]): ContadoresDoPainel {
+export function contarPainel(
+  fatos: readonly FatoDaAdmissaoNoPainel[],
+  // SEM LINK VIVO vem de FORA dos `fatos` (população disjunta, consulta própria no serviço). Default
+  // 0 para quem só quer o funil (ex.: o `contarPainel([])` do caminho sem encaminhados).
+  semLink = 0,
+): ContadoresDoPainel {
   let acessaram = 0;
   let concluiram = 0;
   let intervencaoHumana = 0;
@@ -157,6 +169,7 @@ export function contarPainel(fatos: readonly FatoDaAdmissaoNoPainel[]): Contador
     naoAcessaram: fatos.length - acessaram,
     concluiram,
     intervencaoHumana,
+    semLink,
   };
 }
 

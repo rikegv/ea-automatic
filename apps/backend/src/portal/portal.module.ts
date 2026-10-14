@@ -15,6 +15,7 @@ import { PortalEmissorService } from "./portal-emissor.service";
 import { PortalEnvioController } from "./portal-envio.controller";
 import { PortalEnvioService } from "./portal-envio.service";
 import { PortalIdentidadeService } from "./portal-identidade.service";
+import { PortalLinkRetryService } from "./portal-link-retry.service";
 import { PortalLinksController } from "./portal-links.controller";
 import { PortalLinkVivoService } from "./portal-link-vivo.service";
 import { PortalPainelController } from "./portal-painel.controller";
@@ -151,6 +152,10 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     // O ENVIO só ORQUESTRA: toda escrita em `portal_links` continua sendo do
     // `PortalIdentidadeService`, e é isso que mantém a lista de pontos de escrita enumerável.
     PortalEnvioService,
+    // O FIM DO SILENCIO DA EMISSAO (frente A.1): classifica o desfecho, carimba o estado nas 3
+    // colunas de `admissoes`, grava a trilha e enfileira o retry (BullMQ). Producer + worker num
+    // serviço só. Exportado porque o gancho da liberação mora em `admissoes/` e injeta este serviço.
+    PortalLinkRetryService,
     PortalIdentidadeService,
     PortalLeitorService,
     // A PERGUNTA "O LINK AINDA ESTÁ VIVO?", INJETÁVEL. Ela nasceu de um veto: a ponte do VT
@@ -187,11 +192,15 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
   // aba Auditoria (`documento-arquivo.service.ts`) move o marco de reabertura do Portal por ESTA
   // porta única, em vez de escrever `portal_pendencias_no_time` por fora (frente Auditoria -> Portal,
   // item 1). A régua "um único escritor do marco" (§A.6, trilha) continua valendo.
+  // `PortalLinkRetryService` é exportado para a `AdmissoesModule` consumir no gancho de emissão
+  // (frente A.1): carimba o estado de falha, grava a trilha e enfileira o retry.
   exports: [
     PortalTrilhaService,
     PortalIdentidadeService,
     PortalEnvioService,
     PortalPendenciasService,
+    PortalLinkRetryService,
   ],
+
 })
 export class PortalModule {}

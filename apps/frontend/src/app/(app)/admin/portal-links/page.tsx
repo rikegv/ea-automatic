@@ -58,6 +58,7 @@ import {
   rankSituacao,
   rotaBloquear,
   rotaDesbloquear,
+  rotuloDaFalhaDoLink,
   rotuloDaOrigem,
   semRegua,
   situacaoDaLinha,
@@ -146,6 +147,7 @@ const CONTADORES_ZERO: ContadoresDoPainelPortal = {
   naoAcessaram: 0,
   concluiram: 0,
   intervencaoHumana: 0,
+  semLink: 0,
 };
 
 const CATALOGO_VAZIO: CatalogoDeFiltrosDoPainelPortal = {
@@ -1023,7 +1025,7 @@ export default function PortalLinksPage() {
 
       {/* Cards do funil, clicáveis como filtro em toggle (§A.12). Eles contam o UNIVERSO INTEIRO,
           as duas abas somadas: são o funil, não a aba. */}
-      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
+      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-6">
         <Card id="encaminhados" label="Encaminhados" value={contadores.encaminhados} icon="users" />
         <Card
           id="acessaram"
@@ -1052,6 +1054,16 @@ export default function PortalLinksPage() {
           value={contadores.naoAcessaram}
           tone="var(--danger)"
           icon="clock"
+        />
+        {/* SEM LINK (frente A.1): liberados cuja emissão automática falhou e ficaram sem link vivo.
+            Clicável como filtro em toggle, no MESMO padrão dos demais (§A.12): troca o universo para
+            a população liberada-sem-link, de onde o ADM reemite. */}
+        <Card
+          id="semLink"
+          label="Sem Link"
+          value={contadores.semLink}
+          tone="var(--danger)"
+          icon="link"
         />
       </div>
 
@@ -1159,6 +1171,11 @@ export default function PortalLinksPage() {
                   const sit = situacaoDaLinha(l);
                   const link = linkDaLinha(l.estadoLink);
                   const vazia = semRegua(l);
+                  // RECORTE "semLink" (frente A.1): estas linhas são a população liberada SEM link
+                  // vivo. O `estadoLink` vem com o placeholder REVOGADO e o `linkJti` é nulo, então
+                  // a coluna Link mostra "Sem Link" com o motivo da falha, e as ações que dependem
+                  // de link vivo (e-mail, bloquear/desbloquear) saem de cena; sobra reemitir dali.
+                  const linhaSemLink = recorte === "semLink";
                   const rodando = emitindo === l.admissaoId;
                   const trocando = alternando === l.admissaoId;
                   const mandando = enviandoEmail === l.admissaoId;
@@ -1238,8 +1255,25 @@ export default function PortalLinksPage() {
                         })()}
                       </td>
 
+                      {/* LINK: nas linhas do recorte "semLink" (frente A.1) o estado vem como
+                          placeholder, então a célula mostra "Sem Link" (Title Case, §A.24) e, sob o
+                          pill, o MOTIVO da falha em rótulo amigável (só quando há motivo específico:
+                          "Sem Link" sozinho já é o pill, repeti-lo abaixo seria ruído). Nas demais
+                          linhas, o estado real do link como sempre. */}
                       <td className="text-center">
-                        <Pill tone={link.tone}>{link.label}</Pill>
+                        {linhaSemLink ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <Pill tone="dg">Sem Link</Pill>
+                            {(() => {
+                              const motivo = rotuloDaFalhaDoLink(l.linkFalhaMotivo);
+                              return motivo !== "Sem Link" ? (
+                                <span className="text-[11px] text-faint">{motivo}</span>
+                              ) : null;
+                            })()}
+                          </div>
+                        ) : (
+                          <Pill tone={link.tone}>{link.label}</Pill>
+                        )}
                       </td>
 
                       {/* ORIGEM: a tag colorida é a ORIGEM DA ADMISSÃO (de ONDE ela veio: Atração E
@@ -1296,6 +1330,12 @@ export default function PortalLinksPage() {
                             />
                           </button>
 
+                          {/* O E-MAIL E O BLOQUEIO DEPENDEM DE LINK VIVO, e as linhas do recorte
+                              "semLink" (frente A.1) não têm nenhum (`linkJti` nulo). Eles saem de
+                              cena nessas linhas: o que resta é reemitir pelo botão acima, que é a
+                              "reemissão dali" pedida. Nas demais linhas, continuam como sempre. */}
+                          {!linhaSemLink && (
+                          <>
                           {/* ENVIAR POR E-MAIL, que é o caminho manual da OST. Ele é IRMÃO do
                               botão ao lado e não o substitui: um COPIA a URL para quem vai passar
                               o link por outro canal, o outro MANDA o e-mail. Os dois emitem link
@@ -1351,6 +1391,8 @@ export default function PortalLinksPage() {
                               className={cn("h-[17px] w-[17px]", trocando && "animate-spin")}
                             />
                           </button>
+                          </>
+                          )}
                         </div>
                       </td>
                     </tr>

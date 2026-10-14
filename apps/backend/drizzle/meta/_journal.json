@@ -1079,6 +1079,13 @@
       "when": 1790646021719,
       "tag": "0154_portal_reabertura_auditoria",
       "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1790646022719,
+      "tag": "0155_portal_link_emissao_falha",
+      "breakpoints": true
     }
   ]
 }

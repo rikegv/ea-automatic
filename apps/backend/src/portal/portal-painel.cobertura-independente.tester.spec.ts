@@ -413,6 +413,12 @@ describe("§A.16: o recorte de farol, pelos dois lados", () => {
         naoAcessaram: 1,
         concluiram: 0,
         intervencaoHumana: 0,
+        // `semLink` (frente A.1): aqui ele reflete a SIMPLIFICAÇÃO do fake, que conta a liberada viva
+        // (`adm-viva`) sem modelar o carimbo de falha do `SEM_LINK_CARIMBADO`. O que este teste prova é
+        // o RECORTE DE FAROL: a `adm-fora` (farol excluído) NÃO entra em `semLink` (o `notInArray` da
+        // query), e é por isso que o valor é 1 (só a viva) e não 2. A contagem fiel do carimbo vive nos
+        // specs próprios da frente A.1.
+        semLink: 1,
       });
       const pagina = await servico(dados).listar({});
       expect(pagina.total).toBe(1);
@@ -905,7 +911,7 @@ describe("o contrato de `shared-types` e o objeto que o serviço devolve", () =>
     expect(Object.keys(linha).sort()).toEqual(camposDaInterface("LinhaDoPainelPortal"));
   });
 
-  it("o FUNIL devolvido tem exatamente os cinco campos de `ContadoresDoPainelPortal`", async () => {
+  it("o FUNIL devolvido tem exatamente os seis campos de `ContadoresDoPainelPortal`", async () => {
     const r = await servico({
       links: [{ admissaoId: "adm", criadoEm: rel(-1_000), expiraEm: rel(3_600_000) }],
     }).resumo();

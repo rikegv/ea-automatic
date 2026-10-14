@@ -350,12 +350,15 @@ describe("CONDIÇÃO 5: o declínio sai EM CÓDIGO, não por filtro de tela", ()
    * lista e a página. Uma delas sem o filtro faria os números divergirem entre o card e a tabela.
    */
   it("toda consulta que define o universo aplica o filtro de farol", () => {
-    // QUATRO desde a segunda rodada: o recorte do funil, o total da lista, a página e o CATÁLOGO
-    // dos filtros. O catálogo entrou na conta porque oferecer um cliente que só tem declínio
-    // criaria uma opção que nunca traz linha, e a pessoa filtraria por ela achando que a fila
-    // esvaziou.
+    // SEIS consultas de universo, todas recortando por farol. QUATRO do universo COM link vivo: o
+    // recorte do funil, o total da lista, a página e o CATÁLOGO dos filtros. O catálogo entrou na
+    // conta porque oferecer um cliente que só tem declínio criaria uma opção que nunca traz linha, e
+    // a pessoa filtraria por ela achando que a fila esvaziou. DUAS do recorte "Sem Link" (frente A.1),
+    // que é outro universo (FROM admissoes, sem link vivo): a contagem (`contarSemLink`) e o total da
+    // lista (`listarSemLink`). O que esta invariante trava é que NENHUMA consulta de universo deixa o
+    // declínio entrar, inclusive as do Sem Link.
     const universo = (CODIGO_SERVICO.match(/notInArray\(admissoes\.farolGlobal/g) ?? []).length;
-    expect(universo).toBe(4);
+    expect(universo).toBe(6);
   });
 });
 
@@ -437,6 +440,9 @@ describe("os cinco contadores", () => {
       naoAcessaram: 0,
       concluiram: 0,
       intervencaoHumana: 0,
+      // `semLink` (frente A.1) é o sexto contador, e tem default 0 em `contarPainel` quando a frente
+      // não passa o número (recorte vazio: sem link vivo e sem falha carimbada, zero).
+      semLink: 0,
     });
   });
 });
@@ -945,6 +951,10 @@ describe("a lista, ponta a ponta contra o banco de mentirinha", () => {
       // QUEM ENVIOU PELO FUNIL: o NOME DO USUÁRIO, nunca o do candidato. Este é o campo que o fake
       // anterior preenchia com "Candidato Sintético" por casar a consulta pela forma da projeção.
       consultorQueEnviou: "Consultora Fulana",
+      // RECORTE NORMAL (com link vivo) não tem falha de emissão: o motivo é `null` (frente A.1). Só as
+      // linhas do recorte "Sem Link" trazem o código. A linha regular carrega o campo como parte do
+      // contrato `LinhaDoPainelPortal`.
+      linkFalhaMotivo: null,
     });
     // A GARANTIA EXPLÍCITA CONTRA O ARTEFATO: o consultor NÃO é o nome do candidato.
     expect(pagina.itens[0].consultorQueEnviou).not.toBe("Candidato Sintético");
@@ -1245,6 +1255,9 @@ describe("as duas abas, recortadas no servidor", () => {
       naoAcessaram: 0,
       concluiram: 1,
       intervencaoHumana: 0,
+      // `semLink` (frente A.1): o banco de mentirinha simplifica e conta as admissões com link do
+      // recorte (duas), sem modelar o carimbo de falha. Não muda com a aba, como os outros cinco.
+      semLink: 2,
     });
     // E a conta fecha com as duas abas somadas: 1 concluído + 1 em andamento = 2 encaminhados.
     const emAndamento = (await servicoDois().listar({})).itens.length;

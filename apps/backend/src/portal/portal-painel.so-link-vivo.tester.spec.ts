@@ -361,16 +361,26 @@ describe("A troca do recorte está no código do serviço", () => {
     expect(CODIGO_SERVICO).not.toMatch(/admissoes\.origem\b/);
   });
 
-  it("o recorte novo é aplicado em TODA consulta que define o universo, igual ao filtro de farol", () => {
+  it("o recorte novo é aplicado nas QUATRO consultas do universo COM link vivo", () => {
     const vivo = (CODIGO_SERVICO.match(/TEM_LINK_VIVO/g) ?? []).length - 1; // menos a declaração
+    expect(vivo).toBe(4); // as quatro consultas do universo com link vivo: funil, total, página e catálogo
+    // O cruzamento antigo "farol aplicado tantas vezes quanto TEM_LINK_VIVO" deixou de valer quando a
+    // frente A.1 trouxe o recorte "Sem Link": ele é OUTRO universo (FROM admissoes, por definição sem
+    // link vivo), que filtra por farol mas NÃO por TEM_LINK_VIVO. Logo `notInArray(farolGlobal)` passou
+    // a aparecer mais vezes que TEM_LINK_VIVO, de propósito. O filtro de farol continua travado consulta
+    // a consulta no teste `aplica TEM_LINK_VIVO` abaixo e nos da cobertura independente; aqui a invariante
+    // é só que as QUATRO consultas do universo com link vivo aplicam o recorte, e nenhuma ficou de fora.
     const farol = (CODIGO_SERVICO.match(/notInArray\(admissoes\.farolGlobal/g) ?? []).length;
-    expect(farol).toBe(4); // recorte do funil, total, página e catálogo
-    expect(vivo).toBe(farol); // onde o farol recorta, o link vivo também recorta
+    expect(farol).toBeGreaterThanOrEqual(vivo); // o farol recorta o universo com link vivo E o Sem Link
   });
 
   it.each([
     ["o recorte do funil", "acessou: sql<boolean>"],
-    ["o total da lista", "total: sql<number>"],
+    // Anchor específico do total da lista (universo COM link vivo): ele conta `portalLinks.admissaoId`.
+    // A frente A.1 trouxe um recorte "Sem Link" que também tem um `total: sql<number>`, mas conta
+    // `admissoes.id` (outro universo, sem TEM_LINK_VIVO), então o anchor genérico pegaria a consulta
+    // errada. Mirar `portalLinks.admissaoId` prende a consulta certa, que é a que deve recortar por link vivo.
+    ["o total da lista", "count(distinct ${portalLinks.admissaoId})"],
     ["a página", "encaminhadoEm: sql<Date>"],
     ["o catálogo de filtros", "codCliente: admissoes.codCliente"],
   ])("%s aplica `TEM_LINK_VIVO`", (_nome, ancora) => {
@@ -394,6 +404,9 @@ describe("requisito 1: a admissão cujo único link está revogado some de tudo"
       naoAcessaram: 0,
       concluiram: 0,
       intervencaoHumana: 0,
+      // `semLink` (frente A.1) entrou no resumo: a admissão aqui tem link SÓ revogado, sem carimbo de
+      // falha de emissão, então não conta como "Sem Link" tão pouco. Zero, como os outros cinco.
+      semLink: 0,
     });
     const pagina = await servico(dados).listar({});
     expect(pagina.total).toBe(0);

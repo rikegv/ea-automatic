@@ -201,6 +201,18 @@ export const PORTAL_EVENTOS = [
   "PORTAL_ACESSO_TRAVADO",
   "PORTAL_ACESSO_DESTRAVADO",
   "PORTAL_ACESSO_DESTRAVE_RECUSADO",
+  // ── A EMISSAO AUTOMATICA DO LINK FALHOU NA LIBERACAO (frente A.1) ─────────────────────────────
+  //
+  // ELE EXISTE PORQUE O GANCHO ENGOLIA A FALHA EM SILENCIO: a liberacao emite o link best-effort e
+  // o catch so logava o nome do erro, entao "liberou e o link nao saiu" nao tinha rastro nenhum. O
+  // estado consultavel mora em `admissoes` (tres colunas), e este evento e o espelho dele na trilha,
+  // para a Sala De Seguranca CONTAR quantas emissoes falharam e por que codigo, sem ler o banco.
+  //
+  // ELE NAO E O `PORTAL_LINK_REVOGADO` nem o `ENVIO_FALHOU`: aqueles sao sobre um link que CHEGOU a
+  // existir e foi revogado. Aqui nenhum link nasceu (a emissao se absteve ou estourou antes), entao
+  // `jti_link` e `candidato_hash` ficam NULOS de proposito (mesmo padrao dos eventos da porta de
+  // e-mail). Ele carrega so `motivoCodigo` (catalogo fechado), `origem` ("AUTOMATICO") e `tentativaN`.
+  "PORTAL_LINK_EMISSAO_FALHOU",
 ] as const;
 
 export type PortalEventoTipo = (typeof PORTAL_EVENTOS)[number];
@@ -231,6 +243,9 @@ const TIPOS_RECUSADOS = new Set<string>([
   "PORTAL_ACESSO_EMAIL_CODIGO_ERRADO",
   "PORTAL_ACESSO_TRAVADO",
   "PORTAL_ACESSO_DESTRAVE_RECUSADO",
+  // A emissao que nao saiu e recusa: o candidato ficou sem o link. Entra aqui para o `resultado`
+  // nascer RECUSADO sem o chamador precisar lembrar de passar o campo.
+  "PORTAL_LINK_EMISSAO_FALHOU",
 ]);
 
 /**
@@ -423,6 +438,27 @@ export const PORTAL_MOTIVOS = [
   // que é sinal e não rotina.
   "TRAVA_JA_DESTRAVADA",
   "TRAVA_INEXISTENTE",
+  // ── OS CODIGOS DA FALHA DE EMISSAO AUTOMATICA DO LINK (frente A.1) ────────────────────────────
+  //
+  // ELES PRECISAM EXISTIR AQUI, e nao e formalidade: `PORTAL_MOTIVOS` e lista FECHADA e
+  // `montarEventoPortal` DESCARTA o codigo que nao esteja nela, virando `motivo_codigo` NULO (a
+  // cicatriz do `TENTATIVAS_ESGOTADAS`). O evento `PORTAL_LINK_EMISSAO_FALHOU` carrega um destes, e
+  // sem eles a Sala De Seguranca leria "falhou sem dizer por que". Sao o MESMO vocabulario que a
+  // coluna `admissoes.portal_link_falha_motivo` grava, espelhando `MotivoDeRecusaDeEnvio`.
+  //
+  // `SEM_EMAIL`/`EMAIL_INVALIDO`: dado faltando (taxonomia c), carimba SEM retry.
+  // `CANAL_INDISPONIVEL`/`FALHA_NO_ENVIO`: falha transitoria (taxonomia b), carimba + retry.
+  // `EXCECAO_INESPERADA`: o gancho estourou um erro nao previsto (taxonomia b). So o rotulo fixo,
+  // NUNCA a mensagem do erro (ela pode carregar e-mail ou URL, sec. A.6; o nome da classe vai so
+  // para o log ERRO, como ja era).
+  //
+  // `FALHA_NO_ENVIO` E DIFERENTE do `ENVIO_FALHOU` acima: aquele e a REVOGACAO do link que chegou a
+  // nascer quando o e-mail nao saiu; este e o motivo da EMISSAO que nao se concretizou.
+  "SEM_EMAIL",
+  "EMAIL_INVALIDO",
+  "CANAL_INDISPONIVEL",
+  "FALHA_NO_ENVIO",
+  "EXCECAO_INESPERADA",
 ] as const;
 
 export type PortalMotivo = (typeof PORTAL_MOTIVOS)[number];

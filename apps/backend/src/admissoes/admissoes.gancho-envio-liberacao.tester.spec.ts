@@ -76,7 +76,7 @@ function nasceuFrentes(inserts: unknown[]): boolean {
  * O `portalEnvio` entra na QUARTA posição do construtor, e o logger é substituído por um coletor para
  * as asserções de §A.6 e para não poluir a saída do teste.
  */
-function montar(portalEnvio?: unknown) {
+function montar(portalEnvio?: unknown, portalLinkRetry?: unknown) {
   const inserts: unknown[] = [];
   const logs: string[] = [];
   const capturarInsert = () => ({
@@ -133,7 +133,13 @@ function montar(portalEnvio?: unknown) {
     transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
 
-  const service = new AdmissoesService(db as never, undefined, undefined, portalEnvio as never);
+  const service = new AdmissoesService(
+    db as never,
+    undefined,
+    undefined,
+    portalEnvio as never,
+    portalLinkRetry as never,
+  );
   (service as any).logger = {
     warn: (m: unknown) => logs.push(String(m)),
     error: (m: unknown) => logs.push(String(m)),
@@ -258,5 +264,72 @@ describe("(d) registrarSaida cria a pré-admissão + grava admissao_id, e NÃO e
     // NÃO EMITE: nenhum caminho de envio do Portal é tocado na saída do funil.
     expect(portalSpy.enviarParaAdmissao).not.toHaveBeenCalled();
     expect(portalSpy.enviarParaCandidaturas).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ─ (f) O FIM DO SILÊNCIO: a liberação REPASSA o desfecho ao PortalLinkRetryService (frente A.1) ──
+ *
+ * `portalLinkRetry` é o SEXTO parâmetro do construtor (`@Optional()`, posição 5). O gancho da
+ * liberação, depois de `enviarParaAdmissao`, chama `registrarResultado(admissaoId, autorId, envio)`
+ * no caminho sem exceção e `registrarExcecao(admissaoId, autorId)` quando o envio LANÇA. Estas
+ * asserções são o que o requisito A.1 acrescentou ao gancho e que as letras (a)/(b)/(c) acima não
+ * cobrem: elas provam que a liberação não quebra, mas não que o rastro passa a ser gravado.
+ *
+ * NOTA (achado, §A.38): o caso (c) acima usa o motivo "SEM_DESTINATARIO", que NÃO pertence ao
+ * catálogo `MOTIVOS_DE_RECUSA_DE_ENVIO` (SEM_EMAIL, EMAIL_INVALIDO, SEM_ADMISSAO, CANAL_INDISPONIVEL,
+ * LINK_VIVO_EM_USO, ENVIADO_HA_POUCO, FALHA_NO_ENVIO). O teste passa porque só confere que o log
+ * repete a string do motivo, mas o código é defasado; abaixo usamos motivos reais do catálogo.
+ */
+describe("(f) o desfecho é REPASSADO ao PortalLinkRetryService", () => {
+  it("resultado sem exceção -> registrarResultado(admissaoId, autorId, envio), e NÃO registrarExcecao", async () => {
+    const envio = { enviado: false, motivo: "CANAL_INDISPONIVEL" };
+    const portal = { enviarParaAdmissao: vi.fn().mockResolvedValue(envio) };
+    const retry = { registrarResultado: vi.fn().mockResolvedValue(undefined), registrarExcecao: vi.fn() };
+    const { service } = montar(portal, retry);
+
+    const r = await service.liberar("a1", seteCompletos, MASTER);
+
+    expect(r.admissaoId).toBe("a1");
+    expect(retry.registrarResultado).toHaveBeenCalledTimes(1);
+    expect(retry.registrarResultado).toHaveBeenCalledWith("a1", MASTER.id, envio);
+    expect(retry.registrarExcecao).not.toHaveBeenCalled();
+  });
+
+  it("envio SUCESSO -> registrarResultado recebe o resultado com enviado:true (limpa o estado lá dentro)", async () => {
+    const envio = { enviado: true, motivo: null };
+    const portal = { enviarParaAdmissao: vi.fn().mockResolvedValue(envio) };
+    const retry = { registrarResultado: vi.fn().mockResolvedValue(undefined), registrarExcecao: vi.fn() };
+    const { service } = montar(portal, retry);
+
+    await service.liberar("a1", seteCompletos, MASTER);
+
+    expect(retry.registrarResultado).toHaveBeenCalledWith("a1", MASTER.id, envio);
+    expect(retry.registrarExcecao).not.toHaveBeenCalled();
+  });
+
+  it("envio que LANÇA -> registrarExcecao(admissaoId, autorId), e NÃO registrarResultado", async () => {
+    const portal = { enviarParaAdmissao: vi.fn().mockRejectedValue(new Error("correio fora do ar")) };
+    const retry = { registrarResultado: vi.fn(), registrarExcecao: vi.fn().mockResolvedValue(undefined) };
+    const { service, inserts } = montar(portal, retry);
+
+    const r = await service.liberar("a1", seteCompletos, MASTER);
+
+    // A liberação conclui (frentes criadas) mesmo com o envio lançando.
+    expect(r.admissaoId).toBe("a1");
+    expect(nasceuFrentes(inserts)).toBe(true);
+    expect(retry.registrarExcecao).toHaveBeenCalledTimes(1);
+    expect(retry.registrarExcecao).toHaveBeenCalledWith("a1", MASTER.id);
+    expect(retry.registrarResultado).not.toHaveBeenCalled();
+  });
+
+  it("sem portalLinkRetry injetado, a liberação segue igual (optional-chaining, comportamento antigo)", async () => {
+    const portal = { enviarParaAdmissao: vi.fn().mockResolvedValue({ enviado: false, motivo: "FALHA_NO_ENVIO" }) };
+    const { service } = montar(portal, undefined);
+
+    const r = await service.liberar("a1", seteCompletos, MASTER);
+
+    expect(r.admissaoId).toBe("a1");
+    expect(portal.enviarParaAdmissao).toHaveBeenCalledTimes(1);
   });
 });

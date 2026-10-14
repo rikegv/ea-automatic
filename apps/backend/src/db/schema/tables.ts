@@ -908,6 +908,16 @@ export const admissoes = pgTable(
     // §A.6: texto de motivo e código de tipo de documento, nunca nome, CPF, arquivo ou URL externa.
     driveFalhaMotivo: text("drive_falha_motivo"),
     driveFalhaEm: timestamp("drive_falha_em", { withTimezone: true }),
+    // FIM DO SILÊNCIO DA EMISSÃO DO LINK DO PORTAL (frente A.1). O gancho de emissão na liberação
+    // era best-effort e ENGOLIA a exceção: o candidato ficava liberado e sem link, sem rastro no
+    // banco. Agora a falha carimba aqui, o sucesso LIMPA os três campos, e "liberou e o link não
+    // saiu" vira consulta (`portal_link_falha_em IS NOT NULL` e sem link vivo). Alimenta o sinal
+    // "Sem Link" do Gerenciador do Portal e a fila de retry (BullMQ).
+    // §A.6: `portal_link_falha_motivo` guarda só o CÓDIGO fechado do motivo (catálogo
+    // `MotivoDeRecusaDeEnvio` + `EXCECAO_INESPERADA`), NUNCA e-mail, link, token, CPF, nome ou id.
+    portalLinkFalhaEm: timestamp("portal_link_falha_em", { withTimezone: true }),
+    portalLinkFalhaMotivo: varchar("portal_link_falha_motivo", { length: 40 }),
+    portalLinkTentativas: integer("portal_link_tentativas").notNull().default(0),
     // PASTAS DUPLICADAS do prontuário (OST da duplicação). Ids das OUTRAS pastas com o mesmo nome
     // encontradas no Drive, separados por vírgula. O arquivamento escolhe a mais completa, NUNCA
     // trava por ambiguidade, e deixa aqui o que sobrou para o diretor consolidar e apagar à mão

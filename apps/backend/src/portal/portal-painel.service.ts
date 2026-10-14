@@ -169,6 +169,12 @@ export interface LinhaDoPainelPortal {
    * candidato já é. Nenhum CPF, e-mail ou id de pessoa do candidato entra aqui.
    */
   consultorQueEnviou: string | null;
+  /**
+   * O CÓDIGO da falha de emissão (frente A.1), presente SÓ nas linhas do recorte "semLink" (as que
+   * não têm link vivo e foram carimbadas). Diz ao ADM por que o link não saiu, para corrigir e
+   * reemitir. Ausente nas linhas normais. §A.6: só o código fechado, nunca e-mail, link ou PII.
+   */
+  linkFalhaMotivo?: string | null;
 }
 
 export interface PaginaDoPainelPortal {
@@ -221,6 +227,25 @@ const TEM_LINK_VIVO: SQL = sql`exists (
   select 1 from ${portalLinks} pl
   where pl.admissao_id = ${admissoes.id}
     and pl.revogado_em is null
+)`;
+
+/**
+ * LIBERADO MAS SEM LINK VIVO (frente A.1). A NEGAÇÃO EXATA de `TEM_LINK_VIVO` cruzada com o estado de
+ * falha carimbado: a admissão foi liberada, a emissão automática falhou (`portal_link_falha_em` não
+ * nulo) e NÃO há link vivo. É a população que o `TEM_LINK_VIVO` exclui de propósito do Gerenciador,
+ * e que o ADM precisa VER para corrigir o e-mail e reemitir (taxonomia c) ou aguardar o retry (b).
+ *
+ * O ESTADO DE FALHA É A CHAVE, não só "sem link vivo": nem toda admissão sem link vivo é falha (a
+ * maioria nunca precisou de link, e o fluxo-2 não recebe por desenho). Só entram as que a liberação
+ * TENTOU emitir e não conseguiu. §A.6: lê só `admissao_id`, `revogado_em` e o carimbo, sem PII.
+ */
+const SEM_LINK_CARIMBADO: SQL = sql`(
+  ${admissoes.portalLinkFalhaEm} is not null
+  and not exists (
+    select 1 from ${portalLinks} pl
+    where pl.admissao_id = ${admissoes.id}
+      and pl.revogado_em is null
+  )
 )`;
 
 /**
@@ -362,8 +387,12 @@ export class PortalPainelService {
    * admissões da base e cresce com a adoção do portal, não com o histórico.
    */
   async resumo(): Promise<ResumoDoPainelPortal> {
+    // SEM LINK (frente A.1) é população DISJUNTA do funil, contada por consulta própria e SEMPRE,
+    // mesmo quando não há encaminhado nenhum (pode haver quem falhou a emissão sem nunca ter link).
+    const semLink = await this.contarSemLink();
+
     const encaminhados = await this.encaminhados();
-    if (encaminhados.length === 0) return contarPainel([]);
+    if (encaminhados.length === 0) return contarPainel([], semLink);
 
     const ids = encaminhados.map((e) => e.admissaoId);
     // O PROGRESSO, E NÃO O CONTADOR DE PENDENTES (achado M1 da auditoria): os dois saem da mesma
@@ -384,7 +413,106 @@ export class PortalPainelService {
         noTime: noTime.has(e.admissaoId),
       };
     });
-    return contarPainel(fatos);
+    return contarPainel(fatos, semLink);
+  }
+
+  /**
+   * CONTA OS LIBERADOS SEM LINK VIVO (frente A.1), fora do recorte do funil. Mesma régua da coluna:
+   * estado de falha carimbado e sem link vivo, excluídos os faróis terminais/pré-liberação. §A.6:
+   * conta `distinct admissao_id`, sem PII.
+   */
+  private async contarSemLink(): Promise<number> {
+    const [{ total } = { total: 0 }] = await this.db
+      .select({ total: sql<number>`count(distinct ${admissoes.id})::int` })
+      .from(admissoes)
+      .where(and(notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]), SEM_LINK_CARIMBADO));
+    return total ?? 0;
+  }
+
+  /**
+   * A LISTA DOS LIBERADOS SEM LINK VIVO (frente A.1, recorte "semLink").
+   *
+   * CONSULTA PRÓPRIA, e não um recorte dentro de `listar`: o universo do painel é `FROM portal_links`
+   * (só quem tem link), e esta população não tem link vivo, logo é estruturalmente invisível lá. Aqui
+   * o FROM é `admissoes`, com a mesma régua de farol e os MESMOS mapas de cabeçalho/régua/consultor
+   * que a lista principal usa, para a linha render igual. A ordem é a falha mais RECENTE primeiro
+   * (mais urgente). O único filtro aplicado é a busca por NOME (§A.6: nunca por CPF), que é o que o
+   * ADM tem na mão; os demais filtros não se aplicam a quem ainda não tem link.
+   */
+  private async listarSemLink(entrada: FiltrosDaListaDoPainel): Promise<PaginaDoPainelPortal> {
+    const { limite, deslocamento } = recorteDaPagina(entrada);
+    const nome = (entrada.nome ?? "").trim();
+    const filtroNome = nome.length > 0 ? ilike(candidatos.nome, `%${nome}%`) : undefined;
+    const where = and(
+      notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+      SEM_LINK_CARIMBADO,
+      ...(filtroNome ? [filtroNome] : []),
+    );
+
+    const [{ total } = { total: 0 }] = await this.db
+      .select({ total: sql<number>`count(distinct ${admissoes.id})::int` })
+      .from(admissoes)
+      .innerJoin(candidatos, LIGA_CANDIDATO)
+      .where(where);
+
+    const pagina = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        falhaEm: admissoes.portalLinkFalhaEm,
+        motivo: admissoes.portalLinkFalhaMotivo,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, LIGA_CANDIDATO)
+      .where(where)
+      .orderBy(desc(admissoes.portalLinkFalhaEm))
+      .limit(limite)
+      .offset(deslocamento);
+
+    const ids = pagina.map((p) => p.admissaoId);
+    if (ids.length === 0) {
+      return { itens: [], total: total ?? 0, pagina: paginaPedida(deslocamento, limite), tamanho: limite };
+    }
+
+    const [cabecalhos, comCandidaturaAS, consultores, liberadores, progresso, proximos, noTime] =
+      await Promise.all([
+        this.cabecalhos(ids),
+        this.admissoesComCandidaturaAS(ids),
+        this.consultorQueEnviouMap(ids),
+        this.liberadorDoLinkVigenteMap(ids),
+        this.regua.progressoObrigatoriosMap(ids),
+        this.regua.proximoObrigatorioPendenteMap(ids),
+        this.admissoesNoTime(ids),
+      ]);
+
+    const itens: LinhaDoPainelPortal[] = pagina.map((linha) => {
+      const cabecalho = cabecalhos.get(linha.admissaoId);
+      const prog = progresso.get(linha.admissaoId) ?? { entregues: 0, total: 0 };
+      return {
+        admissaoId: linha.admissaoId,
+        nome: cabecalho?.nome ?? "não informado",
+        cargo: cabecalho?.cargo ?? "não informado",
+        cliente: cabecalho?.cliente ?? "não informado",
+        dataAdmissao: cabecalho?.dataAdmissao ?? null,
+        documentoAtual: proximos.get(linha.admissaoId) ?? null,
+        aceitos: prog.entregues,
+        obrigatorios: prog.total,
+        noTime: noTime.has(linha.admissaoId),
+        // Sem link vivo: nunca acessou por um link que existisse, logo sem carimbo de acesso.
+        ultimoAcessoEm: null,
+        // NÃO HÁ LINK VIGENTE. `REVOGADO` é o estado seguro de leitura (mesma direção da lista
+        // principal quando a linha some); a tela desta visão mostra "Sem Link" pelo recorte e pelo
+        // `linkFalhaMotivo`, não por este campo.
+        estadoLink: "REVOGADO",
+        origemEnvio: null,
+        linkJti: null,
+        origemAdmissao: comCandidaturaAS.has(linha.admissaoId) ? "ATRACAO_SELECAO" : "MANUAL",
+        consultorQueEnviou:
+          consultores.get(linha.admissaoId) ?? liberadores.get(linha.admissaoId) ?? null,
+        linkFalhaMotivo: linha.motivo ?? null,
+      };
+    });
+
+    return { itens, total: total ?? 0, pagina: paginaPedida(deslocamento, limite), tamanho: limite };
   }
 
   /**
@@ -402,6 +530,12 @@ export class PortalPainelService {
    * já está sendo cobrado por outro caminho.
    */
   async listar(entrada: FiltrosDaListaDoPainel = {}): Promise<PaginaDoPainelPortal> {
+    // SEM LINK (frente A.1): recorte que TROCA o universo (liberados sem link vivo), consulta própria
+    // `FROM admissoes`. Sai ANTES de `condicoesDeSql` de propósito: aquele valida `recorte` contra os
+    // quatro cards do universo com link e devolveria 400 para "semLink", além de o `FROM portal_links`
+    // não alcançar quem não tem link. O caminho `TEM_LINK_VIVO` e seu teste travado ficam intocados.
+    if ((entrada.recorte ?? "") === "semLink") return this.listarSemLink(entrada);
+
     const { limite, deslocamento } = recorteDaPagina(entrada);
     const condicoes = this.condicoesDeSql(entrada);
     // OS FILTROS QUE O BANCO NÃO SABE RESPONDER, resolvidos ANTES da página. Ver `idsQuePassam`.
@@ -501,6 +635,10 @@ export class PortalPainelService {
         // autor. O `??` encadeado é o tie-break explícito pedido: funil primeiro, liberador como fallback.
         consultorQueEnviou:
           consultores.get(linha.admissaoId) ?? liberadores.get(linha.admissaoId) ?? null,
+        // RECORTE NORMAL (com link vivo) NÃO tem falha de emissão: o motivo é `null`. O `semLink` o
+        // preenche com o código. Mantém a linha com a MESMA forma do contrato (`LinhaDoPainelPortal`),
+        // que é o que a cobertura independente trava.
+        linkFalhaMotivo: null,
       };
     });
 

@@ -83,6 +83,13 @@ export type LinhaComJtiOpcional = LinhaDoPainelPortal & {
   origemAdmissao?: OrigemDaAdmissaoPortal | null;
   /** Quem clicou "enviar para admissão" (o consultor do envio), NÃO o responsável pela vaga. */
   consultorQueEnviou?: string | null;
+  /**
+   * O CÓDIGO FECHADO do motivo da falha de emissão (frente A.1), presente só nas linhas do recorte
+   * "semLink" (§A.6: só o código, nunca e-mail nem detalhe). O alias já o carrega enquanto o
+   * contrato o acrescenta à linha em `shared-types`; a interseção resolve para o campo do servidor
+   * quando ele chegar. Ver `rotuloDaFalhaDoLink` para o texto da tela.
+   */
+  linkFalhaMotivo?: string | null;
 };
 
 export const rotaBloquear = (id: string) => `/portal/links/${id}/bloquear`;
@@ -156,6 +163,30 @@ export function motivoSemAcaoDeLink(estado: EstadoLinkPainel | string): string {
   if (estado === "REVOGADO")
     return "O link foi revogado por uma emissão nova. Gere um link novo para o candidato voltar.";
   return "Nenhum link vivo para bloquear. Gere um link primeiro.";
+}
+
+// ── A falha de emissão (recorte "semLink", frente A.1) ────────────────────────────────────────────
+
+/**
+ * O MOTIVO DA FALHA DE EMISSÃO AUTOMÁTICA, em Title Case (§A.24). O dado é o CÓDIGO FECHADO do
+ * backend (§A.6); o texto é escolha desta tela. Só as linhas do recorte "semLink" trazem o motivo:
+ * é o que diz ao ADM por que o link não saiu, para ele corrigir e reemitir dali.
+ *
+ * Código fora do catálogo, ou ausente, cai em "Sem Link" (o mesmo rótulo do pill da coluna), nunca
+ * código cru e nunca traço (§A.11).
+ */
+export const ROTULO_DA_FALHA_DO_LINK: Record<string, string> = {
+  SEM_EMAIL: "Sem E-mail",
+  EMAIL_INVALIDO: "E-mail Inválido",
+  CANAL_INDISPONIVEL: "Canal Indisponível",
+  FALHA_NO_ENVIO: "Falha No Envio",
+  EXCECAO_INESPERADA: "Erro Inesperado",
+};
+
+/** O texto da falha para a célula. Desconhecido ou ausente vira "Sem Link" (§A.11). */
+export function rotuloDaFalhaDoLink(motivo: string | null | undefined): string {
+  if (!motivo) return "Sem Link";
+  return ROTULO_DA_FALHA_DO_LINK[motivo] ?? "Sem Link";
 }
 
 // ── A situação da linha ─────────────────────────────────────────────────────────────────────────
@@ -234,7 +265,12 @@ export type CardId =
   | "acessaram"
   | "naoAcessaram"
   | "concluiram"
-  | "intervencaoHumana";
+  | "intervencaoHumana"
+  // SEM LINK VIVO (frente A.1): liberados cuja emissão automática falhou. O card recorta a
+  // população liberada, sem link, para o ADM reemitir dali. O valor casa com o recorte do
+  // contrato (`RecorteDoPainelPortal`), então ele atravessa `selecionarCard` e `queryDoPainel`
+  // pelo mesmo caminho dos outros quatro, sem régua nova.
+  | "semLink";
 
 /**
  * O recorte em vigor, e ele é O DO CONTRATO (`RecorteDoPainelPortal`), não uma cópia local.
