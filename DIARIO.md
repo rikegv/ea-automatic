@@ -21876,3 +21876,63 @@ conserto determinístico + auditoria de segurança + deploy; o diretor confirma 
   doc vira ENTREGUE por decisão humana (1 linha, espelha o 1314), fechando a lacuna; e/ou (2) uma rede de
   segurança agendada (cron) rodando `arquivarPortal` idempotente para admissões vivas com doc do Portal
   confirmado ainda fora do prontuário, espelhando a reconciliação da esteira.
+
+## 2026-10-14 — Portal: porta de e-mail resolve pela ficha da ADMISSAO (nao mais pelo funil) [COMMIT 469a6e7, no ar]
+
+**O pedido do diretor (Rike).** Varios candidatos davam "E-mail nao identificado" na porta de e-mail
+do Portal (`POST portal/acesso-email/solicitar`) porque a porta resolvia a identidade pelo e-mail da
+ficha do FUNIL (`as_candidatos.email`), mas o time cadastra o e-mail na LIBERACAO ADMISSIONAL, na ficha
+da ADMISSAO (`candidatos.email`). Como o gatilho do link e a liberacao admissional, a porta tinha de
+olhar a ficha do ADM. Casos reais: Cristian Leopold Waiss, Cleiton (padrao "assimetria D2" ja
+registrado no caso Cleiton de 14/10).
+
+**Investigacao de alcance (§A.27, producao, read-only, §A.6).** O pipeline inteiro da porta e chaveado
+no `as_candidatos.id` do FUNIL (`portal_acesso_codigos.as_candidato_id`, a gravacao de CPF em
+`identidade`, a reconciliacao do PROV). So **81** admissoes vivas tem candidato de funil vinculado (a
+coluna `as_candidaturas.admissao_id` nasce quase toda nula, §A.47); os ~**39** operacionais sem funil
+(com ficha-email) sao TODOS CPF-real, que entram pela porta CLASSICA (CPF+nascimento), nao pela de
+e-mail. Logo "trocar puro para a ficha" nao quebra o pipeline da porta de e-mail: a resolucao casa pela
+ficha da admissao viva e devolve o id do funil ligado a ela. O diretor escolheu (AskUserQuestion, com o
+trade-off na mesa) a TROCA PURA: a porta deixa de olhar o funil.
+
+**O recorte (COMMIT 469a6e7).**
+- `admissoes.service.ts`: metodo novo `candidatosDeFunilPorEmailDaFichaDeAdmissao(email, farolExcluido,
+  limite)` = `selectDistinct({id: asCandidatos.id})` com innerJoin asCandidatos->asCandidaturas->
+  admissoes->candidatos, filtrando `lower(trim(candidatos.email))=email`, `isNull(anonimizadoEm)` e
+  `notInArray(admissoes.farolGlobal, farolExcluido)`. Devolve so `{id}[]`.
+- `portal-acesso-email.service.ts` (`solicitar`): a consulta antiga pelo funil virou DELEGACAO a esse
+  metodo, passando `[...FAROIS_FORA_DO_PAINEL]` e `TRAVA_AMBIGUO_TETO+1`. Ramo de ambiguidade, desempate
+  (`candidatosComAdmissaoViva`), trava e envio ficaram IDENTICOS.
+- **Por que a leitura mora no AdmissoesService e nao na porta:** a porta tem a TRAVA 1
+  (`portal-acesso-email.travas.tester.spec.ts`) que proibe importar `candidatos` ou tocar
+  `candidato_cpf` (o veto da v1: CPF do corpo achava pessoa e abria o Portal de um terceiro). Mover a
+  leitura da ficha ao servico de admissoes mantem a trava 1 inteira: a porta segue, por construcao,
+  incapaz de resolver por CPF, e o unico dado do corpo que entra e o e-mail.
+
+**Gate.** typecheck 0, lint 0, suite portal+admissoes verde (1809) + spec estrutural novo
+(`portal-acesso-email.resolve-ficha-adm.tester.spec.ts`) + **teste de INTEGRACAO** novo
+(`admissoes/candidatos-por-ficha-admissao.integra.spec.ts`, contra Postgres, em transacao com rollback,
+pula sem DATABASE_URL) que exercita o metodo REAL e prova: (a) uma admissao viva resolve e devolve o id
+do funil (com e-mail de funil DIFERENTE, provando que nao olha o funil); (b) ficha anonimizada excluida;
+(c) farol morto excluido; (d) dois funis distintos com a mesma ficha-email -> 2 (trava); (e) um funil com
+duas admissoes vivas -> dedup para 1 (sem trava falsa); (f) inexistente -> vazio.
+
+**Auditorias (§A.38).** `seguranca` adversarial = **APROVADO**, sem veto: trava 1 intacta (porta com 0
+`candidatoCpf`, sem import de `candidatos`), joins so FK (coluna com coluna), e-mail e o unico dado do
+corpo, codigo vai ao e-mail digitado (guarda de posse), anonimizado filtrado, ambiguidade trava, sem rota
+nova. Observacao nao-veto: a tabela `candidatos` nao tem coluna de anonimizacao, mas nao vaza porque a
+resolucao exige `as_candidatos` vivo nao-anonimizado + posse da caixa. `tester` independente devolveu
+gaps; TODOS fechados: o CRITICO (cobertura so estrutural) pelo teste de integracao comportamental acima,
+mais composicao pinada (innerJoin x3, `and` nao `or`, sem `asCandidatos.email` no resolver), argumentos
+da delegacao, `.limit(limite)` e recorte do corpo sem sangrar no metodo vizinho.
+
+**Prova em producao (read-only, §A.6, sem PII).** Sob a query NOVA (ficha do ADM): Cristian resolve para
+**1** candidato de funil (sob a query ANTIGA do funil era **0**, exatamente por que caia em "nao
+identificado"); Cleiton resolve para **1**; e-mail inexistente = **0** (segue neutro). Regressao da troca
+pura: so **3** enderecos de FUNIL DEFASADOS deixam de resolver (os 3 divergentes, cujo e-mail ATUAL esta
+na ficha e passa a resolver); nenhum endereco que o candidato realmente usa regride.
+
+**Confirmacao:** a porta agora le a ficha do ADM, nao o funil. Cristian e Cleiton resolvem; na proxima
+tentativa deles no Portal, a porta identifica e despacha o codigo. Enumeracao: o bit `identificado`
+segue o mesmo oraculo ja aceito pelo diretor (§A.27); muda apenas QUAIS e-mails resolvem (ficha da
+admissao viva).
