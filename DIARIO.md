@@ -21706,3 +21706,18 @@ falhas` por admissão (100% = falhas 0 em todas), e a prova de pasta está no SQ
 Drive vs. Meu Drive. Enquanto não vier: rota do arquivador 403/503, cliente "não configurado", gatilho
 LIVE no-op, Auditoria mostra "indisponível" como hoje, runner recusa de copiar. Nada toca produção.
 **Nada pushado; o push depende de base limpa + validação do diretor (§A.21/§A.7/§A.49).**
+
+**COMPLEMENTO (mesma noite): a FÁBRICA conferiu o tipo de Drive, para o Rike não precisar.** Li pelo
+conector do Drive os metadados das pastas que já funcionam hoje (as mesmas de VT/esteira, por onde o
+prontuário vai). Medido: as 13 pastas-pai e toda a árvore acima (`…/Prontuários/ATIVO`, `…/1 -
+TEMPORÁRIOS/1 - ATIVOS`) têm `owner = admin.soulan@soulan.com.br` e `parentId` pessoal, **sem
+`driveId`** → **MEU DRIVE**, não Drive compartilhado. É por isso que a operação escreve lá por
+delegação de `admin.soulan@`. **Conclusão:** a conta cega pura (sem delegação, VS3) falharia com
+`storageQuotaExceeded` ao ESCREVER. O item (d) do PLANO foi **reescrito** (proposta, a fábrica não
+move Drive §A.0): mover a árvore para um **Drive compartilhado** (mover preserva os ids, a esteira
+segue igual) e dar à conta cega **Content Manager** (um acesso só, no lugar de 13). Delegação domain-
+wide à conta cega fica VETADA (devolveria a chave de admin.soulan@ ao processo que abre arquivo
+hostil). **Limite do estrago:** isto afeta SÓ o arquivamento (escrita no Drive). A **VISUALIZAÇÃO na
+Auditoria lê o balde (GCS), não o Drive**, então acende com (a)(b)(c), independente do tipo de Drive.
+Ou seja: com (a)(b)(c) + a instância ligada, o documento na Auditoria já aparece; o prontuário no
+Drive espera a decisão de (d). PLANO e PARECER atualizados.

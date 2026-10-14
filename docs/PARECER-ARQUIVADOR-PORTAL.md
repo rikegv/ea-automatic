@@ -56,11 +56,18 @@ IAM que só o Rike roda (`docs/PLANO-ARQUIVADOR-PORTAL.md`).
    gatilho LIVE no-op sem `PORTAL_ARQUIVAMENTO_ARMADO=true`; runner recusa sem cliente. Nada toca
    produção sem (a)(b)(c)(d).
 
-## RISCO ABERTO a confirmar com o diretor (§A.27)
+## RISCO CONFERIDO PELA FÁBRICA (§A.27): as pastas estão em MEU DRIVE
 
-A conta pura (sem delegação) só escreve em pasta de **Drive compartilhado**. Se a árvore do
-prontuário for **Meu Drive** (hoje a operação escreve lá por delegação de `admin.soulan@`), a conta
-pura é recusada com `storageQuotaExceeded`. Ver o box em `docs/PLANO-ARQUIVADOR-PORTAL.md`.
+A fábrica NÃO deixou esse risco para o Rike conferir: leu os metadados das pastas que já funcionam
+hoje (VT/esteira) pelo conector do Drive. Resultado medido (2026-10-14): as 13 pastas-pai e a árvore
+acima delas têm `owner = admin.soulan@soulan.com.br` e `parentId` pessoal, **sem `driveId`** → é
+**Meu Drive**. Logo a conta cega pura (sem delegação) falharia com `storageQuotaExceeded` ao ESCREVER,
+e delegação está vetada (VS3). O item (d) do `PLANO-ARQUIVADOR-PORTAL.md` foi **reescrito** para o
+caminho que funciona: a árvore passa a viver num **Drive compartilhado** (mover preserva os ids), com
+a conta cega como Content Manager (um acesso só). É PROPOSTA (a fábrica não move Drive, §A.0).
+
+**Isto afeta SÓ o arquivamento (escrita).** A **visualização na Auditoria lê o balde** (GCS), não o
+Drive, então acende com (a)(b)(c) independentemente do tipo de Drive.
 
 ## ACRÉSCIMO: documento do Portal na tela de Auditoria (conta cega)
 

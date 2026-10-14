@@ -9,11 +9,13 @@ para o documento entregue pelo Portal chegar ao prontuário (hoje ele fica só n
 arquivador já está pronto e INERTE (ver `docs/PARECER-ARQUIVADOR-PORTAL.md` e o DIARIO); ele só liga
 quando esta conta e este binding existirem.
 
-**UM binding destrava DUAS coisas, sem papel a mais.** Além de criar o prontuário no Drive, a mesma
-conta cega passa a servir o documento do Portal na tela de **Auditoria** (o time abre e vê o que o
-candidato anexou, como era no Pandapé). A visualização só LÊ o balde, então usa exatamente o
-`roles/storage.objectViewer` de (b): **não exige papel novo**, não escreve no Drive, não fura o VS3.
-Ao rodar (a)(b)(c)(d) e ligar a instância, prontuário + documento-na-auditoria acendem juntos.
+**A mesma conta cega entrega DUAS coisas, e elas acendem em MOMENTOS diferentes por causa do Drive
+(ver o box abaixo):**
+- **Documento na Auditoria** (o time abre e vê o que o candidato anexou): só LÊ o balde, usa o
+  `roles/storage.objectViewer` de (b), **não escreve no Drive**. **Acende com (a)(b)(c)** + a
+  instância ligada, independentemente do tipo de Drive. É a metade que não depende de (d).
+- **Prontuário no Drive** (copiar o documento para a pasta do candidato): ESCREVE no Drive, e aí o
+  tipo de Drive importa. **Acende com (d)**, que a fábrica reescreveu para o caminho que funciona.
 
 **Confirmado contra o Desenho 1 (memória da frente) e contra o banco de produção em 2026-10-14:**
 
@@ -26,15 +28,27 @@ Ao rodar (a)(b)(c)(d) e ligar a instância, prontuário + documento-na-auditoria
 | escrita no Drive | compartilhamento das 13 pastas-pai como **Editor**, SEM delegação domain-wide |
 | pastas-pai (conferidas no banco) | **13 ids distintos** em `drive_pasta_pai` (21 linhas, repetições apontam para o mesmo id) |
 
-> **PONTO QUE O COORDENADOR PRECISA CONFIRMAR COM O RIKE ANTES DE (d), e é o único risco real do
-> desenho:** a conta pura (sem delegação domain-wide) só consegue CRIAR arquivo numa pasta se a
-> árvore do prontuário viver em um **Drive compartilhado (Shared Drive)**. Se as 13 pastas-pai forem
-> de **Meu Drive** de uma pessoa (hoje a operação escreve nelas por delegação de `admin.soulan@`), a
-> conta pura é recusada com `storageQuotaExceeded` mesmo sendo Editor. **O conserto, se for o caso:
-> mover a árvore do prontuário para um Drive compartilhado e dar à conta o papel de gerenciador de
-> conteúdo nele** (um passo, no lugar de (d)). A fábrica mediu que a operação hoje usa delegação
-> (`DRIVE_DELEGATED_SUBJECT`), e o arquivador NÃO pode usar delegação (seria devolver a ele a chave
-> humana que a postura VS3 manda tirar). Decidir Shared Drive vs. Meu Drive é do diretor.
+> **CONFERIDO PELA FÁBRICA (2026-10-14), e MUDA o item (d): as 13 pastas-pai estão em MEU DRIVE, não
+> em Drive compartilhado.** A fábrica leu os metadados das pastas que JÁ funcionam hoje (as mesmas de
+> VT e da esteira) pelo conector do Drive: todas, subindo a árvore até o topo (`…/Prontuários/ATIVO`,
+> `…/1 - TEMPORÁRIOS/1 - ATIVOS`), têm `owner = admin.soulan@soulan.com.br` e `parentId` pessoal,
+> **nunca um `driveId`** — assinatura de Meu Drive. É por isso que a operação hoje escreve nelas por
+> **delegação** de `admin.soulan@` (`DRIVE_DELEGATED_SUBJECT`).
+>
+> **Consequência:** a conta cega pura (sem delegação, só compartilhada como Editor) **vai falhar com
+> `storageQuotaExceeded`** ao CRIAR arquivo nessas pastas, porque uma service account não tem cota de
+> armazenamento e, sem impersonar um humano, o arquivo não teria dono de cota. E o arquivador **não
+> pode** usar delegação: devolver-lhe a chave de `admin.soulan@` é exatamente o que o VS3 manda tirar.
+>
+> **O item (d) abaixo foi REESCRITO para o caminho que funciona (Drive compartilhado). É PROPOSTA: a
+> fábrica NÃO move pasta nem cria Drive (§A.0); quem decide e executa é o diretor/admin.** O que a
+> fábrica resolveu é QUAL é o caminho, para o Rike não ter de conferir Drive nenhum.
+>
+> **IMPORTANTE, e limita o estrago:** isto afeta SÓ o ARQUIVAMENTO (escrita no Drive). A
+> **visualização do documento na Auditoria NÃO é afetada**: ela lê o BALDE (GCS), não o Drive, então
+> funciona com (a)(b)(c) e o `storage.objectViewer`, independentemente de Meu Drive vs. Shared Drive.
+> Ou seja: rodando (a)(b)(c) + ligando a instância, o **documento na Auditoria já acende**; o
+> **prontuário no Drive** espera a decisão de (d).
 
 ---
 
@@ -82,17 +96,32 @@ gcloud iam service-accounts keys create /etc/ea-portal-arquivador/credentials.js
 chmod 600 /etc/ea-portal-arquivador/credentials.json
 ```
 
-## (d) Compartilhar as 13 pastas-pai do Drive com a conta, como Editor (SEM delegação)
+## (d) Dar à conta cega acesso de ESCRITA à árvore do prontuário — via DRIVE COMPARTILHADO
 
-Para cada id abaixo, compartilhar a pasta com
-`ea-portal-arquivador@ea-v2-automatic.iam.gserviceaccount.com` no papel **Editor**. Pelo Drive, é
-"Compartilhar > adicionar o e-mail da conta > Editor". Por API (se o Rike preferir script), é um
-`permissions.create` por pasta com `role=writer`, `type=user`, `sendNotificationEmail=false`,
-`supportsAllDrives=true`. **Nenhuma delegação domain-wide é concedida; a conta não impersona
-ninguém.**
+**Reescrito porque as pastas estão em Meu Drive (ver o box acima). Compartilhar as 13 pastas como
+Editor NÃO basta: a conta pura cai em `storageQuotaExceeded`. PROPOSTA para o diretor decidir:**
 
-As 13 pastas-pai, conferidas em `drive_pasta_pai` (produção, ativos, 2026-10-14). Os ids não são
-segredo nem PII (são identificadores do Drive, §A.6); os rótulos ajudam a conferir no Drive:
+**Caminho recomendado (VS3-safe): a árvore do prontuário passa a viver num Drive compartilhado.**
+1. Criar um **Drive compartilhado** (ex.: "Prontuários Soulan"), ou usar um já existente da org.
+2. **Mover** a árvore de prontuários de hoje (as pastas-pai e o que está dentro) para esse Drive
+   compartilhado. *Mover no Drive PRESERVA os ids*, então `drive_pasta_pai` e o `drive_pasta_url` já
+   gravado continuam válidos, e a esteira (que escreve por delegação) segue funcionando igual.
+3. Adicionar `ea-portal-arquivador@ea-v2-automatic.iam.gserviceaccount.com` como **Gerenciador de
+   conteúdo (Content manager)** do Drive compartilhado. **É UM acesso só, no Drive inteiro**, no lugar
+   de 13 compartilhamentos de pasta. Num Drive compartilhado a cota é da organização, então a conta
+   pura escreve **sem delegação** (VS3 preservado) e sem `storageQuotaExceeded`.
+
+**O que NÃO serve (registrado para não voltar à mesa):** dar delegação domain-wide à conta cega.
+Resolve a cota, mas devolve ao processo que abre arquivo hostil a chave de `admin.soulan@`, que é a
+violação de VS3 que o Desenho 1 existe para impedir. VETADO por construção.
+
+**Se o diretor preferir NÃO mover a árvore agora:** a visualização na Auditoria (que só lê o balde)
+já funciona com (a)(b)(c); só o arquivamento no Drive fica esperando o Drive compartilhado. Essa é
+uma saída parcial válida (metade do valor entregue sem mover nada), à escolha do diretor.
+
+As 13 pastas-pai, conferidas em `drive_pasta_pai` (produção, ativos, 2026-10-14) e confirmadas em Meu
+Drive de `admin.soulan@` pelo conector do Drive. Os ids não são segredo nem PII (são identificadores
+do Drive, §A.6); os rótulos ajudam a conferir no Drive:
 
 | # | folder_id | pastas que apontam para ele |
 |---|---|---|
