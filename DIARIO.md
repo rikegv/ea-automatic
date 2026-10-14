@@ -21455,3 +21455,57 @@ O diretor autorizou publicar o AJUSTE 2 corrigido (mensagem honesta e segura) pa
   NÃO diz "não cadastrado"/"não existe" (anti-oráculo preservado), e diz "procure o RH". A mensagem é
   literal constante, então o e-mail que resolve recebe a MESMA frase (e o código, caminho do AJUSTE 1).
   Artefato servido: 0 ocorrências de "chegou nele", 2 da frase nova. Screenshot enviado ao diretor.
+
+---
+
+## 2026-10-14 — Emissão 0155 PUBLICADA: emissão do link não-silenciosa + card "Sem Link" (A.1/A.2)
+
+**Sessão dedicada (remote-control), Fase 2 liberada pelo coordenador com condições. Frente A.1/A.2
+construída em sessões anteriores que caíram; retomada, rebaseada, provada e publicada aqui.**
+
+- **O que entrou (commit `ca717c3`, em `origin/main` e em produção):** o gancho de emissão do link na
+  liberação (`AdmissoesService.liberar`/`liberarEmLote`/`create`) era best-effort e engolia a exceção
+  em silêncio (só logava o nome da classe do erro, sem gravar estado nem retentar): o candidato ficava
+  liberado e SEM link, e a falha sumia sem rastro. Agora: classifica a falha (taxonomia a/b/c), carimba
+  estado consultável e enfileira retry (BullMQ); cobre a lacuna do wizard; e dá visibilidade "Sem Link"
+  no Gerenciador do Portal. 22 arquivos, +1255/-18.
+- **Migration 0155 em PRODUÇÃO (154 -> 155):** 3 colunas aditivas em `admissoes` (`portal_link_falha_em`,
+  `portal_link_falha_motivo` = só código de catálogo §A.6, `portal_link_tentativas` default 0).
+  `ADD COLUMN IF NOT EXISTS`, idempotente/reversível. Ledger agora 155 (hash d416dfab1945, created_at
+  1790646022719). Todas as admissões existentes nasceram limpas (0 falhas carimbadas, tentativas 0).
+  Backup prévio: `ea-backup-producao-20261014-0217-antes-0155.dump`.
+- **Base (rebase serial, main avançou 2x durante a sessão):** 20ba111 -> d4865ba -> a325242. Os commits
+  que entraram (Portal: reenvio sem CPF 1004c79, porta de e-mail ee6bb22/b9830ab, reabertura recebido,
+  Central das Vagas) NÃO tocam o gancho de emissão (único toque em admissoes.service.ts foi o método
+  read-only `ehAdmissaoSemCpf` de 1004c79, longe dos ganchos) e têm ZERO interseção com os 22 arquivos.
+  Merge-tree provou 3-way limpo; §A.49 sem colisão.
+- **GATE na base nova a325242 (não reaproveitado):** typecheck 0, lint 0, backend 284 testes verdes
+  (7 specs do recorte), frontend 43 verdes. 2 reds `camposDoDetalhe` (NOVE campos / etiqueta) em
+  `lib/portal-painel.spec.ts` são PRÉ-EXISTENTES (drift b1/Portal: a lib já renderiza Origem/Consultor,
+  os testes esperam o shape antigo) e provados vermelhos no a325242 SEM minhas mudanças. Exatamente os
+  mesmos 2, nenhum red novo.
+- **§A.38 seguranca ADVERSARIAL = APROVADO** (5 pontos, arquivo:linha): coluna guarda só código de
+  catálogo; logs usam `(err).name`, nunca `err.message` cru nos caminhos por-pessoa; trilha via
+  allowlist `montarEventoPortal` sem PII; sem URL Pandapé persistida; sem rota/controller novo (recorte
+  semLink reusa resumo/listar sob o MenuGuard do `portal-links`, filtra só por nome, nunca por CPF); sem
+  credencial hardcoded. Obs não-bloqueante: no boot, falha de fila loga `err.message`, mas é erro de
+  infra/conexão Redis, sem vínculo a pessoa.
+- **§A.13 PROVADO em preview NOVO (o 3145/3143 da sessão anterior caiu):** backend `127.0.0.1:3147` +
+  frontend `10.18.117.235:3149` sobre o clone `ea_automatic_preview_emissao` (colunas 0155 + 2 sementes
+  sintéticas §A.43). Card "Sem Link" = 2, selecionado, com as 2 linhas sintéticas exibindo o motivo real:
+  Canal Indisponível (caso b) e E-mail Inválido (caso c). API confere: contadores.semLink=2 e o recorte
+  devolve as 2 linhas com `linkFalhaMotivo` e SEM CPF no payload. Sem travessão, sem PII. Screenshot
+  enviado ao diretor. (Nota: preview em porta dedicada, não a 3120, porque a 3120 serve o `main-nova`,
+  atrás do main, sem o card; §A.32.)
+- **Deploy:** `publicar-producao.sh` publicou `ca717c3` (build topológico shared-types->backend->frontend
+  no `ea-build` pristino; o commit servido antes era c28d8e0). Backup dos artefatos em
+  `/home/henrique/apps/ea-release-portal/*.bak-20261014-021818`. Health: backend 3011/api/health 200,
+  frontend 3010/login 200. Sem rollback. Produção confirmada: journal do `ea-backend` mostra
+  `[PortalLinkRetryService] Fila/worker portal-link-retry inicializados.` + `Nest application
+  successfully started`; rota `/api/esteira/portal-painel/contadores` responde 401 (viva, não 404).
+- **O gancho ficou PRONTO para o ajuste 3 do Portal (link direcionado no copiar) e o reenvio dos 29**,
+  nenhum dos dois construído aqui (recorte estrito). Não encostou em porta de e-mail, prontuário/Drive
+  nem régua documental.
+- **Aviso herdado (registrado):** `portal-painel.so-link-vivo` ficou no escopo por ser consequência
+  direta do `semLink` no resumo (a invariante "farol==TEM_LINK_VIVO, 4 consultas" virou "4 consultas COM
+  link vivo", porque o recorte Sem Link é outro universo, FROM admissoes).
