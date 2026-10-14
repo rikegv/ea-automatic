@@ -21829,3 +21829,50 @@ backend `3011/api/health` 200 (6s), frontend `3010/login` 200 (1s). Produção s
 APROVADO no tree original (07/10); aqui só MOVI código já auditado para um branch limpo, nenhuma linha
 nova toca CPF/auth. **§A.6:** diário sem PII; o preview usou só nomes de grupo/CNPJ e contagens.
 Preview 3128/3129 e o clone `ea_automatic_preview_3128` derrubados após a validação.
+
+---
+
+## 2026-10-14 — Prontuário Drive: conserto do VISOR da Auditoria (pop-up bloqueado) + análise de completude
+
+**Sessão remote-control. Bug reportado pelo diretor na validação em produção:** visualizar documento
+do Portal na Auditoria (candidato A, "Comprovante de Escolaridade", marcado como atende) CARREGAVA mas
+NÃO abria; o endpoint devolvia 200 (falso sucesso).
+
+**CAUSA (medida, não deduzida):** `apiOpenInline` (`apps/frontend/src/lib/api.ts`) chamava
+`window.open` DEPOIS do `await` do fetch do blob. Para o documento do Portal, o blob transita pela
+conta cega (instância 8027) e leva ~6s para 5 MB (medido: 6,16s para um JPEG de 5.334.512 bytes), prazo
+em que o navegador deixa de tratar o `window.open` como resposta ao clique e BLOQUEIA o pop-up. Staging
+(disco local, instantâneo) escapava do bloqueio; Portal (lento) não. Por isso só o doc do Portal falhava.
+
+**CONSERTO (commit `beed90a`, mínimo e retrocompatível):** a aba é aberta JÁ no gesto do clique
+(`visualizar` e o botão por-arquivo do `AuditoriaDocsModal` abrem `about:blank` antes de qualquer
+await, com `opener=null`), e `apiOpenInline` navega essa aba quando o blob chega; fecha a aba em
+erro/indisponível/N-arquivos. 3º parâmetro OPCIONAL (janela pré-aberta): sem ele, comportamento idêntico
+ao de hoje, então os outros chamadores (ASO em `AdmissaoDetalheModal`, kit em `assinaturas`/`kit`) ficam
+INTACTOS. `seguranca` §A.38 APROVADO, zero vetos (rota/auth/bytes idênticos; opener=null correto contra
+tabnabbing; blob same-origin UUID revogado em 60s; nada novo em log). Gate: frontend typecheck 0,
+specs de api/esteira verdes. 2 reds PRÉ-EXISTENTES em `portal-painel.spec` (frente "Sem Link" ca717c3,
+não deste diff). Publicado em produção (origin/main `6b6dfc7`, publicar-producao health 200/200).
+
+**NOTA §A.13 (honesta):** este bug é o BLOQUEADOR DE POP-UP do navegador REAL, que o headless NÃO
+reproduz (abriria mesmo com o código bugado) e cujo artefato fiel seria o documento PESSOAL do candidato
+na tela, PROIBIDO em imagem por §A.6/§A.46. Logo não há screenshot do documento: a prova §A.13 definitiva
+é o clique no navegador real do diretor (onde o bug foi encontrado). A fábrica entregou causa medida +
+conserto determinístico + auditoria de segurança + deploy; o diretor confirma na tela.
+
+**ANÁLISE DE COMPLETUDE DO PRONTUÁRIO (dúvida do diretor, só resposta, nada construído):**
+- O gatilho vivo (`portal-credencial.service.ts:1314`, agora ARMADO) dispara no ramo VALIDADO->ENTREGUE
+  do CANDIDATO, por documento. Então todo documento NOVO que o candidato entrega pelo Portal e que fica
+  ENTREGUE (não-suspeito) é arquivado SOZINHO na MESMA pasta do prontuário (incremental, dedup md5,
+  mesma âncora). O prontuário NÃO está congelado no instante do reprocesso: as entregas futuras do
+  candidato se somam automaticamente.
+- **LACUNA (débito aberto):** documento do Portal que a IA marca SUSPEITO e o TIME valida À MÃO
+  (`reauditoria/validacao-humana.service.ts`) vira ENTREGUE por `posVeredito`->`arquivarNoDrive` (caminho
+  da STAGING, que não tem o objeto do Portal) e NÃO chama o gatilho do arquivador do Portal. Esse
+  documento específico NÃO sobe sozinho ao prontuário (só via reprocesso manual `rearquiva-portal.js`,
+  que seleciona por `confirmado_em`). O reprocesso de hoje já cobriu os confirmados atuais; a lacuna vale
+  para suspeitos FUTUROS validados à mão. Idem caminhos de reabertura que deixem ENTREGUE sem reentrega.
+- **PROPOSTA (não construída):** (1) chamar `talvezArquivarDoVeredito` em `validacao-humana` quando o
+  doc vira ENTREGUE por decisão humana (1 linha, espelha o 1314), fechando a lacuna; e/ou (2) uma rede de
+  segurança agendada (cron) rodando `arquivarPortal` idempotente para admissões vivas com doc do Portal
+  confirmado ainda fora do prontuário, espelhando a reconciliação da esteira.
