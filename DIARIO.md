@@ -21613,3 +21613,22 @@ aponta para a entrada pública que já mostra a porta de e-mail.
 **AJUSTE 4 (reenvio dos 29) = PRÓXIMO, gated:** só depois do ajuste 3 no ar e provado (agora está).
 Reconferir a lista viva no momento do disparo e, por ser **e-mail real e irreversível**, confirmar o
 go com o diretor antes de disparar (padrão de blast de e-mail real da fábrica).
+
+### AJUSTE 4 — reenvio a quem não acessou (disparado, 27 e-mails)
+
+Depois do ajuste 3 no ar e provado, o diretor autorizou o reenvio. Lista reconferida em produção no
+momento do disparo (mudou de novo desde a noite: era 29 → 28 → **27 = 16 PROV + 12 → 11 CPF**; um
+CPF acessou o próprio link entre as duas conferências e saiu da fila, que é o comportamento certo).
+
+Critério da lista: admissão VIVA (`EM_ADMISSAO`/`BANCO_AGUARDAR`) com link vivo (não revogado, não
+vencido, não bloqueado) e **nunca acessado** (nenhum `primeiro_acesso_em` em nenhum link da admissão).
+
+Disparo pela MESMA rota do Gerenciador (`POST esteira/portal/envio/admissao/:id`, o roteamento do
+ITEM 1 já no ar), chamando o backend de produção com um token bounded (900s) do SUPER_ADMIN do
+diretor (83f009a8). Cada um recebeu o **formato certo**: PROV → convite de primeiro acesso (porta de
+e-mail, URL nua); CPF → link clássico por e-mail. Primeiro PROV disparado isolado e conferido
+(`enviado:true`, destino mascarado) antes do resto.
+
+**Resultado: 27 enviados, 0 falhas.** 16 convites (PROV) + 11 links (CPF). Os 11 CPF carimbaram
+`enviado_em` (prova de que a emissão+envio rodou ponta a ponta); os 16 convites voltaram
+`enviado:true` do correio. §A.6: nenhum e-mail cru registrado, só contagem e destino mascarado.
