@@ -21556,3 +21556,60 @@ Portal público `ea-portal-app` rebuild manual do `.next-prod` (ea-build/origin/
 "E-mail não identificado. Confira o e-mail digitado ou fale com o RH", NÃO abre o campo do código, fica
 no passo do e-mail, oferece RH. Backend conferido: solicitar devolve `{identificado:false}` para e-mail
 sintético. Screenshot enviado ao diretor.
+
+## 2026-10-14 — Portal: link direcionado no botão copiar do Gerenciador (AJUSTE 3) [COMMIT 68feec1, no ar]
+
+O botão "copiar link" do Gerenciador do Portal passava **sempre** o link clássico
+(`/portal#t=<token>`, que cai na tela de CPF + nascimento). Candidato **sem CPF** (marcador PROV)
+nunca passa nessa tela. O AJUSTE faz o link copiado **bater com o caminho que o candidato consegue
+concluir**: PROV recebe a **URL nua** do Portal (`/portal` sem token), que abre direto a porta de
+acesso por e-mail; quem tem CPF real segue com o link clássico, **inalterado**.
+
+Destravado pela Emissão 0155 (ca717c3): o gancho de emissão ficou pronto e a colisão que segurava
+este ajuste acabou. Base `origin/main = e530aca`, sem rebase (não avançou durante a sessão).
+
+**Mudança (commit `68feec1`), recorte de 6 arquivos, espelhando o roteamento do ITEM 1
+(`rotearReenvioSemCpf`):**
+- `portal-envio.controller.ts`: o handler `gerarLink` roteia o PROV **antes** da emissão clássica,
+  chamando `acessoEmail.linkDirecionadoSemCpf(admissaoId)`; PROV resolve, CPF real devolve `null` e
+  cai no `envio.gerarLinkParaCopiar` de sempre (intocado).
+- `portal-acesso-email.service.ts`: método `linkDirecionadoSemCpf` (devolve a URL nua para o PROV,
+  **sem cunhar token, sem tocar `portal_links`, sem revogar, sem trilha**: a URL é a entrada pública,
+  não credencial) + helper `baseDoPortal` (barra final aparada, igual ao link clássico). A régua
+  "está sem CPF?" reusa `ehAdmissaoSemCpf` (`ehFarolVivo && ehCpfProvisorio`), sem segunda leitura.
+- `shared-types`: campo **aditivo opcional** `direcionadoParaEmail?` em `LinkDoPortalParaCopiar`.
+- frontend `portal-envio-link.ts`: título **"Link De Primeiro Acesso"** e frase própria (sem prazo,
+  sem "o link anterior deixou de valer") para o caso direcionado. A segunda superfície de copiar
+  (`EnviarLinkModal`) renderiza certo de graça, pela mesma lib.
+
+**seguranca §A.38 = APROVADO** (adversarial, 6 pontos, 0 vetos): a URL nua NÃO é credencial (sem
+`#t=`), nada é logado, farol declinado/rescindido cai no clássico (`ehFarolVivo`), RBAC intocado
+(`portal-links.controller.ts` fora do diff; rota sob `PortalEnvioController.*`, atrás de
+JwtAuthGuard+MenuGuard), sem oráculo (rota autenticada, consultor já vê o candidato).
+
+**tester INDEPENDENTE:** sem gap de severidade alta; os 6 pontos do briefing cobertos. 1 gap MÉDIO
+fechado (G1: `baseDoPortal` não aparava a barra final, divergindo do clássico → alinhado +
+teste de env com barra final). G2 (segunda superfície `EnviarLinkModal`) confirmado correto pela lib
+testada.
+
+**Gate verde:** typecheck 0, lint 0; specs backend `portal-link-direcionado` 6/6 + adjacentes
+(`portal-link-para-copiar` 39, `portal-reenvio-sem-cpf` 17, `portal-acesso-email.travas` 47,
+`portal-envio-rbac` 8, `portal-links-rota-antiga` 51), frontend `portal-envio-link` 31/31.
+
+**§A.13 provado:**
+- **Visual (preview com sementes §A.43, clone + 2 admissões sintéticas):** modal do Gerenciador do
+  PROV ("Candidato Teste Prov") mostra "Link De Primeiro Acesso" + a URL nua
+  `https://clientesportalsoulan.com.br/portal` (sem `#t=`); o CPF ("SIMULADO BRAVO") mostra "Link Do
+  Portal" + link clássico com token + "vale até". Nada esmagado.
+- **Produção (pós-deploy, sem PII):** dist servido contém `linkDirecionadoSemCpf` +
+  `direcionadoParaEmail`; rota `POST esteira/portal/envio/admissao/:id/link` viva (401 sem auth); a
+  URL nua `/portal` no Portal público (prod, porta 3021) abre a tela **"Entrar Com Meu E-mail"**.
+
+**Deploy (§A.49):** `publicar-producao.sh`, produção servindo `68feec1` (antes `c28d8e0`), backup
+`*.bak-20261014-115638`, health backend 3011 + frontend 3010 OK, sem rollback. O Portal público
+(`ea-portal-app`) **não** precisou de rebuild: a página `/portal` não mudou; o link direcionado só
+aponta para a entrada pública que já mostra a porta de e-mail.
+
+**AJUSTE 4 (reenvio dos 29) = PRÓXIMO, gated:** só depois do ajuste 3 no ar e provado (agora está).
+Reconferir a lista viva no momento do disparo e, por ser **e-mail real e irreversível**, confirmar o
+go com o diretor antes de disparar (padrão de blast de e-mail real da fábrica).
