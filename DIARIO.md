@@ -21429,3 +21429,29 @@ LEITURA (download/URL assinada de GET) do bucket do Portal, que ninguém tem: ho
 HEAD e DELETE (curadoria). Isso cruza VS3/VS7 (leitor isolado sem Drive/Vertex; "quem abre arquivo da
 internet não segura a chave do prontuário") e é mudança de IAM/arquitetura = decisão do diretor. O
 brief manda PARAR e reportar nesse caso. Descrito o mecanismo, não construído.
+
+### Atualização: AJUSTE 2 PUBLICADO no Portal público (commit `b9830ab`)
+
+O diretor autorizou publicar o AJUSTE 2 corrigido (mensagem honesta e segura) para testar em produção.
+- **Mudança (só cópia, frontend `AcessoPorEmail.tsx`):** as frases que AFIRMAVAM entrega ("o código ...
+  chegou nele" / "O código chega no seu e-mail") viraram CONDICIONAIS e CONSTANTES, iguais para todo
+  mundo: "Se este e-mail estiver cadastrado no seu processo, enviamos um código de 6 números. Não
+  recebeu em alguns minutos? Confira o e-mail digitado, veja a caixa de spam ou procure o RH." Backend
+  INTACTO (resposta única, avança sempre = anti-oráculo). Spec: asserção passou a provar a FORMA
+  condicional (`toContain("estiver cadastrado")`).
+- **Gate verde:** typecheck 0, lint 0, spec tocada 19/20 (1 red PRÉ-EXISTENTE não-meu, "passo da
+  identidade não mostra pessoa", idêntico no origin/main).
+- **seguranca §A.38 = APROVADO** na mudança (constante, sem oráculo, §A.6/§A.11 ok, backend intacto);
+  **VETOU como desenho** a "confirmação positiva distinta on-screen quando enviar" (seria oráculo de
+  enumeração unidirecional + reabre canal de latência); a confirmação positiva segura é a CHEGADA do
+  próprio e-mail, que já acontece.
+- **Deploy em 2 alvos:** main app por `publicar-producao.sh` (serve `b9830ab`, health 3011/3010 OK,
+  backup `*.bak-20261014-015604`); Portal público por rebuild manual do `ea-portal-app` (.next-prod
+  buildado no `ea-build`/origin/main, swap com backup `.next-prod.bak-20261014-020418`, `systemctl
+  --user restart ea-portal-app`, health 3021 /portal 200). Túnel confere: GCP:3121 -R-> local 3021
+  PRODUÇÃO (o 3121 é a ponta do GCP, não o homolog local).
+- **§A.13 no Portal PÚBLICO (3021, sem PII):** Playwright dirigiu a porta de e-mail com e-mail
+  SINTÉTICO que não resolve; passo CODIGO mostra a frase condicional nova, NÃO mostra "chegou nele" e
+  NÃO diz "não cadastrado"/"não existe" (anti-oráculo preservado), e diz "procure o RH". A mensagem é
+  literal constante, então o e-mail que resolve recebe a MESMA frase (e o código, caminho do AJUSTE 1).
+  Artefato servido: 0 ocorrências de "chegou nele", 2 da frase nova. Screenshot enviado ao diretor.
