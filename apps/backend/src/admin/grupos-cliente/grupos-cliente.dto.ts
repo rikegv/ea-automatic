@@ -1,4 +1,13 @@
-import { IsArray, IsBoolean, IsOptional, IsString, MaxLength, MinLength } from "class-validator";
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  MinLength,
+} from "class-validator";
 
 /** Cria o grupo. O nome é a identidade, e o índice único do banco usa a forma normalizada dele. */
 export class CriarGrupoClienteDto {
@@ -11,6 +20,15 @@ export class CriarGrupoClienteDto {
   @IsString()
   @MaxLength(2000)
   descricao?: string;
+
+  /**
+   * META OBRIGATÓRIA (decisão do diretor: sem opção de "sem meta"). O banco aceita nulo só para os
+   * grupos legados; na criação a meta é exigida, e tem de ser pelo menos 1 (grupo com meta zero não
+   * é meta, é grupo sem alvo).
+   */
+  @IsInt({ message: "A meta precisa ser um número inteiro." })
+  @Min(1, { message: "A meta precisa ser de pelo menos 1." })
+  meta!: number;
 }
 
 export class AtualizarGrupoClienteDto {
@@ -28,6 +46,15 @@ export class AtualizarGrupoClienteDto {
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;
+
+  /**
+   * Na edição a meta é OPCIONAL (o patch é parcial), mas quando vem tem de ser válida: inteiro de
+   * pelo menos 1, a mesma régua da criação.
+   */
+  @IsOptional()
+  @IsInt({ message: "A meta precisa ser um número inteiro." })
+  @Min(1, { message: "A meta precisa ser de pelo menos 1." })
+  meta?: number;
 }
 
 /**

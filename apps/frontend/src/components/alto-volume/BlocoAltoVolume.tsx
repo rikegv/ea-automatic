@@ -21,9 +21,6 @@ export function BlocoAltoVolume({
   projetos,
   projetoSel,
   onProjeto,
-  grupos,
-  grupoSel,
-  onGrupo,
   sugeridoId,
   idAria,
 }: {
@@ -32,9 +29,15 @@ export function BlocoAltoVolume({
   projetos: ProjetoDoSeletor[];
   projetoSel: string;
   onProjeto: (v: string) => void;
-  grupos: GrupoDoSeletor[];
-  grupoSel: string;
-  onGrupo: (v: string) => void;
+  /**
+   * GRUPO DE ENTRADA SAIU DO FRONT (decisão do diretor, frente Alto Volume por grupo): o seletor de
+   * leva por data não é mais mostrado. As três props continuam ACEITAS e OPCIONAIS para as telas
+   * chamadoras (Nova Admissão, Liberação) seguirem compilando sem mudança, e o dado continua no
+   * banco; aqui elas só não têm mais seletor. O vínculo passa a nascer sem grupo (grupoId nulo).
+   */
+  grupos?: GrupoDoSeletor[];
+  grupoSel?: string;
+  onGrupo?: (v: string) => void;
   /** Projeto que o período sugeriu, se houve. Só para explicar a pré-escolha ao consultor. */
   sugeridoId?: string;
   /** Distingue os rótulos acessíveis quando dois blocos coexistem na mesma página. */
@@ -106,31 +109,8 @@ export function BlocoAltoVolume({
             )}
           </label>
 
-          {/* GRUPO: só aparece quando o projeto TEM grupo cadastrado, e segue opcional mesmo assim.
-              Projeto sem grupo não tem o que perguntar, e forçar a leva quando ela não foi decidida
-              seria inventar dado. */}
-          {projetoSel && grupos.length > 0 && (
-            <label className="grid gap-1.5">
-              <span className="ds-label">Grupo de entrada</span>
-              <Select
-                value={grupoSel}
-                onChange={onGrupo}
-                placeholder="Sem grupo definido"
-                ariaLabel={`Grupo de entrada (${idAria})`}
-                menuFit
-                options={[
-                  { value: "", label: "Sem grupo definido" },
-                  ...grupos.map((g) => ({
-                    value: g.id,
-                    label: `${g.rotulo} (${fmtData(g.dataEntrada)})`,
-                  })),
-                ]}
-              />
-              <span className="text-[11.5px] text-dim">
-                Opcional. A leva de entrada dentro do projeto, quando já estiver definida.
-              </span>
-            </label>
-          )}
+          {/* O SELETOR DE GRUPO DE ENTRADA SAIU DAQUI (decisão do diretor). O projeto continua sendo
+              escolhido; o vínculo nasce sem grupo. */}
         </div>
       )}
     </div>

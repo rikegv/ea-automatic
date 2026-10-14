@@ -32,6 +32,12 @@ interface GrupoResumo {
   ativo: boolean;
   membros: number;
   admissoesCarimbadas: number;
+  /**
+   * META do grupo: a quantidade de vagas a fechar. OBRIGATÓRIA na criação (sem "sem meta"), então o
+   * backend sempre a devolve para grupo novo. Grupo legado, criado antes desta frente, pode vir com
+   * meta nula até alguém definir aqui, e a lista mostra "não informado" nesse caso (§A.11).
+   */
+  meta: number | null;
 }
 
 interface ClienteDoCatalogo {
@@ -78,6 +84,11 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
   const [busca, setBusca] = useState("");
   const [soMarcados, setSoMarcados] = useState(false);
   const [novoNome, setNovoNome] = useState("");
+  /** Meta do grupo novo. String no estado porque o input é texto, convertida para número ao criar. */
+  const [novaMeta, setNovaMeta] = useState("");
+  /** Edição da meta do grupo selecionado. Guarda o valor em digitação, salvo no blur. */
+  const [metaEditada, setMetaEditada] = useState("");
+  const [salvandoMeta, setSalvandoMeta] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [previa, setPrevia] = useState<Previa | null>(null);
@@ -104,6 +115,12 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
 
   const grupo = grupos.find((g) => g.id === grupoId) ?? null;
 
+  // A meta em edição acompanha o grupo escolhido: abrir outro grupo mostra a meta dele, não a do
+  // anterior. Meta nula (grupo legado) começa em branco, para o campo convidar a definir.
+  useEffect(() => {
+    setMetaEditada(grupo?.meta != null ? String(grupo.meta) : "");
+  }, [grupo]);
+
   const visiveis = useMemo(() => {
     const q = busca.trim().toLowerCase();
     return catalogo.filter((c) => {
@@ -129,22 +146,50 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
     setMarcados((atual) => new Set([...atual, ...visiveis.map((c) => c.codCliente)]));
   }
 
+  /** A meta só é válida como inteiro >= 1: sem opção de "sem meta" (decisão do diretor). */
+  const metaNova = Number(novaMeta);
+  const metaNovaValida = Number.isInteger(metaNova) && metaNova >= 1;
+
   async function criarGrupo() {
-    if (!novoNome.trim()) return;
+    if (!novoNome.trim() || !metaNovaValida) return;
     setOcupado(true);
     setErro(null);
     try {
       const g = await apiFetch<GrupoResumo>("/admin/grupos-cliente", {
         method: "POST",
-        body: { nome: novoNome.trim() },
+        body: { nome: novoNome.trim(), meta: metaNova },
       });
       setNovoNome("");
+      setNovaMeta("");
       await carregar();
       setGrupoId(g.id);
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível criar o grupo.");
     } finally {
       setOcupado(false);
+    }
+  }
+
+  /**
+   * Salva a meta do grupo escolhido. Chamada no blur do campo, e só quando o valor mudou e é inteiro
+   * >= 1: digitar e sair sem alterar não dispara chamada, e valor inválido não grava.
+   */
+  async function salvarMeta() {
+    if (!grupo) return;
+    const n = Number(metaEditada);
+    if (!Number.isInteger(n) || n < 1 || n === grupo.meta) return;
+    setSalvandoMeta(true);
+    setErro(null);
+    try {
+      await apiFetch(`/admin/grupos-cliente/${grupo.id}`, {
+        method: "PATCH",
+        body: { meta: n },
+      });
+      await carregar();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não foi possível salvar a meta.");
+    } finally {
+      setSalvandoMeta(false);
     }
   }
 
@@ -228,7 +273,7 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
       catalogo.some((c) => (c.grupoId === grupoId) !== marcados.has(c.codCliente)));
 
   return (
-    <Modal onClose={onFechar} ariaLabel="Cadastrar grupos de cliente" className="max-w-5xl">
+    <Modal onClose={onFechar} ariaLabel="Cadastrar grupos de cliente" className="max-w-6xl">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-6 py-4">
         <div className="min-w-0">
           <div className="eyebrow !mb-1">Clientes</div>
@@ -255,7 +300,7 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
         <div className="px-6 py-5">
           <div className="eyebrow !mb-2">O Grupo</div>
 
-          <div className="mb-3 flex gap-2">
+          <div className="mb-1 flex gap-2">
             <input
               value={novoNome}
               onChange={(e) => setNovoNome(e.target.value)}
@@ -264,17 +309,35 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
               aria-label="Nome do grupo novo"
               className="ds-input min-w-0 flex-1 py-1.5"
             />
+            {/* META OBRIGATÓRIA: a quantidade de vagas que o grupo precisa fechar. Sem opção de "sem
+                meta" (decisão do diretor), por isso o inteiro mínimo é 1 e o botão só libera com ela
+                preenchida. Campo numérico do design system (`ds-input`); §A.35 vale para seletor de
+                opção, e meta é digitação livre. */}
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={novaMeta}
+              onChange={(e) => setNovaMeta(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void criarGrupo()}
+              placeholder="Meta"
+              aria-label="Meta de vagas do grupo novo"
+              className="ds-input w-[96px] py-1.5 tabular-nums"
+            />
             {/* AÇÃO PRINCIPAL do lado esquerdo, em tamanho cheio e com o gradiente do design system:
                 criar o grupo é o primeiro passo do livreto e não pode competir de igual para igual
                 com um campo de texto. */}
             <Button
               onClick={() => void criarGrupo()}
-              disabled={ocupado || !novoNome.trim()}
+              disabled={ocupado || !novoNome.trim() || !metaNovaValida}
               className="shrink-0 px-5"
             >
               Criar Grupo
             </Button>
           </div>
+          <p className="mb-3 text-[11.5px] text-faint">
+            A meta é a quantidade de vagas que o grupo precisa fechar, e é obrigatória.
+          </p>
 
           {grupos.length === 0 ? (
             <p className="py-6 text-center text-faint">
@@ -305,7 +368,14 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
                       )}
                     </div>
                     <div className="mt-0.5 text-[11.5px] text-dim">
-                      {g.membros} CNPJ{g.membros === 1 ? "" : "s"} ·{" "}
+                      {/* META à frente, porque é o dado que a dash de Alto Volume por grupo consome:
+                          mostrar aqui é o espelho da coluna pedida. "não informado" no grupo legado
+                          sem meta (§A.11), nunca zero, que diria meta definida como nada. */}
+                      Meta{" "}
+                      <span className="font-semibold tabular-nums text-text">
+                        {g.meta != null ? g.meta : "não informado"}
+                      </span>{" "}
+                      · {g.membros} CNPJ{g.membros === 1 ? "" : "s"} ·{" "}
                       {g.admissoesCarimbadas}{" "}
                       {g.admissoesCarimbadas === 1 ? "admissão" : "admissões"} no histórico
                     </div>
@@ -316,19 +386,45 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
           )}
 
           {grupo && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-[12px] text-dim">
-              <Button
-                variant="secondary"
-                onClick={() => void alternarAtivo()}
-                disabled={ocupado}
-                className={`px-3.5 py-1.5 text-[12.5px] ${grupo.ativo ? "text-danger" : "text-accent"}`}
-              >
-                {grupo.ativo ? "Inativar Grupo" : "Reativar Grupo"}
-              </Button>
-              {/* O que a inativação faz, dito na hora: some das escolhas, fica no histórico. */}
-              <span className="text-faint">
-                grupo inativo some dos filtros, e continua no histórico já carimbado
-              </span>
+            <div className="mt-3 flex flex-col gap-3 text-[12px] text-dim">
+              {/* EDIÇÃO DA META do grupo escolhido, no mesmo bloco que já edita o estado (ativo): é o
+                  "fluxo que edita o grupo" ganhando a meta. Salva no blur quando o valor mudou e é
+                  inteiro >= 1. Grupo legado sem meta começa em branco, convidando a definir. */}
+              <label className="flex flex-wrap items-center gap-2">
+                <span className="whitespace-nowrap font-semibold text-text">Meta De Vagas</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={metaEditada}
+                  onChange={(e) => setMetaEditada(e.target.value)}
+                  onBlur={() => void salvarMeta()}
+                  disabled={ocupado || salvandoMeta}
+                  aria-label={`Meta de vagas do grupo ${grupo.nome}`}
+                  className="ds-input w-[96px] py-1 tabular-nums"
+                />
+                <span className="text-faint">
+                  {salvandoMeta
+                    ? "salvando…"
+                    : grupo.meta == null
+                      ? "defina a meta deste grupo, obrigatória"
+                      : "quantidade de vagas a fechar"}
+                </span>
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => void alternarAtivo()}
+                  disabled={ocupado}
+                  className={`px-3.5 py-1.5 text-[12.5px] ${grupo.ativo ? "text-danger" : "text-accent"}`}
+                >
+                  {grupo.ativo ? "Inativar Grupo" : "Reativar Grupo"}
+                </Button>
+                {/* O que a inativação faz, dito na hora: some das escolhas, fica no histórico. */}
+                <span className="text-faint">
+                  grupo inativo some dos filtros, e continua no histórico já carimbado
+                </span>
+              </div>
             </div>
           )}
         </div>

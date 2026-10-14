@@ -1,0 +1,21 @@
+-- META DO GRUPO DE CLIENTE (Alto Volume por grupo, decisao do diretor).
+--
+-- O QUE E: quantas admissoes o grupo deve alcancar na esteira. E o denominador do painel por grupo
+-- (`faltam = meta - naEsteira`). Ver a prosa no schema (db/schema/tables.ts, gruposCliente) e o
+-- servico (admin/grupos-cliente/grupos-cliente.service.ts, analise).
+--
+-- NULLABLE NO BANCO DE PROPOSITO, e a omissao do NOT NULL e a regra, nao esquecimento: os grupos
+-- LEGADOS (ex. CAGC) nasceram antes da meta e nao tem valor. Um NOT NULL sem default quebraria a
+-- carga, e um default numerico inventaria uma meta que ninguem definiu. A meta e OBRIGATORIA na
+-- CRIACAO (decisao do diretor: sem opcao de "sem meta"), mas essa trava mora no DTO
+-- (CriarGrupoClienteDto, @IsInt + @Min(1)), onde o legado nao passa. O banco so precisa aceitar o
+-- nulo que ja existe.
+--
+-- SEM BACKFILL: escrever um numero nas linhas antigas afirmaria uma meta que nao foi decidida. Nulo
+-- e a unica resposta honesta para o grupo que nasceu sem meta; o diretor edita quando quiser.
+--
+-- ADITIVA E IDEMPOTENTE: so ADD COLUMN IF NOT EXISTS. Nada e apagado, renomeado, nem recebe default
+-- em linha existente (Sec. A.27).
+--
+-- Sec. A.6: a coluna guarda um inteiro de contagem. Nenhum dado pessoal.
+ALTER TABLE "grupos_cliente" ADD COLUMN IF NOT EXISTS "meta" integer;

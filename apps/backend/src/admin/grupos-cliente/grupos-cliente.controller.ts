@@ -44,6 +44,21 @@ export class GruposClienteController {
     return this.grupos.obter(id);
   }
 
+  /**
+   * O PAINEL DO GRUPO (Alto Volume por grupo): meta contra o que está na esteira, num total só.
+   *
+   * SEM `@Roles`, no MESMO regime da leitura de `AltoVolumeController.analisar` e pelo mesmo motivo:
+   * a tela é gatada pelo menu `diretoria` no guard de rota, e o retorno é só contagem e o nome/meta
+   * do grupo (§A.6, nenhum CPF/candidato/CNPJ). Reivindicar operação aqui faria a tela tomar 403 de
+   * quem só consulta, que é o incidente que a régua de leitura aberta já consertou.
+   *
+   * São dois segmentos (`:id/analise`), então não colide com `@Get(":id")`.
+   */
+  @Get(":id/analise")
+  analise(@Param("id") id: string) {
+    return this.grupos.analise(id);
+  }
+
   @Post()
   criar(@Body() dto: CriarGrupoClienteDto) {
     return this.grupos.criar(dto);

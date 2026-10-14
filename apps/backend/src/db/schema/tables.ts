@@ -583,6 +583,15 @@ export const gruposCliente = pgTable(
     nome: varchar("nome", { length: 200 }).notNull(),
     /** Livre, para o time explicar o recorte administrativo que o grupo representa. */
     descricao: text("descricao"),
+    /**
+     * META DO GRUPO (Alto Volume por grupo, decisão do diretor): quantas admissões o grupo deve
+     * alcançar na esteira. É `faltam = meta - naEsteira` no painel por grupo.
+     *
+     * NULLABLE no banco de propósito: os grupos legados (ex. CAGC) nasceram antes da meta e não têm
+     * valor, e a coluna não pode quebrá-los. Na criação, porém, a meta é OBRIGATÓRIA (sem opção de
+     * "sem meta", decisão do diretor): a trava fica no DTO, não no banco, para o legado sobreviver.
+     */
+    meta: integer("meta"),
     ativo: boolean("ativo").notNull().default(true),
     criadoEm,
     atualizadoEm,

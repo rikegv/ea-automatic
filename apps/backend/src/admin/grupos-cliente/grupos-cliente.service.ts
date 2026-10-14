@@ -8,20 +8,26 @@ import {
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
-import { admissoes, clientes, grupoClienteMembros, gruposCliente } from "../../db/schema";
+import { admissoes, cargos, clientes, grupoClienteMembros, gruposCliente } from "../../db/schema";
 import type {
   AtualizarGrupoClienteDto,
   CriarGrupoClienteDto,
   DefinirMembrosDto,
 } from "./grupos-cliente.dto";
 import { carimboDoGrupo } from "../../admissoes/grupo-da-admissao";
+import {
+  admissaoConcluidaSql,
+  admissaoEmAndamentoExclusivoSql,
+} from "../../db/expressoes-admissao";
 import { efeitosDaGravacao, nomeGrupoNormalizado, resumoDosEfeitos } from "./grupo-cliente";
 
 /**
  * GRUPOS DE CLIENTE (cenário 2). Ver `docs/DESENHO-CENARIO-2-GRUPO.md`.
  *
- * O grupo é EIXO DE LEITURA: serve para filtrar, agrupar e analisar. Não é projeto, não é meta, e
- * nada aqui escreve em admissão fora do carimbo (que é etapa 3).
+ * O grupo é EIXO DE LEITURA: serve para filtrar, agrupar e analisar. E AGORA TAMBÉM CARREGA META
+ * (decisão do diretor, Alto Volume por grupo): a meta é o alvo de admissões do grupo na esteira, e o
+ * painel por grupo responde `faltam = meta - naEsteira`. Fora o carimbo (etapa 3) e a própria meta
+ * (campo do grupo, não da admissão), nada aqui escreve em admissão.
  */
 @Injectable()
 export class GruposClienteService {
@@ -53,6 +59,7 @@ export class GruposClienteService {
         id: gruposCliente.id,
         nome: gruposCliente.nome,
         descricao: gruposCliente.descricao,
+        meta: gruposCliente.meta,
         ativo: gruposCliente.ativo,
         membros: sql<number>`count(distinct ${grupoClienteMembros.codCliente})::int`,
         admissoesCarimbadas: sql<number>`count(distinct ${admissoes.id})::int`,
@@ -60,7 +67,13 @@ export class GruposClienteService {
       .from(gruposCliente)
       .leftJoin(grupoClienteMembros, eq(grupoClienteMembros.grupoId, gruposCliente.id))
       .leftJoin(admissoes, eq(admissoes.grupoClienteId, gruposCliente.id))
-      .groupBy(gruposCliente.id, gruposCliente.nome, gruposCliente.descricao, gruposCliente.ativo)
+      .groupBy(
+        gruposCliente.id,
+        gruposCliente.nome,
+        gruposCliente.descricao,
+        gruposCliente.meta,
+        gruposCliente.ativo,
+      )
       .orderBy(asc(gruposCliente.nome));
     return linhas;
   }
@@ -122,12 +135,139 @@ export class GruposClienteService {
     return linha ?? null;
   }
 
+  /**
+   * O PAINEL DO GRUPO: a meta contra o que o grupo tem na esteira, num total só (Alto Volume por
+   * grupo). É a pergunta "das N admissões que este grupo deve ter, quantas já estão na esteira e
+   * quantas faltam".
+   *
+   * É LEITURA PARALELA, zero escrita (§A.26), e as contagens saem das MESMAS expressões
+   * compartilhadas do Painel e do Alto Volume (`admissaoConcluidaSql`,
+   * `admissaoEmAndamentoExclusivoSql`), importadas e não copiadas, pelo motivo de
+   * `db/expressoes-admissao`: um balde só, contado de um jeito só, em toda superfície. O que muda é
+   * o UNIVERSO, que aqui é `grupo_cliente_id = :id`, agregado num total do grupo em vez de por
+   * cargo ou por loja.
+   *
+   * A RÉGUA É A MESMA DO DASH DE PROJETO (`alto-volume-analise.service`, `statusPorCargoVinculados`),
+   * porque o diretor pediu reusar a MESMA lógica. Em concreto:
+   * - `naEsteira` exclui os TRÊS (DECLINOU, RESCISAO, BANCO_AGUARDAR), igual ao `vinculadas` do
+   *   projeto: banco não é trabalho ativo de preenchimento, é admissão parada esperando data. É o
+   *   denominador do `faltam`.
+   * - `ativos` é IGUAL a `naEsteira` por construção (os dois já excluem banco), e o campo segue na
+   *   resposta para a tela ler "X ativos, Y em banco" com `emBanco` ao lado.
+   * - `emBanco` é recorte SEPARADO (BANCO_AGUARDAR).
+   * - `concluidas` carrega o MESMO filtro de farol do projeto (correção de 13/08/2026): sem ele,
+   *   "concluídas" olha as FRENTES e "na esteira" olha o FAROL, e uma declinada com o Cadastro fechado
+   *   faria "Concluídas > Na Esteira", que é impossível por definição.
+   * - `declinios` é recorte SEPARADO, informação ao lado: não entra em `naEsteira` nem no `faltam`.
+   *
+   * `faltam = meta - naEsteira`, a MESMA forma do projeto (`vagas - vinculadas`), e é NULL quando o
+   * grupo não tem meta (os legados, ex. CAGC): sem alvo não há o que faltar, e zero mentiria dizendo
+   * "não falta ninguém".
+   *
+   * §A.6: a resposta é contagem e o nome/meta do grupo. Nenhum CPF, nenhum nome de candidato,
+   * nenhum CNPJ individual. Esta tela responde QUANTOS, não QUEM.
+   */
+  async analise(id: string) {
+    const grupo = await this.db.query.gruposCliente.findFirst({ where: eq(gruposCliente.id, id) });
+    if (!grupo) throw new NotFoundException("Grupo não encontrado.");
+
+    const [c] = await this.db
+      .select({
+        // OS TRÊS FORA (DECLINOU, RESCISAO, BANCO_AGUARDAR): o mesmo filtro do `vinculadas` do projeto.
+        naEsteira: sql<number>`count(*) filter (
+          where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
+        emBanco: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'BANCO_AGUARDAR')::int`,
+        // O MESMO PAR DO PROJETO: a expressão compartilhada mais o filtro de farol, sem o qual
+        // "concluídas" poderia passar de "na esteira" na mesma linha.
+        concluidas: sql<number>`count(*) filter (
+          where ${admissaoConcluidaSql}
+            and ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
+        emAndamento: sql<number>`count(*) filter (where ${admissaoEmAndamentoExclusivoSql})::int`,
+        pausadas: sql<number>`count(*) filter (where ${admissoes.pausadaEm} is not null)::int`,
+        declinios: sql<number>`count(*) filter (
+          where ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
+        )::int`,
+      })
+      .from(admissoes)
+      .where(eq(admissoes.grupoClienteId, id));
+
+    const meta = grupo.meta ?? null;
+    const naEsteira = Number(c?.naEsteira ?? 0);
+
+    /*
+     * A MESMA ANÁLISE, QUEBRADA POR CARGO. Mesmo universo (`grupo_cliente_id = :id`), mesma régua de
+     * farol do `totais` (as MESMAS expressões compartilhadas e os MESMOS recortes literais, não uma
+     * segunda régua para divergir), agora agregada por `cargo_id`. Left join em `cargos` só para o
+     * nome; `cargoId` null vira "Sem Cargo".
+     *
+     * NÃO HÁ META POR CARGO, DE PROPÓSITO: a meta é um total do grupo (`grupos_cliente.meta`), não um
+     * alvo por cargo. Por isso `porCargo` NÃO traz `vagas` nem `faltam` (a tela mostra "não informado"
+     * nessas colunas por cargo, e o `faltam` total fica no card). Dar um `faltam` por cargo exigiria
+     * ratear uma meta que não existe nesse nível, e isso mentiria.
+     *
+     * §A.6: contagem + id/nome do cargo. Nenhum CPF, candidato ou CNPJ.
+     */
+    const linhasPorCargo = await this.db
+      .select({
+        cargoId: admissoes.cargoId,
+        cargoNome: cargos.nome,
+        naEsteira: sql<number>`count(*) filter (
+          where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
+        concluidas: sql<number>`count(*) filter (
+          where ${admissaoConcluidaSql}
+            and ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
+        emAndamento: sql<number>`count(*) filter (where ${admissaoEmAndamentoExclusivoSql})::int`,
+        pausadas: sql<number>`count(*) filter (where ${admissoes.pausadaEm} is not null)::int`,
+        declinios: sql<number>`count(*) filter (
+          where ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
+        )::int`,
+      })
+      .from(admissoes)
+      .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+      .where(eq(admissoes.grupoClienteId, id))
+      .groupBy(admissoes.cargoId, cargos.nome)
+      // "Sem Cargo" (nome null) por último; o resto alfabético.
+      .orderBy(sql`${cargos.nome} asc nulls last`);
+
+    const porCargo = linhasPorCargo.map((l) => ({
+      cargoId: l.cargoId ?? null,
+      cargoNome: l.cargoNome ?? "Sem Cargo",
+      naEsteira: Number(l.naEsteira ?? 0),
+      concluidas: Number(l.concluidas ?? 0),
+      emAndamento: Number(l.emAndamento ?? 0),
+      pausadas: Number(l.pausadas ?? 0),
+      declinios: Number(l.declinios ?? 0),
+    }));
+
+    return {
+      grupo: { id: grupo.id, nome: grupo.nome, meta },
+      totais: {
+        meta,
+        naEsteira,
+        // IGUAL a naEsteira por construção (os dois excluem banco); mantido na resposta para a tela.
+        ativos: naEsteira,
+        emBanco: Number(c?.emBanco ?? 0),
+        concluidas: Number(c?.concluidas ?? 0),
+        emAndamento: Number(c?.emAndamento ?? 0),
+        pausadas: Number(c?.pausadas ?? 0),
+        declinios: Number(c?.declinios ?? 0),
+        // Sem meta, sem faltam: NULL, não zero, pelo motivo acima.
+        faltam: meta === null ? null : meta - naEsteira,
+      },
+      porCargo,
+    };
+  }
+
   async criar(dto: CriarGrupoClienteDto) {
     const nome = dto.nome.trim().replace(/\s+/g, " ");
     await this.exigirNomeLivre(nome, null);
     const [row] = await this.db
       .insert(gruposCliente)
-      .values({ nome, descricao: dto.descricao?.trim() || null })
+      .values({ nome, descricao: dto.descricao?.trim() || null, meta: dto.meta })
       .returning();
     return row;
   }
@@ -150,6 +290,10 @@ export class GruposClienteService {
         ...(nome !== undefined ? { nome } : {}),
         ...(dto.descricao !== undefined ? { descricao: dto.descricao.trim() || null } : {}),
         ...(dto.ativo !== undefined ? { ativo: dto.ativo } : {}),
+        // META: só é escrita quando veio no patch. O `atualizadoEm` abaixo é o carimbo de edição
+        // auditável que o cadastro de admin já usa (não há tabela de log de catálogo neste domínio;
+        // o padrão vizinho carimba só a data, e é esse o padrão).
+        ...(dto.meta !== undefined ? { meta: dto.meta } : {}),
         atualizadoEm: new Date(),
       })
       .where(eq(gruposCliente.id, id))

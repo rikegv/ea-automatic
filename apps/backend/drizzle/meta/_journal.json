@@ -1086,6 +1086,13 @@
       "when": 1790646022719,
       "tag": "0155_portal_link_emissao_falha",
       "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1790646023719,
+      "tag": "0158_grupo_cliente_meta",
+      "breakpoints": true
     }
   ]
 }

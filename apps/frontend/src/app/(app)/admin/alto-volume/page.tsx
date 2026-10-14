@@ -199,18 +199,13 @@ export default function AltoVolumePage() {
   const [carregandoDetalhe, setCarregandoDetalhe] = useState(false);
   const [erroDetalhe, setErroDetalhe] = useState<string | null>(null);
 
-  // Formulário do GRUPO de entrada.
   /**
-   * Grupos de entrada são OPCIONAIS e a maioria dos projetos não usa. A seção some quando o projeto
-   * não tem nenhum, e este estado é a porta de volta: sem ele, o primeiro grupo nunca poderia ser
-   * cadastrado, porque o formulário mora dentro da seção escondida.
+   * GRUPO DE ENTRADA SAIU DO FRONT (decisão do diretor, frente Alto Volume por grupo): a seção de
+   * cadastro de grupos de entrada deixou de ser renderizada. O dado permanece no banco e a coluna
+   * Cota segue mostrando a leva das vagas legadas; `usarGrupos` só continua existindo porque alimenta
+   * `mostrarGrupos`, que ainda governa essa coluna.
    */
-  const [usarGrupos, setUsarGrupos] = useState(false);
-  const [grupoRotulo, setGrupoRotulo] = useState("");
-  const [grupoData, setGrupoData] = useState("");
-  const [grupoEditando, setGrupoEditando] = useState<string | null>(null);
-  const [salvandoGrupo, setSalvandoGrupo] = useState(false);
-  const [confirmarGrupo, setConfirmarGrupo] = useState<Grupo | null>(null);
+  const [usarGrupos] = useState(false);
 
   // Formulário da VAGA por cargo.
   const [vagaCargoId, setVagaCargoId] = useState("");
@@ -258,7 +253,6 @@ export default function AltoVolumePage() {
      nenhum total e nenhum filtro dependem destes estados.
      "Admissões No Projeto" nasce RECOLHIDA por ser a longa, e o total continua visível no título,
      que informa mais do que cem linhas roladas. As outras três nascem abertas, como já eram. */
-  const [secGrupos, setSecGrupos] = useState(true);
   const [secVagas, setSecVagas] = useState(true);
   const [secNoProjeto, setSecNoProjeto] = useState(false);
   const [secSemProjeto, setSecSemProjeto] = useState(true);
@@ -480,10 +474,8 @@ export default function AltoVolumePage() {
     }
     setAbertoId(p.id);
     setDetalhe(null);
-    limparFormularioGrupo();
     limparFormularioVaga();
     limparElos();
-    setUsarGrupos(false);
     await Promise.all([carregarDetalhe(p.id), carregarElos(p.id)]);
   }
 
@@ -496,78 +488,18 @@ export default function AltoVolumePage() {
     setFiltroClienteOrfaos("");
   }
 
-  // ── Grupos de entrada ─────────────────────────────────────────────────────
+  // ── Grupos de entrada (cadastro REMOVIDO do front; só a leitura da Cota permanece) ─────────────
 
-  /** A seção de grupos aparece se o projeto JÁ usa turmas, ou se pediram para passar a usar. */
+  /**
+   * Governa a coluna Cota da tabela de vagas: ela só aparece quando o projeto tem grupo legado. O
+   * cadastro de grupo de entrada saiu da tela, então `usarGrupos` é sempre falso e isto equivale a
+   * "o projeto tem grupo gravado".
+   */
   const mostrarGrupos = (detalhe?.grupos.length ?? 0) > 0 || usarGrupos;
   // A coluna de LOJA só aparece quando este projeto tem algum cargo detalhado. Projeto sem
   // detalhamento fica visualmente idêntico ao de antes, que é a decisão 4 (sem backfill) refletida
   // na tela: quem não usa não vê.
   const mostrarLojas = (detalhe?.vagas.some((v) => v.lojaId) ?? false);
-
-  function limparFormularioGrupo() {
-    setGrupoEditando(null);
-    setGrupoRotulo("");
-    setGrupoData("");
-  }
-
-  function iniciarEdicaoGrupo(g: Grupo) {
-    setGrupoEditando(g.id);
-    setGrupoRotulo(g.rotulo);
-    setGrupoData(g.dataEntrada.slice(0, 10));
-    setErroDetalhe(null);
-  }
-
-  async function salvarGrupo(e: FormEvent) {
-    e.preventDefault();
-    if (!abertoId) return;
-    setSalvandoGrupo(true);
-    setErroDetalhe(null);
-    try {
-      if (grupoEditando) {
-        await apiFetch(`/admin/alto-volume/grupos/${encodeURIComponent(grupoEditando)}`, {
-          method: "PATCH",
-          token,
-          body: { rotulo: grupoRotulo, dataEntrada: grupoData },
-        });
-      } else {
-        await apiFetch(`/admin/alto-volume/${encodeURIComponent(abertoId)}/grupos`, {
-          method: "POST",
-          token,
-          body: { rotulo: grupoRotulo, dataEntrada: grupoData },
-        });
-      }
-      limparFormularioGrupo();
-      await carregarDetalhe(abertoId);
-      await load();
-    } catch (e) {
-      setErroDetalhe(e instanceof Error ? e.message : "Erro ao salvar o grupo");
-    } finally {
-      setSalvandoGrupo(false);
-    }
-  }
-
-  async function removerGrupo() {
-    const g = confirmarGrupo;
-    if (!g || !abertoId) return;
-    setSalvandoGrupo(true);
-    setErroDetalhe(null);
-    try {
-      await apiFetch(`/admin/alto-volume/grupos/${encodeURIComponent(g.id)}`, {
-        method: "DELETE",
-        token,
-      });
-      if (grupoEditando === g.id) limparFormularioGrupo();
-      setConfirmarGrupo(null);
-      await carregarDetalhe(abertoId);
-      await load();
-    } catch (e) {
-      setConfirmarGrupo(null);
-      setErroDetalhe(e instanceof Error ? e.message : "Erro ao remover o grupo");
-    } finally {
-      setSalvandoGrupo(false);
-    }
-  }
 
   // ── Vagas por cargo ───────────────────────────────────────────────────────
 
@@ -1267,13 +1199,8 @@ export default function AltoVolumePage() {
             <h2 className="text-[17px] font-semibold text-text">
               {detalhe ? detalhe.nome : "Carregando…"}
             </h2>
-            {/* O subtítulo acompanha o que a tela realmente mostra: anunciar "Grupos De Entrada"
-                com a seção escondida seria mandar procurar o que não está lá. */}
-            <span className="text-sm text-dim">
-              {mostrarGrupos
-                ? "Grupos De Entrada, Vagas Por Cargo E Admissões"
-                : "Vagas Por Cargo E Admissões Do Projeto"}
-            </span>
+            {/* Grupos De Entrada saiu do front: o subtítulo anuncia só o que a tela mostra. */}
+            <span className="text-sm text-dim">Vagas Por Cargo E Admissões Do Projeto</span>
             <button
               type="button"
               onClick={() => {
@@ -1299,115 +1226,11 @@ export default function AltoVolumePage() {
             <p className="py-6 text-center text-faint">Carregando o projeto…</p>
           ) : detalhe ? (
             <>
-            <div className={`grid gap-5 ${mostrarGrupos ? "lg:grid-cols-2" : ""}`}>
-              {/* ── GRUPOS DE ENTRADA (só quando o projeto usa turmas) ───────
-                  A maioria dos projetos entra de uma vez só, e para esses a seção inteira era
-                  bastidor ocupando metade do painel (decisão do diretor). Ela some quando não há
-                  grupo cadastrado, e volta pelo link "usar grupos de entrada", que é o ÚNICO caminho
-                  para cadastrar o primeiro: escondê-la sem uma porta de volta deixaria o recurso
-                  inalcançável para quem um dia precisar dele. */}
-              {mostrarGrupos && (
-              <section>
-                <h3 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
-                  <TituloRecolhivel
-                    aberto={secGrupos}
-                    onToggle={() => setSecGrupos((v) => !v)}
-                    rotuloAcessivel="Grupos De Entrada"
-                  >
-                    Grupos De Entrada
-                  </TituloRecolhivel>
-                  {detalhe.grupos.length === 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setUsarGrupos(false)}
-                      className="normal-case text-accent hover:underline"
-                    >
-                      não usar grupos
-                    </button>
-                  )}
-                </h3>
-                {secGrupos && (
-                  <>
-                <form onSubmit={salvarGrupo} className="mb-3 flex flex-wrap gap-2">
-                  <input
-                    required
-                    placeholder="Rótulo do grupo *"
-                    value={grupoRotulo}
-                    onChange={(e) => setGrupoRotulo(e.target.value)}
-                    className="ds-input min-w-[160px] flex-1"
-                    aria-label="Rótulo do grupo"
-                  />
-                  <input
-                    required
-                    type="date"
-                    value={grupoData}
-                    onChange={(e) => setGrupoData(e.target.value)}
-                    className="ds-input w-[170px]"
-                    aria-label="Data de entrada do grupo"
-                  />
-                  <Button type="submit" disabled={salvandoGrupo} className="shrink-0 py-2">
-                    {grupoEditando ? "Salvar" : "Adicionar"}
-                  </Button>
-                  {grupoEditando && (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={limparFormularioGrupo}
-                      disabled={salvandoGrupo}
-                      className="shrink-0 py-2"
-                    >
-                      Cancelar
-                    </Button>
-                  )}
-                </form>
-
-                <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-                  <table className="ds-table min-w-[420px]">
-                    <thead>
-                      <tr>
-                        <th>Grupo</th>
-                        <th className="w-[150px]">Entrada</th>
-                        <th className="w-[150px]">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detalhe.grupos.length === 0 ? (
-                        <tr>
-                          <td colSpan={3} className="py-6 text-center text-faint">
-                            Sem grupo cadastrado. As vagas ficam na cota do projeto inteiro.
-                          </td>
-                        </tr>
-                      ) : (
-                        detalhe.grupos.map((g) => (
-                          <tr key={g.id}>
-                            <td className="font-semibold">{g.rotulo}</td>
-                            <td className="text-center tabular-nums">{fmtData(g.dataEntrada)}</td>
-                            <td className="whitespace-nowrap text-right">
-                              <button
-                                onClick={() => iniciarEdicaoGrupo(g)}
-                                className="text-accent hover:underline"
-                              >
-                                editar
-                              </button>
-                              <span className="px-2 text-faint">·</span>
-                              <button
-                                onClick={() => setConfirmarGrupo(g)}
-                                className="text-danger hover:underline"
-                              >
-                                remover
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                  </>
-                )}
-              </section>
-              )}
-
+            {/* A SEÇÃO "GRUPOS DE ENTRADA" SAIU DO FRONT (decisão do diretor, frente Alto Volume por
+                grupo): o cadastro de leva por data deixou de ser renderizado. O grid deixou de ser de
+                duas colunas, porque agora só a seção de Vagas Por Cargo mora aqui. O dado dos grupos
+                legados permanece no banco e ainda aparece na coluna Cota da tabela de vagas. */}
+            <div className="grid gap-5">
               {/* ── VAGAS POR CARGO ───────────────────────────────────────── */}
               <section>
                 <h3 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
@@ -1421,15 +1244,6 @@ export default function AltoVolumePage() {
                   <span className="normal-case text-dim">
                     total: <span className="font-semibold tabular-nums text-text">{totalVagas}</span>
                   </span>
-                  {!mostrarGrupos && (
-                    <button
-                      type="button"
-                      onClick={() => setUsarGrupos(true)}
-                      className="ml-auto normal-case text-accent hover:underline"
-                    >
-                      usar grupos de entrada
-                    </button>
-                  )}
                 </h3>
                 {secVagas && (
                   <>
@@ -1878,24 +1692,9 @@ export default function AltoVolumePage() {
                     total: <span className="font-semibold tabular-nums text-text">{orfaos.length}</span>
                   </span>
                 </h4>
-                {projetoAtivo && detalhe.grupos.length > 0 && (
-                  <label className="ml-auto flex items-center gap-2 text-sm text-dim">
-                    <span className="whitespace-nowrap">Adicionar ao grupo</span>
-                    <div className="min-w-[190px]">
-                      <Select
-                        value={grupoParaVincular}
-                        onChange={setGrupoParaVincular}
-                        placeholder="Projeto Inteiro"
-                        ariaLabel="Grupo de entrada do vínculo"
-                        menuFit
-                        options={[
-                          { value: "", label: "Projeto Inteiro" },
-                          ...detalhe.grupos.map((g) => ({ value: g.id, label: g.rotulo })),
-                        ]}
-                      />
-                    </div>
-                  </label>
-                )}
+                {/* O SELETOR "ADICIONAR AO GRUPO" SAIU (grupo de entrada fora do front): o vínculo
+                    nasce sem grupo. `grupoParaVincular` fica em branco e o corpo da adição manda
+                    grupoId indefinido, como antes acontecia quando ninguém escolhia leva. */}
               </div>
               {secSemProjeto && (
                 <>
@@ -2393,21 +2192,6 @@ export default function AltoVolumePage() {
         busy={inativando}
         onConfirm={confirmarInativacao}
         onCancel={() => setConfirmar(null)}
-      />
-
-      <ConfirmDialog
-        open={Boolean(confirmarGrupo)}
-        title="Remover Grupo De Entrada"
-        message={
-          confirmarGrupo
-            ? `Remover o grupo "${confirmarGrupo.rotulo}"? As vagas cadastradas na cota deste grupo saem junto. Grupo com admissão já vinculada não é removido.`
-            : ""
-        }
-        confirmLabel="Remover"
-        tone="danger"
-        busy={salvandoGrupo}
-        onConfirm={removerGrupo}
-        onCancel={() => setConfirmarGrupo(null)}
       />
 
       <ConfirmDialog
