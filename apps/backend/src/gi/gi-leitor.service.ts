@@ -78,6 +78,15 @@ export class GiLeitorService {
           conta: candidatos.conta,
         },
         dados: {
+          // ⚠️ PRIMEIRO CAMPO DE PROPÓSITO, e é a CHAVE DO LEFT JOIN (não-nula quando a linha existe).
+          // Num `leftJoin` com objeto ANINHADO, o drizzle decide se o objeto `dados` é `null` OLHANDO O
+          // PRIMEIRO CAMPO selecionado: se ele vier nulo, o objeto INTEIRO vira `null`, e todo o dossiê
+          // (RG, filiação, CTPS, endereço) some do payload AINDA QUE gravado. Medido em 14/10/2026: com
+          // `nacionalidade` em primeiro (nula p/ quase todos), `lerPessoa` devolvia o dossiê como nulo e
+          // o RG do candidato nunca chegava ao G.I. `admissao_id` é a chave do join, então é não-nula
+          // sempre que há linha: liderar com ela faz o drizzle enxergar a linha e trazer os campos reais.
+          // montarPessoaParaGi ignora esta chave (lê só os campos nomeados), então é só sentinela.
+          _presente: admissaoDadosGi.admissaoId,
           nacionalidade: admissaoDadosGi.nacionalidade,
           naturalidade: admissaoDadosGi.naturalidade,
           // A CIDADE de nascimento (0141). Campo SEPARADO da `naturalidade`, que é a SIGLA DA UF: no GI

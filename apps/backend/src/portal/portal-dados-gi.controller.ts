@@ -2,6 +2,7 @@ import { Body, Controller, Post, Req, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
 import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators";
+import { carimbarConfirmacaoHumana } from "../domain/dados-gi-campos";
 import { GravarDadosGiDto } from "./portal.dto";
 import { PortalDadosGiService } from "./portal-gi-gravacao.service";
 import { PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
@@ -43,10 +44,14 @@ export class PortalDadosGiController {
     // §A.6: dado pessoal validado não fica em cache de proxy nem de disco do navegador, mesmo
     // tratamento da leitura da trilha.
     res.set({ "Cache-Control": "no-store, private" });
+    // OPÇÃO 2 (Rike, 14/10/2026): submeter o Portal JÁ É a confirmação humana. O navegador manda só
+    // `{campo, valor}` e nunca `confirmadoPorHumano`; sem este carimbo, `montarGravacaoDadosGi`
+    // descartava TODO o dossiê (base-wide: 0 campos persistidos). Carimbamos no limite HTTP e o
+    // domínio segue dono do veto V12 (vazio e campo fora da allowlist continuam descartados).
     return this.dadosGi.gravar({
       admissaoId: req.portal!.admissaoId,
       jtiLink: req.portal!.jtiLink,
-      campos: dto.campos,
+      campos: carimbarConfirmacaoHumana(dto.campos),
       ip: this.ipDaBarreira(req),
     });
   }

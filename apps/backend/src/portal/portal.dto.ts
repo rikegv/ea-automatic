@@ -12,7 +12,7 @@ import {
   MaxLength,
   Min,
 } from "class-validator";
-import type { CampoConfirmadoGi } from "../domain/portal-dados-gi";
+import type { CampoSubmetidoGi } from "../domain/dados-gi-campos";
 import { LIMITES_PORTAL, TIPOS_ACEITOS_PORTAL } from "../domain/portal-credencial";
 
 /**
@@ -52,15 +52,17 @@ export class PedirCredencialDto {
  * admissão de outra pessoa (veto: item 2 do §7 do desenho). O controller estruturalmente não
  * consegue expressar admissão no corpo.
  *
- * `campos` é a LISTA de campos que o candidato conferiu, cada um com `confirmadoPorHumano`. SÓ o
- * confirmado persiste (veto V12), e o filtro está no domínio (`montarGravacaoDadosGi` +
- * allowlist de colunas): este DTO só barra o grosseiro (não é lista, ou lista grande demais).
- * §A.6: nenhuma mensagem de validação ecoa valor.
+ * `campos` é a LISTA que o navegador envia, cada item só `{campo, valor}`: o candidato confirmou na
+ * tela ao submeter. A marca `confirmadoPorHumano` NÃO vem do corpo (o front não a manda, e foi o que
+ * descartava o dossiê inteiro): o controller a CARIMBA no limite HTTP (`carimbarConfirmacaoHumana`,
+ * opção 2 do Rike) antes de entregar ao domínio. SÓ o confirmado persiste (veto V12), e o filtro
+ * final está no domínio (`montarGravacaoDadosGi` + allowlist de colunas): este DTO só barra o
+ * grosseiro (não é lista, ou lista grande demais). §A.6: nenhuma mensagem de validação ecoa valor.
  */
 export class GravarDadosGiDto {
   @IsArray({ message: "Envio inválido" })
   @ArrayMaxSize(200, { message: "Envio inválido" })
-  campos!: CampoConfirmadoGi[];
+  campos!: CampoSubmetidoGi[];
 }
 
 /**

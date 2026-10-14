@@ -18,6 +18,8 @@
  * validar formato de data; nada daqui é impresso.
  */
 
+import type { CampoConfirmadoGi } from "./portal-dados-gi";
+
 /** O tipo do campo decide só a validação de formato na gravação, nunca a regra de negócio. */
 type TipoCampoGi = "texto" | "data" | "uf" | "codigo3";
 
@@ -159,4 +161,37 @@ export function filtrarCamposGi(cru: Record<string, unknown>): DadosGiFiltrados 
     rotulos.push(def.rotulo);
   }
   return { update, rotulos };
+}
+
+/** O que o navegador do candidato envia por campo: só a chave e o valor que ele confirmou na tela. */
+export interface CampoSubmetidoGi {
+  campo: string;
+  valor: string;
+}
+
+/**
+ * OPÇÃO 2 (decisão do Rike, 14/10/2026): o ATO DE SUBMETER o Portal É a confirmação humana. O
+ * candidato viu e validou os campos na tela antes de enviar, então cada campo que chega por
+ * `POST /portal/dados-gi` entra como `confirmadoPorHumano: true`. Isto fecha o descompasso de
+ * contrato que descartava TODO o dossiê: o navegador manda `{campo, valor}` e nunca
+ * `confirmadoPorHumano`, e `montarGravacaoDadosGi` só persiste o que vem com `true`.
+ *
+ * O VETO V12 SEGUE HONRADO: o que o candidato NÃO submeteu não chega aqui, e o valor VAZIO continua
+ * descartado pelo domínio e pela allowlist de colunas (`filtrarCamposGi`). A confirmação humana
+ * passou a ser o ATO de submeter, não um booleano que o front esquecia de mandar.
+ *
+ * O `rotulo` sai do catálogo (`CAMPOS_GI`), a MESMA fonte do rastro do aceite; campo fora do
+ * catálogo cai no próprio nome e o filtro de colunas o descarta adiante (fail-closed).
+ *
+ * §A.6: função pura, nenhum valor é lido para decidir nada, nada é logado.
+ */
+export function carimbarConfirmacaoHumana(
+  campos: readonly CampoSubmetidoGi[],
+): CampoConfirmadoGi[] {
+  return campos.map((c) => ({
+    campo: c.campo,
+    valor: c.valor,
+    rotulo: CAMPOS_GI[c.campo]?.rotulo ?? c.campo,
+    confirmadoPorHumano: true,
+  }));
 }
