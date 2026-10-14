@@ -58,6 +58,7 @@ import {
   rankSituacao,
   rotaBloquear,
   rotaDesbloquear,
+  rotaResolverIntervencao,
   rotuloDaFalhaDoLink,
   rotuloDaOrigem,
   semRegua,
@@ -262,6 +263,8 @@ export default function PortalLinksPage() {
   // Emissão do link: alvo em curso e o resultado, mostrado UMA vez no modal.
   const [emitindo, setEmitindo] = useState<string | null>(null);
   const [alternando, setAlternando] = useState<string | null>(null);
+  /** A resolução da intervenção humana em voo, por admissão (molde de `emitindo`/`alternando`). */
+  const [resolvendo, setResolvendo] = useState<string | null>(null);
   const [emitido, setEmitido] = useState<{
     nome: string;
     dados: LinkDoPortalParaCopiar;
@@ -713,6 +716,35 @@ export default function PortalLinksPage() {
         );
       } finally {
         setAlternando(null);
+      }
+    },
+    [token, carregar],
+  );
+
+  /**
+   * RESOLVER A INTERVENÇÃO HUMANA, que tira a admissão do card "Intervenção Humana".
+   *
+   * A pendência que caiu para o time (`noTime`) é marcada como resolvida no servidor. A lista e os
+   * contadores recarregam depois pelo MESMO caminho das outras ações (`carregar`), porque aquela
+   * admissão acabou de sair do recorte e do contador de Intervenção Humana.
+   */
+  const resolverIntervencao = useCallback(
+    async (l: LinhaComJtiOpcional) => {
+      if (!token) return;
+      setResolvendo(l.admissaoId);
+      setErro(null);
+      try {
+        await apiFetch(rotaResolverIntervencao(l.admissaoId), {
+          method: "POST",
+          token,
+        });
+        await carregar();
+      } catch (e) {
+        setErro(
+          e instanceof ApiError ? e.message : "Falha ao resolver a intervenção humana.",
+        );
+      } finally {
+        setResolvendo(null);
       }
     },
     [token, carregar],
@@ -1179,6 +1211,7 @@ export default function PortalLinksPage() {
                   const rodando = emitindo === l.admissaoId;
                   const trocando = alternando === l.admissaoId;
                   const mandando = enviandoEmail === l.admissaoId;
+                  const resolvendoEsta = resolvendo === l.admissaoId;
                   const acao = acaoDoLink(l.estadoLink);
                   return (
                     <tr key={l.admissaoId}>
@@ -1392,6 +1425,29 @@ export default function PortalLinksPage() {
                             />
                           </button>
                           </>
+                          )}
+
+                          {/* RESOLVIDO: só aparece quando a pendência CAIU PARA O TIME (`noTime`),
+                              que é o estado "Intervenção Humana". Resolver tira a admissão daquele
+                              card congelado. Nas demais linhas o botão NÃO aparece, para não ocupar
+                              espaço na coluna já apertada. É o ÚLTIMO botão, depois do bloquear. */}
+                          {l.noTime && (
+                            <button
+                              type="button"
+                              title="Marcar a intervenção humana como resolvida. A admissão sai do card de Intervenção Humana."
+                              aria-label={`Marcar intervenção humana de ${l.nome} como resolvida`}
+                              disabled={rodando || trocando || mandando || resolvendoEsta}
+                              onClick={() => void resolverIntervencao(l)}
+                              className={cn(
+                                "grid h-8 w-[30px] flex-none place-items-center rounded-lg text-faint transition",
+                                "hover:bg-[var(--surface-2)] hover:text-ok disabled:cursor-not-allowed disabled:opacity-40",
+                              )}
+                            >
+                              <Icon
+                                name={resolvendoEsta ? "refresh" : "check"}
+                                className={cn("h-[17px] w-[17px]", resolvendoEsta && "animate-spin")}
+                              />
+                            </button>
                           )}
                         </div>
                       </td>

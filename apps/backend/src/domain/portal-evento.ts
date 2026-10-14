@@ -125,6 +125,20 @@ export const PORTAL_EVENTOS = [
   // documento e a contagem. Nenhum dos dois carrega o motivo escrito pela IA nem texto livre.
   "PORTAL_REENVIO_SOLICITADO",
   "PORTAL_TETO_DESTRAVADO",
+  // ── A INTERVENCAO HUMANA FOI RESOLVIDA PELO TIME (AJUSTE 1) ───────────────────────────────────
+  //
+  // EVENTO PRÓPRIO, e não um dos três acima, porque ele é de NATUREZA OPOSTA a eles: os três movem o
+  // marco de REABERTURA (`liberado_em`), que devolve a tentativa ao candidato e reabre a porta dele.
+  // Este marca o ENCERRAMENTO da intervenção pelo time (o documento foi tratado), SEM devolver
+  // tentativa e SEM reabrir nada: a admissão só sai do card "Intervenção Humana" do Gerenciador do
+  // Portal. Contá-lo junto com reabertura misturaria "o time resolveu" com "o candidato pode tentar
+  // de novo", que são decisões diferentes e a Sala De Segurança conta separado.
+  //
+  // §A.6: ele leva `autorId` (usuário do EA) e nada mais. O `admissaoId` que o chamador passa por
+  // contexto NÃO atravessa (não está em `CAMPOS_PERMITIDOS`, e a allowlist NÃO foi alargada): a
+  // trilha guarda quem resolveu, e o id da admissão segue no log operacional do serviço, nunca no
+  // jsonb do evento. Nenhum CPF, nenhum nome, nenhum motivo em texto livre.
+  "PORTAL_INTERVENCAO_RESOLVIDA",
   // ── A REABERTURA DISPARADA PELA AUDITORIA (reabrir/excluir documento na Esteira) ────────────────
   //
   // EVENTO PRÓPRIO, pelo mesmo argumento dos dois acima, e por um a mais que é só dele: quando o

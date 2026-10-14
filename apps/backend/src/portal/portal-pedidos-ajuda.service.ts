@@ -3,7 +3,15 @@ import { and, desc, eq, notInArray, sql } from "drizzle-orm";
 import type { PedidoDeAjudaDoPortal } from "@ea/shared-types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissoes, candidatos, cargos, clientes, portalEventos, portalLinks } from "../db/schema";
+import {
+  admissoes,
+  candidatos,
+  cargos,
+  clientes,
+  frentesAdmissao,
+  portalEventos,
+  portalLinks,
+} from "../db/schema";
 import { FAROIS_FORA_DO_PAINEL } from "./portal-painel.service";
 
 /**
@@ -68,6 +76,21 @@ export class PortalPedidosAjudaService {
         and(
           eq(portalEventos.tipo, "PORTAL_RECUPERACAO_SOLICITADA"),
           notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+          // ┌─ QUEM JÁ FINALIZOU A ANÁLISE SAI DO PEDIDOS DE AJUDA (AJUSTE 5) ──────────────────────────┐
+          // │ Pedir ajuda "para entrar" só é tarefa enquanto a pessoa ainda está no começo do Portal.    │
+          // │ Resquício da migração Pandapé: candidatos que já tiveram a AUDITORIA levada a ANALISE_OK    │
+          // │ (análise finalizada na esteira) continuavam na lista, como a Ana Paula, que o time nem      │
+          // │ acha mais ao pesquisar o painel (ela está na aba de finalizados). Análise finalizada = não  │
+          // │ é mais "ajuda para entrar". É `not exists` correlacionado (sem join, preserva a forma da     │
+          // │ consulta e o grupo); §A.6 lê só tipo e status da frente, nenhuma PII. Isto é ADITIVO ao     │
+          // │ corte do AJUSTE 2 (acessou depois do pedido): um pega o timing do acesso, o outro o estágio. │
+          // └────────────────────────────────────────────────────────────────────────────────────────────┘
+          sql`not exists (
+            select 1 from ${frentesAdmissao} fa
+            where fa.admissao_id = ${admissoes.id}
+              and fa.tipo = 'AUDITORIA'
+              and fa.status = 'ANALISE_OK'
+          )`,
         ),
       )
       .groupBy(
@@ -76,6 +99,31 @@ export class PortalPedidosAjudaService {
         candidatos.nome,
         cargos.nome,
         clientes.nomeOperacao,
+      )
+      // ┌─ O CANDIDATO QUE JÁ VOLTOU A ENTRAR SAI DA LISTA (regra nova do diretor) ──────────────────┐
+      // │ O pedido de ajuda é uma foto do momento em que a pessoa não conseguiu entrar. Se depois     │
+      // │ disso ela ACESSOU, o pedido virou passado e não é mais tarefa; se pedir DE NOVO depois do   │
+      // │ acesso, volta (o `max` do pedido passa a ser mais recente que o acesso). O corte é o acesso │
+      // │ ESTRITAMENTE posterior ao último pedido: `is null` ou `<=` MANTÉM (nunca acessou, ou o      │
+      // │ último acesso não é mais novo que o último pedido), e `>` ESCONDE (acessou depois de pedir). │
+      // │                                                                                            │
+      // │ POR QUE A SUBCONSULTA CORRELACIONADA, E POR QUE SOBRE `admissao_id`. O acesso é da ADMISSÃO, │
+      // │ não do link do evento: reemissão revoga o link antigo e o candidato pode ter entrado pelo   │
+      // │ link NOVO, cujo `ultimo_acesso_em` não está nas linhas deste grupo (que é por link do       │
+      // │ pedido). Olhar só o link do evento devolveria um falso "não acessou". Por isso o MÁXIMO de  │
+      // │ `ultimo_acesso_em` sobre TODOS os links da admissão (`pl2.admissao_id = ` o `admissao_id` do │
+      // │ grupo, que está no `groupBy`). §A.6: a subconsulta lê só `admissao_id` e `ultimo_acesso_em`, │
+      // │ nenhuma PII. O recorte é SÓ um filtro: forma do retorno, granularidade por link e ordenação │
+      // │ ficam iguais.                                                                              │
+      // └────────────────────────────────────────────────────────────────────────────────────────────┘
+      .having(
+        sql`(
+          select max(pl2.ultimo_acesso_em) from ${portalLinks} pl2
+          where pl2.admissao_id = ${portalLinks.admissaoId}
+        ) is null or (
+          select max(pl2.ultimo_acesso_em) from ${portalLinks} pl2
+          where pl2.admissao_id = ${portalLinks.admissaoId}
+        ) <= max(${portalEventos.ocorridoEm})`,
       )
       .orderBy(desc(sql`max(${portalEventos.ocorridoEm})`));
 

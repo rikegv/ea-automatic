@@ -21,6 +21,7 @@ import {
   candidatos,
   cargos,
   clientes,
+  frentesAdmissao,
   portalLinks,
   portalPendenciasNoTime,
   portalTermoAceite,
@@ -230,21 +231,39 @@ const TEM_LINK_VIVO: SQL = sql`exists (
 )`;
 
 /**
- * LIBERADO MAS SEM LINK VIVO (frente A.1). A NEGAÇÃO EXATA de `TEM_LINK_VIVO` cruzada com o estado de
- * falha carimbado: a admissão foi liberada, a emissão automática falhou (`portal_link_falha_em` não
- * nulo) e NÃO há link vivo. É a população que o `TEM_LINK_VIVO` exclui de propósito do Gerenciador,
- * e que o ADM precisa VER para corrigir o e-mail e reemitir (taxonomia c) ou aguardar o retry (b).
+ * LIBERADO MAS SEM LINK VIVO (frente A.1, ALARGADO no AJUSTE 1). A NEGAÇÃO de `TEM_LINK_VIVO` cruzada
+ * com "a admissão já teve algum link OU a emissão carimbou falha". É a população que o `TEM_LINK_VIVO`
+ * exclui de propósito da lista principal, e que o ADM precisa VER para reemitir e copiar o link de
+ * novo (taxonomia c / retry b, ou simplesmente porque o candidato perdeu o link).
  *
- * O ESTADO DE FALHA É A CHAVE, não só "sem link vivo": nem toda admissão sem link vivo é falha (a
- * maioria nunca precisou de link, e o fluxo-2 não recebe por desenho). Só entram as que a liberação
- * TENTOU emitir e não conseguiu. §A.6: lê só `admissao_id`, `revogado_em` e o carimbo, sem PII.
+ * ┌─ POR QUE "JÁ TEVE LINK", E NÃO SÓ "FALHA CARIMBADA" (AJUSTE 1) ─────────────────────────────────┐
+ * │ A régua antiga era só a falha carimbada, e ela deixava de fora o caso que o diretor relatou: o  │
+ * │ candidato RECEBEU o link, o link foi depois REVOGADO (emissão nova, reversão) e nenhum vivo     │
+ * │ sobrou. Sem falha carimbada e sem link vivo, a admissão sumia da tela inteira e o time não      │
+ * │ conseguia COPIAR o link de novo (Sonara, Brenda). Agora "já teve link" traz essa de volta ao    │
+ * │ card Sem Link, onde o botão de reemitir/copiar já vive (0155), até a admissão CONCLUIR (o farol │
+ * │ concluído é excluído em `contarSemLink`/`listarSemLink`, não aqui).                              │
+ * │                                                                                                  │
+ * │ O QUE CONTINUA DE FORA, e por isso o OR e não o "sempre": a admissão que NUNCA teve link e NÃO   │
+ * │ tem falha carimbada (o fluxo-2 que não recebe por desenho, a maioria da base). Ela não casa     │
+ * │ nenhum dos dois ramos e segue fora, como deve. A população segue DISJUNTA de `TEM_LINK_VIVO`    │
+ * │ (um exige link vivo, este exige a ausência dele), então os contadores não dobram (§A.27).       │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: lê só `admissao_id`, `revogado_em` e o carimbo de falha, sem PII.
  */
 const SEM_LINK_CARIMBADO: SQL = sql`(
-  ${admissoes.portalLinkFalhaEm} is not null
-  and not exists (
+  not exists (
     select 1 from ${portalLinks} pl
     where pl.admissao_id = ${admissoes.id}
       and pl.revogado_em is null
+  )
+  and (
+    ${admissoes.portalLinkFalhaEm} is not null
+    or exists (
+      select 1 from ${portalLinks} pl2
+      where pl2.admissao_id = ${admissoes.id}
+    )
   )
 )`;
 
@@ -425,7 +444,15 @@ export class PortalPainelService {
     const [{ total } = { total: 0 }] = await this.db
       .select({ total: sql<number>`count(distinct ${admissoes.id})::int` })
       .from(admissoes)
-      .where(and(notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]), SEM_LINK_CARIMBADO));
+      // AJUSTE 1: o card Sem Link vale "até CONCLUIR", então a concluída sai daqui também. Excluída
+      // só NESTE card (não em `FAROIS_FORA_DO_PAINEL`, que é compartilhado e a concluída precisa
+      // seguir no universo da lista principal para o 4B mandá-la à aba de finalizadas).
+      .where(
+        and(
+          notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL, "ADMISSAO_CONCLUIDA"]),
+          SEM_LINK_CARIMBADO,
+        ),
+      );
     return total ?? 0;
   }
 
@@ -444,7 +471,9 @@ export class PortalPainelService {
     const nome = (entrada.nome ?? "").trim();
     const filtroNome = nome.length > 0 ? ilike(candidatos.nome, `%${nome}%`) : undefined;
     const where = and(
-      notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+      // AJUSTE 1: "até concluir", a concluída sai do card (ver `contarSemLink`). Mesma exclusão
+      // local, para contador e lista concordarem.
+      notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL, "ADMISSAO_CONCLUIDA"]),
       SEM_LINK_CARIMBADO,
       ...(filtroNome ? [filtroNome] : []),
     );
@@ -895,7 +924,19 @@ export class PortalPainelService {
          *
          * SEM recorte de card, a aba continua valendo exatamente como valia.
          */
-        if (card === null && !naAba(aba, fato)) return false;
+        // A ABA (AJUSTE 4A/4B) ganha dois sinais ADITIVOS além da coleta: admissão CONCLUÍDA
+        // (farol) e AUDITORIA em ANALISE_OK saem da página principal para a aba de finalizadas.
+        // Não mexe no card nem no rótulo da situação (decisão do diretor "acrescentar à aba").
+        if (
+          card === null &&
+          !naAba(aba, {
+            ...fato,
+            farolConcluida: r.farol === "ADMISSAO_CONCLUIDA",
+            analiseFinalizada: r.analiseOk === true,
+          })
+        ) {
+          return false;
+        }
         if (card !== null && !noCard(card, fato)) return false;
         if (situacoes.size && !situacoes.has(situacaoNoPainel(fato))) return false;
         if (documentos.size) {
@@ -944,12 +985,31 @@ export class PortalPainelService {
     // seja o recorte já filtrado, e não a base inteira. O funil chama sem nenhuma, de propósito:
     // contador que respeita filtro não é contador, é o tamanho da tabela com outro nome.
     condicoes: SQL[] = [],
-  ): Promise<{ admissaoId: string; acessou: boolean; ultimoAcessoEm: Date | null }[]> {
+  ): Promise<
+    {
+      admissaoId: string;
+      acessou: boolean;
+      ultimoAcessoEm: Date | null;
+      // SINAIS DE ABA (AJUSTE 4A/4B): farol e "análise finalizada" da admissão, lidos no mesmo lote.
+      farol: string;
+      analiseOk: boolean;
+    }[]
+  > {
     return this.db
       .select({
         admissaoId: portalLinks.admissaoId,
         acessou: sql<boolean>`bool_or(${portalLinks.primeiroAcessoEm} is not null)`,
         ultimoAcessoEm: sql<Date | null>`max(${portalLinks.ultimoAcessoEm})`,
+        // SINAIS DE ABA (AJUSTE 4A/4B), agregados para não mexer no `groupBy` (uma linha por
+        // admissão, então `max`/`bool_or` devolvem o valor único da admissão). §A.6: farol e
+        // status de frente, nenhum dado pessoal.
+        farol: sql<string>`max(${admissoes.farolGlobal})`,
+        analiseOk: sql<boolean>`bool_or(exists (
+          select 1 from ${frentesAdmissao} fa
+          where fa.admissao_id = ${admissoes.id}
+            and fa.tipo = 'AUDITORIA'
+            and fa.status = 'ANALISE_OK'
+        ))`,
       })
       .from(portalLinks)
       .innerJoin(admissoes, eq(admissoes.id, portalLinks.admissaoId))
@@ -965,12 +1025,25 @@ export class PortalPainelService {
   }
 
   /**
-   * QUEM CAIU PARA O TIME E AINDA NÃO FOI REABERTO.
+   * QUEM CAIU PARA O TIME, AINDA NÃO FOI REABERTO E AINDA NÃO FOI RESOLVIDO.
    *
-   * As DUAS condições são necessárias, e nenhuma delas é redundante: `caiu_em` não nulo separa a
+   * As TRÊS condições são necessárias, e nenhuma delas é redundante: `caiu_em` não nulo separa a
    * queda de verdade da linha que existe SÓ para carregar um destravamento preventivo do Master
-   * (tentativas 0, queda que nunca houve), e `liberado_em` nulo é a "sem reabertura" do contador.
-   * Reaberta, a pendência voltou para o candidato e não é mais intervenção humana em aberto.
+   * (tentativas 0, queda que nunca houve); `liberado_em` nulo é a "sem reabertura" do contador, pois
+   * reaberta a pendência voltou para o candidato e não é mais intervenção humana em aberto; e
+   * `resolvido_em` nulo (AJUSTE 1) tira do card a admissão cuja intervenção o TIME já resolveu. O
+   * "resolvido" é marco PRÓPRIO, não a reabertura: resolver encerra a intervenção sem devolver
+   * tentativa ao candidato (ver `resolvido_em` no schema e `PortalPendenciasService.resolver`).
+   *
+   * Isto torna o card DINÂMICO: contador e recorte saem desta MESMA consulta (`contarPainel`/`noCard`
+   * chamam este método), então os dois concordam por construção, e a admissão resolvida some dos dois
+   * ao mesmo tempo.
+   *
+   * AJUSTE 3 (parte 2): a admissão CONCLUÍDA (farol `ADMISSAO_CONCLUIDA`) NÃO precisa de intervenção
+   * humana e sai do card SOZINHA, sem o time clicar "Resolvido": quem já foi admitido não é mais
+   * trabalho em aberto. É um `not exists` correlacionado, para não virar `innerJoin` (que mudaria a
+   * forma da consulta), e por sair da MESMA consulta ele tira a concluída do contador E do recorte de
+   * uma vez. §A.6: lê só `id` e `farol_global`, sem PII.
    */
   private async admissoesNoTime(ids: string[]): Promise<Set<string>> {
     if (ids.length === 0) return new Set();
@@ -982,6 +1055,12 @@ export class PortalPainelService {
           inArray(portalPendenciasNoTime.admissaoId, ids),
           isNotNull(portalPendenciasNoTime.caiuEm),
           sql`${portalPendenciasNoTime.liberadoEm} is null`,
+          sql`${portalPendenciasNoTime.resolvidoEm} is null`,
+          sql`not exists (
+            select 1 from ${admissoes} a
+            where a.id = ${portalPendenciasNoTime.admissaoId}
+              and a.farol_global = 'ADMISSAO_CONCLUIDA'
+          )`,
         ),
       );
     return new Set(linhas.map((l) => l.admissaoId));

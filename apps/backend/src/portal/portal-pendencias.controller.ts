@@ -39,6 +39,29 @@ export class PortalPendenciasController {
     return this.pendencias.situacao(admissaoId, tipoDocumentoId);
   }
 
+  /**
+   * O time RESOLVE a intervenção humana da admissão: ela sai do card "Intervenção Humana" do
+   * Gerenciador do Portal. Fluxo normal, do consultor, SEM `@Roles`, no mesmo padrão de
+   * `solicitar-reenvio` (é trabalho operacional, não a exceção do Master).
+   *
+   * ══ POR QUE A ROTA DE UM SEGMENTO NÃO COLIDE COM AS DE DOIS ════════════════════════════════════
+   *
+   * Esta é `:admissaoId/resolver` (UM parâmetro, "resolver" é literal); as demais operacionais são
+   * `:admissaoId/:tipoDocumentoId/...` (DOIS parâmetros) e a de situação é `:admissaoId/:tipoDocumentoId`
+   * (dois parâmetros). O roteador do Nest (Express) casa por NÚMERO de segmentos antes de olhar o
+   * conteúdo: `POST /esteira/pendencias-portal/<id>/resolver` tem dois segmentos depois do prefixo e
+   * só pode casar um padrão de dois segmentos, enquanto `:admissaoId/:tipoDocumentoId/algo` tem três.
+   * "resolver" nunca é lido como um `tipoDocumentoId` porque aquele padrão exige um terceiro segmento
+   * que esta URL não tem. Sem ambiguidade, e o `ParseUUIDPipe` no `:admissaoId` é cinto e suspensório.
+   */
+  @Post(":admissaoId/resolver")
+  resolver(
+    @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.pendencias.resolver(admissaoId, user);
+  }
+
   /** O time pede o documento de novo ao candidato. Fluxo normal, do consultor. */
   @Post(":admissaoId/:tipoDocumentoId/solicitar-reenvio")
   solicitarReenvio(

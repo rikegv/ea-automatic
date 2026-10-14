@@ -36,9 +36,13 @@ const HANDLERS = Object.getOwnPropertyNames(PortalPendenciasController.prototype
 );
 
 describe("nenhuma ação do Portal fica sem menu", () => {
-  it("a controller tem os quatro handlers esperados", () => {
+  it("a controller tem os cinco handlers esperados", () => {
     expect(HANDLERS.sort()).toEqual([
       "reabrirRecebido",
+      // AJUSTE 3: resolver a intervenção humana. Operacional, sem `@Roles`, como `solicitarReenvio`;
+      // os dois `it.each` abaixo provam que ela é reivindicada pelo menu `esteira` (via o curinga
+      // `PortalPendenciasController.*`), logo NÃO é rota aberta.
+      "resolver",
       "situacao",
       "solicitarReenvio",
       "zerarTentativas",

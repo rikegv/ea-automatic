@@ -325,6 +325,40 @@ export interface FatoDaConclusao {
   obrigatorios: number;
   obrigatoriosPendentes?: number;
   aceitos?: number;
+  /**
+   * ADMISSÃO CONCLUÍDA (farol `ADMISSAO_CONCLUIDA`), sinal de ABA e SÓ de aba (AJUSTE 4B). A
+   * admissão concluída sai da página principal (aba `EM_ANDAMENTO`) e vai para a aba de finalizadas,
+   * mesmo que a COLETA do Portal não tenha fechado por acesso: quem já foi admitido não é mais
+   * trabalho em andamento. É acrescentado à régua da aba, NÃO substitui `concluiuAColeta`.
+   */
+  farolConcluida?: boolean;
+  /**
+   * ANÁLISE DA AUDITORIA FINALIZADA (frente AUDITORIA = `ANALISE_OK`), sinal de ABA e SÓ de aba
+   * (AJUSTE 4A). Pega o caso medido em produção da migração do Pandapé: documentos entregues pela
+   * Esteira e análise concluída, mas o candidato nunca acessou o Portal, então `concluiuAColeta` é
+   * falso (exige acesso, de propósito) e a admissão ficava presa na página principal como "Não
+   * Acessou". Finalizada a análise, ela sai de andamento. Também é ADITIVO à régua da aba.
+   */
+  analiseFinalizada?: boolean;
+}
+
+/**
+ * FINALIZADA PARA EFEITO DE ABA: a página principal (`EM_ANDAMENTO`) é só o trabalho em curso, e a
+ * segunda aba junta TUDO que já não está em andamento. São três portas para a mesma aba, aditivas:
+ *
+ *  1. `concluiuAColeta` (a régua original: acessou e entregou a régua inteira pelo Portal);
+ *  2. `farolConcluida` (AJUSTE 4B: a admissão foi CONCLUÍDA, farol `ADMISSAO_CONCLUIDA`);
+ *  3. `analiseFinalizada` (AJUSTE 4A: a AUDITORIA foi a `ANALISE_OK`, caso da entrega pela Esteira
+ *     sem o candidato ter acessado o Portal).
+ *
+ * As três são ADITIVAS e não trocam a `situacaoNoPainel` (o rótulo da linha) nem o `noCard` (os
+ * cards continuam medindo acesso/coleta/queda do universo inteiro, decisão do diretor no 4B de
+ * "acrescentar à aba atual"): o que muda é SÓ em qual aba a linha aparece.
+ */
+export function finalizadaParaAba(fato: FatoDaConclusao): boolean {
+  return (
+    concluiuAColeta(fato) || fato.farolConcluida === true || fato.analiseFinalizada === true
+  );
 }
 
 /**
@@ -411,7 +445,7 @@ export function abaDoPainel(valor: string | null | undefined): AbaDoPainel {
 }
 
 export function naAba(aba: AbaDoPainel, fato: FatoDaConclusao): boolean {
-  return concluiuAColeta(fato) === (aba === "CONCLUIDO");
+  return finalizadaParaAba(fato) === (aba === "CONCLUIDO");
 }
 
 // ══ AS DATAS DOS INTERVALOS ══════════════════════════════════════════════════════════════════

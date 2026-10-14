@@ -6145,6 +6145,31 @@ export const portalPendenciasNoTime = pgTable(
      * "quantas vezes a régua precisou ser desmentida" tem de sair limpo.
      */
     reaberturasTime: integer("reaberturas_time").notNull().default(0),
+    /**
+     * O MARCO "RESOLVIDO PELO TIME" (AJUSTE 1), e ele é um carimbo NOVO, deliberadamente SEPARADO do
+     * `liberado_em` acima.
+     *
+     * POR QUE NÃO REUSAR `liberado_em`. `liberado_em` é a REABERTURA: ela devolve a tentativa ao
+     * candidato, zera o teto de reprovações do marco para a frente (`reprovacoesDaPendencia`) e faz a
+     * casa do Portal voltar a "Escolher um arquivo". "Resolvido" é o OUTRO sentido, quase o oposto: o
+     * time TRATOU o documento (resolveu o caso) e a intervenção humana ENCERROU, sem devolver tentativa
+     * nenhuma e sem reabrir a porta do candidato. Carimbar `liberado_em` para dizer "resolvido" zeraria
+     * o teto como efeito colateral e reabriria o envio, que é exatamente o que NÃO aconteceu.
+     *
+     * O QUE ELE FAZ, E SÓ ISSO: tira a admissão do card "Intervenção Humana" do Gerenciador do Portal
+     * (contagem e recorte saem da MESMA consulta, `PortalPainelService.admissoesNoTime`). NÃO muda o
+     * estado do documento, NÃO cria fila nova e NÃO toca a contagem de tentativas, no mesmo espírito da
+     * queda (`caiu_em`): registro ao lado do Portal, invisível a quem não conhece o Portal.
+     *
+     * NULO é o estado normal: a pendência caiu e segue no card até o time resolver. §A.6: carimbo de
+     * tempo, nenhuma PII.
+     */
+    resolvidoEm: timestamp("resolvido_em", { withTimezone: true }),
+    /**
+     * Quem resolveu (usuário do EA). A metade "quem" do rastro; a outra é o `resolvido_em`. Autor
+     * interno, nunca o candidato. §A.6: id técnico, sem PII.
+     */
+    resolvidoPorId: uuid("resolvido_por_id").references(() => usuarios.id),
   },
   (t) => ({
     // UMA linha por pendência. A gravação é idempotente por cima deste unique: reprovação repetida
@@ -6167,6 +6192,15 @@ export const portalPendenciasNoTime = pgTable(
       "ck_portal_pendencias_no_time_liberacao",
       sql`(${t.liberadoEm} is null and ${t.liberadoPorId} is null and ${t.liberadoTipo} is null)
           or (${t.liberadoEm} is not null and ${t.liberadoPorId} is not null and ${t.liberadoTipo} is not null)`,
+    ),
+    // Resolver sem autor, ou autor sem data, é rastro pela metade, e rastro pela metade não responde
+    // "quem resolveu". Os dois andam juntos ou nenhum existe, mesmo princípio do `ckLiberacaoCompleta`
+    // acima. Separado dele de propósito: resolver e reabrir são carimbos independentes (ver o
+    // comentário de `resolvido_em`), então cada par tem a sua própria regra de completude.
+    ckResolvidoCompleto: check(
+      "ck_portal_pendencias_no_time_resolvido",
+      sql`(${t.resolvidoEm} is null and ${t.resolvidoPorId} is null)
+          or (${t.resolvidoEm} is not null and ${t.resolvidoPorId} is not null)`,
     ),
   }),
 );

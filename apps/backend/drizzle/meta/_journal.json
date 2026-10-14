@@ -1093,6 +1093,13 @@
       "when": 1790646023719,
       "tag": "0158_grupo_cliente_meta",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1792000276612,
+      "tag": "0159_portal_intervencao_resolvida",
+      "breakpoints": true
     }
   ]
 }

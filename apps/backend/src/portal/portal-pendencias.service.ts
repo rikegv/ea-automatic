@@ -6,7 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, sql } from "drizzle-orm";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -273,6 +273,89 @@ export class PortalPendenciasService {
     }
 
     return this.liberar("DESTRAVAMENTO_MASTER", alvo, user, "PORTAL_TETO_DESTRAVADO");
+  }
+
+  /**
+   * O TIME RESOLVEU A INTERVENÇÃO HUMANA (AJUSTE 1). A admissão sai do card "Intervenção Humana" do
+   * Gerenciador do Portal, e NADA MAIS muda.
+   *
+   * ══ POR QUE ELE NÃO É `liberar`, E A DIFERENÇA É A FRENTE INTEIRA ══════════════════════════════
+   *
+   * `liberar` (e as três portas que o chamam) move o marco de REABERTURA (`liberado_em`): devolve a
+   * tentativa ao candidato, zera o teto de reprovações do marco para a frente e faz a casa do Portal
+   * voltar a "Escolher um arquivo". "Resolvido" é o OUTRO sentido, quase oposto: o time TRATOU o
+   * documento e a intervenção ENCERROU, sem devolver tentativa e sem reabrir a porta do candidato.
+   * Carimbar `liberado_em` para dizer "resolvido" zeraria o teto como efeito colateral e reabriria o
+   * envio, que é exatamente o que NÃO aconteceu. Por isso um marco NOVO (`resolvido_em`), nunca o de
+   * reabertura.
+   *
+   * ══ UM ÚNICO UPDATE, SOBRE A ADMISSÃO INTEIRA ══════════════════════════════════════════════════
+   *
+   * Diferente das portas de reabertura, que são por pendência (admissão + tipo de documento), esta é
+   * por ADMISSÃO: o card "Intervenção Humana" é por admissão, então resolver é tirar DAQUELA admissão
+   * todas as pendências que ainda estão "no time em aberto" (`caiu_em` não nula, sem reabertura e sem
+   * resolução anterior). Um UPDATE só, filtrado por essas três condições, que são as MESMAS que
+   * `admissoesNoTime` usa para montar o card: assim o que sai do card é exatamente o que este marca.
+   *
+   * Zero linhas afetadas é recusa LEGÍVEL (§A.11, sem travessão): não havia intervenção em aberto,
+   * então não há o que resolver, e dizer isso evita o clique repetido parecer defeito.
+   *
+   * ══ A TRILHA VEM DEPOIS, E É BEST-EFFORT ═══════════════════════════════════════════════════════
+   *
+   * Mesmo padrão de `liberar` e do carimbo de `reabrirDocumentoRecebidoPortal`: o marco é o fato, e a
+   * falha da trilha não pode desfazê-lo. A diferença é que aqui a trilha NÃO é fail-closed na entrada
+   * (não guarda nada do candidato nem concede acesso), então ela é só registro: não configurada ou
+   * falhando, o marco resolvido continua de pé. §A.6: a trilha leva o autor; o `admissaoId` segue só
+   * no log operacional (não atravessa a allowlist da trilha).
+   */
+  async resolver(admissaoId: string, user: AuthUser): Promise<{ resolvidas: number }> {
+    const linhas = await this.db
+      .update(portalPendenciasNoTime)
+      .set({ resolvidoEm: sql`now()`, resolvidoPorId: user.id })
+      .where(
+        and(
+          eq(portalPendenciasNoTime.admissaoId, admissaoId),
+          isNotNull(portalPendenciasNoTime.caiuEm),
+          sql`${portalPendenciasNoTime.liberadoEm} is null`,
+          sql`${portalPendenciasNoTime.resolvidoEm} is null`,
+        ),
+      )
+      .returning({ id: portalPendenciasNoTime.id });
+
+    const resolvidas = linhas.length;
+    if (resolvidas === 0) {
+      throw new BadRequestException(
+        "Esta admissão não tem intervenção humana em aberto para resolver.",
+      );
+    }
+
+    // BEST-EFFORT DEPOIS DO MARCO: a resolução já valeu acima, e registrar é só o rastro. Guardado
+    // por `configurada()` para não lançar por pepper ausente, e em try/catch porque falha de log não
+    // desfaz o que já foi resolvido (mesma filosofia do `liberar` e do carimbo do recebido).
+    try {
+      if (this.trilha.configurada()) {
+        await this.trilha.registrar("PORTAL_INTERVENCAO_RESOLVIDA", {
+          autorId: user.id,
+          // Contexto para o chamador; NÃO atravessa a allowlist da trilha (§A.6), fica no log abaixo.
+          admissaoId,
+        });
+      }
+    } catch (erro) {
+      // §A.6: id da admissão e contagem, nunca PII. A resolução em si está feita.
+      this.log.warn(
+        `intervencao resolvida na admissao ${admissaoId} (${resolvidas} pendencia(s)), ` +
+          `mas o registro na trilha falhou`,
+        erro as Error,
+      );
+    }
+
+    // §A.6: id da admissão e contagem. Nunca nome, nunca CPF.
+    this.log.log(
+      `intervencao humana resolvida pelo time na admissao ${admissaoId}: ` +
+        `${resolvidas} pendencia(s) tirada(s) do card`,
+    );
+
+    return { resolvidas };
   }
 
   /**

@@ -95,6 +95,15 @@ export type LinhaComJtiOpcional = LinhaDoPainelPortal & {
 export const rotaBloquear = (id: string) => `/portal/links/${id}/bloquear`;
 export const rotaDesbloquear = (id: string) => `/portal/links/${id}/desbloquear`;
 
+/**
+ * RESOLVER A INTERVENÇÃO HUMANA, e ela mora sob `esteira/` como as demais leituras e ações do
+ * painel (NÃO sob `portal/`, que a barreira do Fernando allowlista para a internet). A chave é a
+ * ADMISSÃO, não o link: a pendência que caiu para o time (`noTime`) é da admissão, e resolver tira
+ * aquela admissão do card de Intervenção Humana. `apiFetch` prefixa `/api`, então o caminho é sem ele.
+ */
+export const rotaResolverIntervencao = (admissaoId: string) =>
+  `/esteira/pendencias-portal/${admissaoId}/resolver`;
+
 // ── O estado do link ────────────────────────────────────────────────────────────────────────────
 
 /** Os tons do `Pill` do design system, repetidos aqui para o módulo não importar componente. */
