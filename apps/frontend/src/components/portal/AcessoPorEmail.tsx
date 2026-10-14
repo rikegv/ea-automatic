@@ -454,9 +454,9 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
         </form>
 
         <Nota icone={ShieldCheck}>
-          O código chega no seu <span className="whitespace-nowrap">e-mail</span> e vale por poucos
-          minutos. Depois de conferir, pedimos o seu CPF e a sua data de nascimento para confirmar
-          que é você.
+          Se este <span className="whitespace-nowrap">e-mail</span> estiver cadastrado, enviamos um
+          código que vale por poucos minutos. Depois de conferir, pedimos o seu CPF e a sua data de
+          nascimento para confirmar que é você.
         </Nota>
 
         <Rodape aoIrParaLink={aoIrParaLink} />
@@ -470,7 +470,7 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
       <div className="flex flex-col gap-5">
         <Titulo
           titulo="Digite O Código"
-          apoio="Se o e-mail estiver cadastrado, o código de 6 números chegou nele. Confira também a caixa de spam."
+          apoio="Se este e-mail estiver cadastrado no seu processo, enviamos um código de 6 números. Não recebeu em alguns minutos? Confira o e-mail digitado, veja a caixa de spam ou procure o RH."
         />
 
         {recado ? <Aviso tom="ok">{recado}</Aviso> : null}

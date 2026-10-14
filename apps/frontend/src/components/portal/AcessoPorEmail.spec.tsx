@@ -99,8 +99,10 @@ describe("1. anti-enumeração: a tela avança SEMPRE", () => {
     expect(texto).not.toContain("nao cadastrado");
     expect(texto).not.toContain("não existe");
     expect(texto).not.toContain("não encontramos");
-    // O que a tela diz é CONDICIONAL, e é assim que ela evita afirmar qualquer coisa.
-    expect(document.body.textContent).toContain("Se o e-mail estiver cadastrado");
+    // O que a tela diz é CONDICIONAL ("Se ... estiver cadastrado"), e é assim que ela evita afirmar
+    // qualquer coisa sobre a existência do e-mail. O texto exato pode variar (AJUSTE 2: deixou de
+    // afirmar que o código "chegou"); o que a régua trava é a FORMA condicional.
+    expect(document.body.textContent?.toLowerCase()).toContain("estiver cadastrado");
   });
 
   it("a porta DESLIGADA (503) é AVISO DE MANUTENÇÃO calmo, e não manda digitar código que nunca vem", async () => {
