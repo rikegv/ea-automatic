@@ -417,7 +417,13 @@ export class PortalIdentidadeService {
    * e não entra na trilha (a trilha de emissão leva jti, autor e prazo, e nada além).
    */
   async emitirLinkParaCopiar(admissaoId: string, autorId: string): Promise<EmissaoParaEnvio> {
-    return this.emitirComTrava(admissaoId, autorId, true, "ENTREGA_A_MAO", false);
+    // COPIAR = SEMPRE O MESMO LINK (decisão do diretor Rike, OST do Gerenciador do Portal). A ação
+    // de copiar NUNCA gera link novo e NUNCA encerra o acesso vigente: devolve o link vivo que o
+    // candidato JÁ tem (`devolverExistenteSeVivo=true`), inclusive quando ele já abriu o portal. Por
+    // isso a abstenção "já acessou" (`recusarSeJaAcessado`) fica DESLIGADA aqui: ela existia para
+    // impedir a reemissão que derrubava a sessão, e copiar deixou de reemitir. O envio por e-mail
+    // (`emitirLinkParaEnvio`) segue com a abstenção ligada, porque lá ainda pode reemitir.
+    return this.emitirComTrava(admissaoId, autorId, false, "ENTREGA_A_MAO", false, true);
   }
 
   private async emitirComTrava(
@@ -426,6 +432,7 @@ export class PortalIdentidadeService {
     recusarSeJaAcessado: boolean,
     origemDoNascimento: OrigemDeEnvioDoLink | null,
     aplicarJanelaDeReenvio: boolean,
+    devolverExistenteSeVivo = false,
   ): Promise<EmissaoParaEnvio> {
     const chave = this.chaveDoLink();
     if (!chave || !this.pepper()) {
@@ -502,7 +509,7 @@ export class PortalIdentidadeService {
        * `estadoDaLinha` é quem decide o que é vivo, e não uma segunda régua escrita aqui: as
        * colunas vêm de `COLUNAS_DO_LINK`, pelo motivo que aquele arquivo explica.
        */
-      if (recusarSeJaAcessado) {
+      if (recusarSeJaAcessado || devolverExistenteSeVivo) {
         const naoRevogados = await tx
           .select({
             ...COLUNAS_DO_LINK,
@@ -516,6 +523,32 @@ export class PortalIdentidadeService {
           })
           .from(portalLinks)
           .where(and(eq(portalLinks.admissaoId, admissaoId), isNull(portalLinks.revogadoEm)));
+
+        /*
+         * DEVOLVER O MESMO LINK (ação de COPIAR, decisão do diretor Rike): devolve o link VIVO que
+         * já existe, sem cunhar outro e sem revogar nada. Prefere o que o candidato JÁ ABRIU (é o
+         * que ele está usando agora); senão, o mais recente vivo. Sem link vivo nenhum, cai na
+         * emissão normal abaixo, que é o PRIMEIRO link do candidato (não há o que copiar). Por isso
+         * a abstenção "já acessou" e a janela curta logo abaixo tornam-se inócuas para o copiar:
+         * quando elas são avaliadas aqui, já não existe link vivo (este ramo teria devolvido), e os
+         * dois `find` exigem link vivo. O ENVIO por e-mail NÃO passa por aqui (`devolverExistenteSeVivo`
+         * é falso lá) e segue com a abstenção e a janela inteiras.
+         */
+        if (devolverExistenteSeVivo) {
+          const vivos = naoRevogados.filter((linha) => estadoDaLinha(linha, agora.getTime()).vivo);
+          const escolhido =
+            vivos.find((linha) => linha.primeiroAcessoEm !== null) ??
+            [...vivos].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime())[0];
+          if (escolhido) {
+            return {
+              existente: {
+                jti: escolhido.id,
+                criadoEm: escolhido.criadoEm,
+                expiraEm: escolhido.expiraEm,
+              },
+            };
+          }
+        }
 
         const vivoEAcessado = naoRevogados.find(
           (linha) => linha.primeiroAcessoEm !== null && estadoDaLinha(linha, agora.getTime()).vivo,
@@ -614,6 +647,27 @@ export class PortalIdentidadeService {
 
       return { emitido: true as const, jaAtivo: null, revogados: mortos ?? [] };
     });
+
+    if ("existente" in resultado && resultado.existente) {
+      // DEVOLVIDO O MESMO LINK (copiar): re-cunha o token (Ed25519, assinatura DETERMINÍSTICA) com o
+      // MESMO `jti` e a MESMA janela (iat/exp do link existente), devolvendo a URL do MESMO acesso. O
+      // token resolve para a MESMA linha `portal_links` (mesmo `jti`), e a autoridade do prazo é o
+      // `expira_em` da linha, intocado; a URL pode não ser byte-a-byte a que o candidato recebeu
+      // (o token original foi cunhado com o relógio da app, aqui o `iat` vem de `criado_em`), mas é o
+      // mesmo link e expira junto. Nenhuma linha foi escrita e nada foi revogado, então NÃO há trilha:
+      // devolver o link que já existe é um não-evento. O acesso vigente do candidato segue intocado.
+      const e = resultado.existente;
+      const ttlHoras = (e.expiraEm.getTime() - e.criadoEm.getTime()) / 3_600_000;
+      const token = cunharLink(
+        { admissaoId, jti: e.jti, agoraMs: e.criadoEm.getTime(), ttlHoras },
+        chave,
+      );
+      return {
+        emitido: { jti: e.jti, link: this.urlDoLink(token), expiraEm: e.expiraEm },
+        jaAtivo: null,
+        foraDoRecorte: null,
+      };
+    }
 
     if (!resultado.emitido) {
       // NADA FOI EMITIDO E NADA FOI REVOGADO, então NADA vai para a trilha: a abstenção é um

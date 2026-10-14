@@ -1,6 +1,7 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { MOTIVOS_DE_RECUSA_DE_ENVIO } from "@ea/shared-types";
+import { verificarLink } from "../domain/portal-identidade";
 import { PortalEnvioService } from "./portal-envio.service";
 import { PortalIdentidadeService } from "./portal-identidade.service";
 import {
@@ -269,81 +270,85 @@ describe("regra 2: farol fora do recorte recusa com SEM_ADMISSAO e NÃO emite", 
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// REGRA 3. A ABSTENÇÃO, que é a regra mais cara: não matar a sessão de quem está enviando documento
+// REGRA 3. COPIAR DEVOLVE O MESMO LINK, inclusive quando o candidato JÁ ACESSOU
+// (decisão do diretor Rike: copiar nunca gera link novo nem encerra o acesso vigente)
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("regra 3: link VIVO e JÁ ACESSADO faz a rota se ABSTER", () => {
-  it("devolve `gerado: false` com LINK_VIVO_EM_USO e sem link", async () => {
+describe("regra 3: link VIVO e JÁ ACESSADO: copiar DEVOLVE O MESMO LINK, sem abster e sem encerrar o acesso", () => {
+  it("devolve `gerado: true` com o MESMO link, e nenhum motivo de abstenção", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     const r = await copiar(m);
-    expect(r.gerado).toBe(false);
-    expect(r.motivo).toBe("LINK_VIVO_EM_USO");
-    expect(r.link, "a URL voltou junto com a abstenção: a tela vai mostrar credencial nova").toBeNull();
+    expect(r.gerado).toBe(true);
+    expect(r.motivo, "copiar devolveu uma abstenção em vez do link que o candidato já tem").toBeNull();
+    expect(r.link, "copiar não devolveu a URL do link existente").toBeTruthy();
   });
 
   /**
-   * O DANO QUE ESTE TESTE IMPEDE: emitir REVOGA todos os links vivos da admissão. Um "gerar link"
-   * clicado enquanto o candidato está no meio do upload mata a sessão dele em silêncio. Nada
-   * falha, nada loga, e a tela dele morre.
+   * O PONTO DA MUDANÇA: copiar deixou de REVOGAR. O consultor perde candidato quando a pessoa já
+   * acessou, perde o link e pede de novo: antes a rota se abstinha e ele não conseguia reenviar.
+   * Agora devolve o MESMO link, então nada é revogado e a sessão de quem está no upload segue viva.
    */
-  it("o link anterior continua VIVO: nada é revogado", async () => {
+  it("NÃO encerra o acesso vigente: nada é revogado", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     await copiar(m);
-    expect(revogou(m), "a sessão de quem estava enviando documento foi derrubada").toBe(false);
+    expect(revogou(m), "copiar derrubou o link que o candidato está usando").toBe(false);
     const anterior = m.banco.escritas.find((e) => e.tipo === "update");
-    expect(anterior, "houve escrita de atualização durante uma abstenção").toBeUndefined();
+    expect(anterior, "copiar escreveu um update (revogação) quando devia só ler o link existente").toBeUndefined();
   });
 
-  it("nenhuma linha nova em `portal_links`", async () => {
+  it("NÃO gera link novo: nenhuma linha inserida em `portal_links`", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     await copiar(m);
-    expect(inseriu(m), "credencial nova para quem já está usando a anterior").toBe(false);
+    expect(inseriu(m), "copiar cunhou um link novo em vez de devolver o existente").toBe(false);
   });
 
-  it("abstenção é NÃO EVENTO: nada vai para a trilha", async () => {
+  it("devolver o mesmo link é NÃO EVENTO: nada vai para a trilha", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     await copiar(m);
     expect(m.trilha.registros).toEqual([]);
   });
 
-  /** Vivo e acessado, mas SUSPENSO ou BLOQUEADO, não é sessão a proteger: ali reemite. */
-  it("acessado porém VENCIDO, BLOQUEADO ou REVOGADO não segura a emissão", async () => {
+  /**
+   * VENCIDO, BLOQUEADO ou REVOGADO NÃO é "o mesmo link" a devolver: não há link vivo, então copiar
+   * emite o primeiro/renovado normalmente (é a mesma válvula de escape de antes).
+   */
+  it("acessado porém VENCIDO, BLOQUEADO ou REVOGADO não há o que devolver: copiar emite um novo", async () => {
     const fora: Array<[string, LinkFake]> = [
       ["vencido", vivoEAberto({ expiraEm: new Date(AGORA - 60_000) })],
       ["bloqueado", vivoEAberto({ bloqueadoEm: new Date(AGORA - 60_000) })],
       ["revogado", vivoEAberto({ revogadoEm: new Date(AGORA - 60_000) })],
+      ["suspenso", vivoEAberto({ suspensoAte: new Date(AGORA + 60_000) })],
     ];
     for (const [rotulo, link] of fora) {
       const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [link] });
       const r = await copiar(m);
-      expect(r.gerado, `abstenção larga demais: link ${rotulo} travou a emissão`).toBe(true);
+      expect(r.gerado, `link ${rotulo}: copiar não emitiu o novo`).toBe(true);
+      expect(inseriu(m), `link ${rotulo}: copiar não cunhou o novo link`).toBe(true);
     }
   });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// REGRA 4. SEM LINK VIVO ACESSADO, EMITE E REVOGA O ANTERIOR
+// REGRA 4. LINK VIVO NUNCA ABERTO TAMBÉM É DEVOLVIDO COMO O MESMO (copiar NUNCA substitui)
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("regra 4: sem sessão a proteger, emite e mata o anterior", () => {
-  it("link vivo NUNCA acessado é substituído, e o consultor recebe a URL nova", async () => {
+describe("regra 4: copiar devolve o link vivo existente (aberto ou não), sem substituir", () => {
+  it("link vivo NUNCA aberto: devolve o existente, sem emitir novo e sem revogar", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] });
     const r = await copiar(m);
-    expect(r.gerado, "reemitir para quem nunca abriu é o gesto mais comum da operação").toBe(true);
+    expect(r.gerado).toBe(true);
     expect(r.link).toBeTruthy();
-    expect(inseriu(m)).toBe(true);
-    expect(revogou(m), "dois links vivos na mesma admissão: a promessa da substituição quebrou").toBe(true);
+    expect(inseriu(m), "copiar cunhou um link novo para quem já tinha um vivo").toBe(false);
+    expect(revogou(m), "copiar revogou o link vivo em vez de devolvê-lo").toBe(false);
   });
 
-  it("a substituição vai para a trilha com código próprio, e não como revogação deliberada", async () => {
+  it("devolver o existente NÃO vai para a trilha (não houve emissão nem revogação)", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] });
     await copiar(m);
-    const revogacao = m.trilha.registros.find((r) => r.tipo === "PORTAL_LINK_REVOGADO");
-    expect(revogacao, "a morte do link anterior não deixou rastro").toBeTruthy();
-    expect((revogacao?.dados as any)?.motivoCodigo).toBe("SUBSTITUIDO");
+    expect(m.trilha.registros).toEqual([]);
   });
 
-  it("admissão sem link nenhum emite normalmente", async () => {
+  it("admissão SEM link vivo nenhum emite o PRIMEIRO link normalmente", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [] });
     const r = await copiar(m);
     expect(r.gerado).toBe(true);
@@ -352,44 +357,38 @@ describe("regra 4: sem sessão a proteger, emite e mata o anterior", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// REGRA 5. A JANELA DE 3 MINUTOS NÃO SE APLICA AQUI
+// REGRA 5. COPIAR DUAS VEZES DEVOLVE O MESMO LINK (não há janela, não há link novo)
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("regra 5: `ENVIADO_HA_POUCO` NÃO alcança o link para copiar", () => {
+describe("regra 5: copiar o mesmo candidato duas vezes devolve a MESMA URL", () => {
   /**
-   * ┌─ POR QUE A JANELA NÃO PODE VALER NESTA PORTA ────────────────────────────────────────────────┐
-   * │ A URL volta UMA VEZ, para a tela copiar, e não é devolvida por rota de leitura nenhuma       │
-   * │ (§A.6). Quem perdeu a área de transferência, fechou o modal sem colar ou colou no lugar      │
-   * │ errado NÃO tem como recuperá-la: recusar por 3 minutos deixa o consultor SEM SAÍDA, que é    │
-   * │ exatamente a situação que esta frente existe para acabar.                                    │
-   * │                                                                                              │
-   * │ E aqui não há a mensagem na caixa do candidato que a janela protege no caminho do e-mail:    │
-   * │ ninguém recebeu nada ainda, porque quem entrega é o consultor, à mão, depois.                │
-   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   * O token do link é DETERMINÍSTICO (HMAC do mesmo `jti` + mesma janela), então devolver o link
+   * existente duas vezes produz a URL idêntica, sem cunhar nada. É o oposto do comportamento antigo,
+   * em que a segunda chamada revogava a primeira e gerava outra URL.
    */
-  it("gerar DUAS VEZES seguidas, sem acesso do candidato no meio, funciona nas duas", async () => {
-    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA } });
+  it("copiar DUAS VEZES um link que já existe devolve a MESMA URL, sem emitir novo", async () => {
+    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] });
     const primeiro = await copiar(m);
     const segundo = await copiar(m);
     expect(primeiro.gerado).toBe(true);
-    expect(
-      segundo.motivo,
-      "a janela de 3 minutos alcançou o link para copiar e deixou o consultor sem saída",
-    ).not.toBe("ENVIADO_HA_POUCO");
     expect(segundo.gerado).toBe(true);
-    expect(segundo.link).toBeTruthy();
-    expect(String(segundo.link)).not.toBe(String(primeiro.link));
+    expect(segundo.motivo, "copiar devolveu abstenção ou janela na segunda vez").toBeNull();
+    expect(String(segundo.link), "a segunda cópia devolveu um link DIFERENTE da primeira").toBe(
+      String(primeiro.link),
+    );
+    expect(inseriu(m), "copiar emitiu link novo em vez de devolver o existente").toBe(false);
   });
 
-  it("link recém-ENTREGUE à mão (criado agora, nunca aberto) não trava a próxima geração", async () => {
+  it("link recém-ENTREGUE à mão (nunca aberto) é devolvido como está, sem janela que trave", async () => {
     const recem = vivoNuncaAberto({ enviadoEm: null, criadoEm: new Date(AGORA - 5_000) });
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [recem] });
     const r = await copiar(m);
     expect(r.motivo).not.toBe("ENVIADO_HA_POUCO");
     expect(r.gerado).toBe(true);
+    expect(inseriu(m), "copiar emitiu novo em vez de devolver o recém-entregue").toBe(false);
   });
 
-  it("link recém-ENVIADO por e-mail (nunca aberto) também não trava o link para copiar", async () => {
+  it("link recém-ENVIADO por e-mail (nunca aberto) também é devolvido, sem travar", async () => {
     const recem = vivoNuncaAberto({
       enviadoEm: new Date(AGORA - 5_000),
       criadoEm: new Date(AGORA - 5_000),
@@ -401,15 +400,73 @@ describe("regra 5: `ENVIADO_HA_POUCO` NÃO alcança o link para copiar", () => {
   });
 
   /**
-   * O RECORTE PELO OUTRO LADO: dispensar a janela NÃO pode dispensar a abstenção. Se a
-   * implementação resolver "o copiar não se abstém" (por exemplo chamando o `emitirLink` cru, que
-   * tem `recusarSeJaAcessado` falso), este par de testes é o que separa as duas coisas.
+   * O RECORTE PELO OUTRO LADO: copiar NÃO abstém mais pelo "já acessou". O acessado é DEVOLVIDO como
+   * o mesmo link (gerado verdadeiro, sem motivo), que é exatamente a correção desta OST.
    */
-  it("dispensar a janela não dispensa a abstenção: o acessado continua segurando", async () => {
+  it("acessado NÃO segura mais a cópia: é devolvido como o mesmo link", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     const r = await copiar(m);
-    expect(r.gerado).toBe(false);
-    expect(r.motivo).toBe("LINK_VIVO_EM_USO");
+    expect(r.gerado).toBe(true);
+    expect(r.motivo).toBeNull();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// REGRA 6. O LINK DEVOLVIDO É O MESMO: verifica para o MESMO `jti` e a MESMA janela
+// (fecha o buraco que o `tester` apontou: a URL era só string, "mesmo link" não era medido)
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("regra 6: a URL devolvida resolve para o MESMO link (jti) e preserva a janela", () => {
+  const PUB = createPublicKey(privateKey);
+  // A URL é `base#<frag>=<token>` (o fragmento carrega `l=` por contrato); o token em si é base64url
+  // (sem `=`), então pega tudo depois do PRIMEIRO `=` do fragmento.
+  const tokenDe = (link: string | null | undefined) => {
+    const frag = String(link ?? "").split("#")[1] ?? "";
+    return frag.slice(frag.indexOf("=") + 1);
+  };
+
+  it("a URL devolvida VERIFICA e resolve para o MESMO jti e admissão (não é uma string qualquer)", async () => {
+    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
+    const r = await copiar(m);
+    const v = verificarLink(tokenDe(r.link), PUB, AGORA);
+    expect(v.ok, "o token devolvido não verifica com a chave do Portal").toBe(true);
+    if (v.ok) {
+      expect(v.jti, "copiar devolveu um jti diferente do link que o candidato já tem").toBe(JTI_SINTETICO);
+      expect(v.admissaoId).toBe(ADMISSAO_SINTETICA);
+    }
+  });
+
+  it("a cópia PRESERVA a janela do link existente, não estende para agora+TTL", async () => {
+    const link = vivoEAberto(); // expira em AGORA + 40h
+    const expiraEm = link.expiraEm as Date;
+    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [link] });
+    const r = await copiar(m);
+    expect(r.expiraEm, "o prazo devolvido não é o do link existente").toBe(expiraEm.toISOString());
+    const v = verificarLink(tokenDe(r.link), PUB, AGORA);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(
+        Math.abs(v.expMs - expiraEm.getTime()),
+        "o `exp` do token re-cunhado saiu da janela original do link",
+      ).toBeLessThanOrEqual(1_100);
+    }
+  });
+
+  /*
+   * A PREFERÊNCIA "entre vários vivos, devolve o que o candidato JÁ ABRIU" (impl
+   * `portal-identidade.service.ts`, `vivos.find(primeiroAcessoEm!==null) ?? mais recente`) é um EDGE:
+   * depois que emitir passou a revogar o anterior, uma admissão tem normalmente UM link vivo. O banco
+   * de mentirinha desta casa modela UM link por cenário (a consulta de link devolve um conjunto único),
+   * então o desempate entre MÚLTIPLOS vivos não é exercitável aqui sem reescrever o fake compartilhado.
+   * Fica REPORTADO como resíduo de cobertura (baixo risco: múltiplos vivos é raro), e o comportamento de
+   * UM link acessado (o caso real) está provado acima (devolve o mesmo jti, não abstém, não revoga).
+   */
+
+  it("duas cópias do MESMO link ACESSADO devolvem a MESMA URL (determinismo no caso principal)", async () => {
+    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
+    const a = await copiar(m);
+    const b = await copiar(m);
+    expect(String(b.link)).toBe(String(a.link));
   });
 });
 

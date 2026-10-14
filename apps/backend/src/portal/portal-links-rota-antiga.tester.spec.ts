@@ -277,7 +277,7 @@ describe("a montagem do teste acompanha o que a controller injeta", () => {
 // REQUISITO 3. O CASO BOM CONTINUA EMITINDO, e é ele que diz que a mudança não fechou a porta
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("requisito 3: sem sessão a proteger, a rota antiga emite e mata o anterior", () => {
+describe("requisito 3: a rota antiga copia DEVOLVENDO o mesmo link (só emite quando não há link vivo)", () => {
   it("admissão sem link nenhum: emite e grava a linha", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [] });
     const r = await pelaRota(m);
@@ -289,15 +289,12 @@ describe("requisito 3: sem sessão a proteger, a rota antiga emite e mata o ante
     expect(m.trilha.registros.map((x) => x.tipo)).toContain("PORTAL_LINK_EMITIDO");
   });
 
-  it("link vivo NUNCA acessado é substituído: emite o novo e REVOGA o anterior", async () => {
+  it("link vivo NUNCA acessado é DEVOLVIDO como o mesmo: não emite novo nem revoga", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] });
     const r = await pelaRota(m);
-    expect(r.corpo?.link, "reemitir para quem nunca abriu é o gesto mais comum da operação").toBeTruthy();
-    expect(inseriu(m)).toBe(true);
-    expect(
-      revogou(m),
-      "dois links vivos na mesma admissão: o link de ontem que vazou no grupo da família continua valendo",
-    ).toBe(true);
+    expect(r.corpo?.link, "copiar deixou de devolver a URL do link existente").toBeTruthy();
+    expect(inseriu(m), "copiar cunhou um link novo em vez de devolver o existente").toBe(false);
+    expect(revogou(m), "copiar revogou o link vivo em vez de devolvê-lo").toBe(false);
   });
 
   /**
@@ -323,8 +320,8 @@ describe("requisito 3: sem sessão a proteger, a rota antiga emite e mata o ante
    * volta UMA vez e não é devolvida por rota de leitura nenhuma (§A.6). Recusar por três minutos
    * deixa quem perdeu a área de transferência SEM SAÍDA.
    */
-  it("gerar DUAS VEZES seguidas funciona nas duas: `ENVIADO_HA_POUCO` não é desta porta", async () => {
-    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA } });
+  it("copiar DUAS VEZES devolve a MESMA URL: sem janela e sem link novo", async () => {
+    const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] });
     const primeiro = await pelaRota(m);
     const segundo = await pelaRota(m);
     expect(primeiro.corpo?.link).toBeTruthy();
@@ -333,7 +330,11 @@ describe("requisito 3: sem sessão a proteger, a rota antiga emite e mata o ante
       "a janela do e-mail alcançou a rota antiga e deixou o consultor sem saída",
     ).not.toBe("ENVIADO_HA_POUCO");
     expect(segundo.corpo?.link, "o segundo clique não devolveu URL nenhuma").toBeTruthy();
-    expect(String(segundo.corpo?.link)).not.toBe(String(primeiro.corpo?.link));
+    expect(
+      String(segundo.corpo?.link),
+      "a segunda cópia devolveu um link diferente da primeira",
+    ).toBe(String(primeiro.corpo?.link));
+    expect(inseriu(m), "copiar emitiu link novo em vez de devolver o existente").toBe(false);
   });
 });
 
@@ -391,7 +392,7 @@ describe("requisito 4: no sucesso, o corpo continua trazendo `link` e `expiraEm`
 // REQUISITO 1. A ABSTENÇÃO, que é a regra mais cara: não matar a sessão de quem está enviando
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("requisito 1: link VIVO e JÁ ACESSADO faz a rota antiga se ABSTER", () => {
+describe("requisito 1: link VIVO e JÁ ACESSADO: a rota antiga DEVOLVE o mesmo link (não abstém, não revoga)", () => {
   /**
    * O DANO QUE ESTE TESTE IMPEDE, e ele é o defeito que a mudança fecha: emitir REVOGA todos os
    * links vivos da admissão. Um "gerar link" clicado enquanto o candidato está no meio do upload
@@ -429,19 +430,17 @@ describe("requisito 1: link VIVO e JÁ ACESSADO faz a rota antiga se ABSTER", ()
   });
 
   /**
-   * NENHUMA URL VOLTA NA ABSTENÇÃO. O contrato antigo trazia `link` sempre, e a tela antiga o
-   * mostra: devolver a URL do link ANTIGO (ou uma nova) aqui faria o consultor entregar credencial
-   * achando que se absteve. Este teste não decide se a rota recusa por dado ou por exceção, só
-   * proíbe a URL.
+   * A URL DO MESMO LINK VOLTA (decisão do diretor Rike): copiar/reenviar deixou de abster quando o
+   * candidato já acessou. Devolve a URL do link que ele JÁ tem, sem gerar outro e sem encerrar o
+   * acesso, para o consultor não perder o candidato que perdeu o link e pediu de novo.
    */
-  it("não devolve URL nenhuma quando se abstém", async () => {
+  it("DEVOLVE a URL do mesmo link (o já acessado não abstém mais)", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     const r = await pelaRota(m);
-    if (r.ok) {
-      expect(r.corpo?.link, "a URL voltou junto com a abstenção").toBeFalsy();
-      if ("gerado" in (r.corpo ?? {})) expect(r.corpo.gerado).toBe(false);
-      if ("motivo" in (r.corpo ?? {})) expect(r.corpo.motivo).toBe("LINK_VIVO_EM_USO");
-    }
+    expect(r.erro, "a rota antiga explodiu ao devolver o link existente").toBeNull();
+    expect(r.corpo?.link, "copiar não devolveu a URL do link que o candidato já tem").toBeTruthy();
+    if ("gerado" in (r.corpo ?? {})) expect(r.corpo.gerado).toBe(true);
+    if ("motivo" in (r.corpo ?? {})) expect(r.corpo.motivo).toBeNull();
   });
 });
 
@@ -469,14 +468,19 @@ describe("requisito 2: farol fora do recorte NÃO gera link nenhum", () => {
         expect(inseriu(m), "linha nova em `portal_links` para admissão fora do recorte").toBe(false);
       });
 
-      it("não revoga o que já existe: a admissão fora do recorte nem deveria ser alcançada", async () => {
+      it("link vivo JÁ ACESSADO NÃO é devolvido: o corte de farol vence o 'devolve o mesmo'", async () => {
+        // O caso perigoso do ramo novo: uma admissão fora do recorte (declínio/rescisão/pré-admissão)
+        // com um link vivo e acessado NÃO pode ter esse link (credencial de prontuário) DEVOLVIDO por
+        // copiar. O recorte de farol roda ANTES e barra, então nem revoga, nem insere, nem devolve URL.
         const m = montar(
-          { pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] },
+          { pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] },
           { farol },
         );
-        await pelaRota(m);
+        const r = await pelaRota(m);
         expect(revogou(m)).toBe(false);
         expect(inseriu(m)).toBe(false);
+        expect(r.corpo?.link, `copiar devolveu a URL de um link vivo de admissão com farol ${farol}`).toBeFalsy();
+        if ("motivo" in (r.corpo ?? {})) expect(r.corpo.motivo).toBe("SEM_ADMISSAO");
       });
 
       it("não vira evento na trilha", async () => {
@@ -625,11 +629,11 @@ describe("requisito 6: o caminho de COPIAR continua exatamente como foi auditado
     expect(segundo.gerado).toBe(true);
   });
 
-  it("segue se abstendo pelo link vivo já acessado", async () => {
+  it("devolve o MESMO link para o já acessado, sem abster e sem revogar", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] });
     const r = await copiar(m);
-    expect(r.gerado).toBe(false);
-    expect(r.motivo).toBe("LINK_VIVO_EM_USO");
+    expect(r.gerado).toBe(true);
+    expect(r.motivo).toBeNull();
     expect(revogou(m)).toBe(false);
   });
 
