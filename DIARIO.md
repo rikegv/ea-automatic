@@ -21774,3 +21774,58 @@ compartilhado, Desenho 1) fica em aberto.
 
 **§A.6:** nenhum nome/CPF em log ou relatório; só ids de admissão (permitido pelo runner), contagens
 e chaves opacas. Commit da infra da opção B: `8d53d3d`. Instância e `.env` fora do repositório.
+
+## 2026-10-14 — Painel Gerencial por Grupo FASE 2 PUBLICADA (Alto Volume por grupo + meta no cadastro)
+
+**O que entrou (commit `5a25509`):** a fase 2 da frente "Painel Gerencial por Grupo de Clientes". A
+fase 1 (cadastro de grupo vincular/desvincular + Controle Gerencial por grupo) já estava em produção
+desde 03/09. A fase 2 acrescenta: (1) **meta do grupo** (coluna `meta` integer NULLABLE em
+`grupos_cliente`), obrigatória na CRIAÇÃO pelo DTO (`@IsInt`+`@Min(1)`, sem opção "sem meta", decisão
+do diretor) mas nullable no banco para os grupos legados que nasceram sem meta (CAGC); (2) **Alto
+Volume POR GRUPO** no Controle Gerencial (pílula Grupo/Projeto, botão Alto Volume), endpoint
+`/admin/grupos-cliente/:id/analise` que reusa a mesma régua do dash de projeto e responde
+`faltam = meta - naEsteira`; a visão Projeto segue intacta; (3) campo Meta no livreto Cadastrar
+Grupos, com a lista mostrando "meta não informado" nos legados.
+
+**Isolamento (14/10):** a fase 2 vivia solta na worktree principal (`main` local, 52 commits atrás de
+origin/main) misturada a lixo de MUITAS frentes. Isolei num branch limpo `frente-painel-grupo-fase2`
+a partir de origin/main, trazendo só os 17 arquivos da fase 2. Migration renumerada **0149 -> 0158**
+(0149 era órfão já removido; origin/main tinha até 0155; a régua-exame mira 0156/0157); journal com
+entrada idx 156 tag `0158_grupo_cliente_meta`. `tables.ts` entrou só com o hunk da coluna `meta`
+(extração cirúrgica; a versão da worktree principal, atrás de origin/main, também apagava colunas da
+emissão e trazia comentário de outra frente, nenhum entrou).
+
+**Validação do diretor (§A.13/§A.25):** preview isolado na 3128 (clone descartável do homolog por
+pg_dump sem derrubar a 3120, metas sintéticas semeadas §A.43, backend do branch na 3129, `next dev`
+in-place com `.next` próprio, validador semeado só no clone). Diretor validou na tela as duas telas
+(dash por grupo com meta/faltam; livreto com campo Meta e "meta não informado" nos legados) e
+autorizou publicar.
+
+**3 MICRODECISÕES fechadas pelo diretor (registradas, aplicadas como estavam em `5a25509`, nada mudou
+no código):** (1) resíduos "grupo de entrada" ficam DORMENTES, não remover; (2) lista de grupos
+continua em BOTÕES, não virar tabela; (3) "Na Esteira" do grupo segue igual ao projeto, NÃO conta
+banco (a `analise` já exclui DECLINOU/RESCISAO/BANCO_AGUARDAR).
+
+**Gate (verde) na base nova, rebase serial:** origin/main avançou 2x durante o trabalho (Prontuário
+Drive + diário); rebaseei sobre `5a25509`<-origin/main sem conflito (upstream não tocava meus
+arquivos). typecheck recursivo 0 (shared-types + backend + frontend), eslint 0 nos 13 arquivos
+tocados, **47 testes verdes** (5 specs: grupos-cliente meta-e-analise, grupo-dash-analise,
+grupo-dash-meta, alto-volume-grupo-turma-nulavel, alto-volume-sem-turma).
+
+**Migration em produção:** `ADD COLUMN IF NOT EXISTS "meta" integer` (aditiva, idempotente, nullable,
+rollback trivial `DROP COLUMN meta`). Aplicada com `db:migrate` (drizzle migrator) no banco
+`ea_automatic`: journal 156 entries vs prod 155 aplicadas = uma só pendente, a 0158, com o maior
+`when`, então só ela subiu. Prod `__drizzle_migrations` 155 -> 156; coluna confirmada integer/nullable.
+Aplicada ANTES da troca de artefato (aditiva, o backend antigo não lê a coluna, janela segura).
+
+**Deploy (§A.49):** push a origin/main sob flag `.claude/state/READY_painel_grupo_fase2` (criada após
+gate+validação, removida após o push, §A.7); `publicar-producao.sh` buildou do origin/main em worktree
+pristino, backup dos artefatos (`*.bak-20261014-155656`), troca, restart único. **Health verde:**
+backend `3011/api/health` 200 (6s), frontend `3010/login` 200 (1s). Produção servindo o artefato de
+`5a25509`. Validação prod sem tocar dado real: rota `/admin/grupos-cliente/:id/analise` responde 401
+(existe, protegida, código novo no ar; não 404), coluna `meta` viva.
+
+**§A.38:** não acionei seguranca/tester nesta sessão: a fase 2 já tinha passado por tester+seguranca
+APROVADO no tree original (07/10); aqui só MOVI código já auditado para um branch limpo, nenhuma linha
+nova toca CPF/auth. **§A.6:** diário sem PII; o preview usou só nomes de grupo/CNPJ e contagens.
+Preview 3128/3129 e o clone `ea_automatic_preview_3128` derrubados após a validação.
