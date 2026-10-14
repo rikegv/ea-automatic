@@ -21632,3 +21632,77 @@ e-mail, URL nua); CPF → link clássico por e-mail. Primeiro PROV disparado iso
 **Resultado: 27 enviados, 0 falhas.** 16 convites (PROV) + 11 links (CPF). Os 11 CPF carimbaram
 `enviado_em` (prova de que a emissão+envio rodou ponta a ponta); os 16 convites voltaram
 `enviado:true` do correio. §A.6: nenhum e-mail cru registrado, só contagem e destino mascarado.
+
+---
+
+## 2026-10-14 — Prontuário Drive: o ARQUIVADOR cego (Desenho 1) + documento do Portal na Auditoria, CONSTRUÍDOS e INERTES
+
+**Sessão noturna autônoma (remote-control), worktree `apps/ea-prontuario-drive` sobre `origin/main`
+(`e802d72`), branch `frente-prontuario-drive`. NADA pushado, NADA em produção, NENHUM binding/IAM/chave
+rodado. Commit da frente (código inerte): `ac3dd7a`. §A.6 respeitado (sem PII no relatório e no log).**
+
+**O problema (já diagnosticado):** documento entregue pelo Portal vive só no balde de entrada GCS e
+nunca chegava ao prontuário do Drive (VS3: o leitor lê o balde mas não tem Drive; o arquivador da
+esteira tem Drive mas lê só a staging local). E, pelo mesmo motivo, não dava para o time ABRIR esse
+documento na tela de Auditoria. Conserto = Desenho 1 (aprovado pelo diretor): uma conta de serviço
+cega `ea-portal-arquivador` que lê o balde e copia bytes, numa 3ª instância magra do `ai-service`.
+
+**O que entrou (tudo inerte até o binding):**
+- **ai-service (a instância magra reusa o código, papel próprio):** `app/portal_papel.py` (guarda V3:
+  só a instância `PORTAL_PAPEL=ARQUIVADOR` serve `/portal/arquivar` e `/portal/documento`; ela é
+  RECUSADA no `/portal/ler`, antes de baixar byte). `routers/portal_arquivar.py`: `POST /portal/arquivar`
+  (copia o objeto do balde para o prontuário, cego, âncora + dedup md5 + subpasta, só em memória) e
+  `POST /portal/documento` (devolve os bytes para a Auditoria exibir). Allowlist de um balde só, teto
+  de 10 MB. `config.py` (PORTAL_PAPEL), `schemas.py`.
+- **backend:** `portal-arquivador.service.ts` (cliente da 3ª instância, `PORTAL_ARQUIVADOR_URL/TOKEN`,
+  sem fallback). `portal-arquivamento.service.ts` (orquestrador: resolve a pasta IGUAL à esteira,
+  self-heal do `drive_pasta_url`; gatilho LIVE no ramo VALIDADO->ENTREGUE de `portal-credencial`, dep
+  `@Optional()`, best-effort, inerte sem `PORTAL_ARQUIVAMENTO_ARMADO=true`). `portal-documento-
+  visualizacao.service.ts` + FALLBACK transparente em `reauditoria/documento-arquivo.service.ts`: a
+  MESMA tela de Auditoria serve o objeto do balde pela conta cega quando a staging está vazia, **sem
+  nenhuma mudança de frontend**. `db/rearquiva-portal.ts` (runner retro idempotente; régua pura em
+  `domain/portal-reprocesso-lote.ts`).
+- **ACRÉSCIMO do diretor (meio da sessão): documento do Portal na Auditoria.** O antigo "exibir cruza
+  isolamento, decisão do diretor" virou "exibir PELA conta cega". Construído junto, inerte. UM binding
+  destrava os dois: prontuário no Drive E documento na Auditoria, **sem papel de IAM novo** (a
+  visualização só LÊ o balde, com o mesmo `storage.objectViewer` do arquivamento).
+
+**Correção de premissa medida (§A.27):** a ordem falava em "~3.125 candidatos sem prontuário". Medido
+em produção, esse número é a BASE INTEIRA de admissões (3.159); a esmagadora maioria nunca passou pelo
+Portal. O escopo REAL do reprocesso é **21 admissões vivas / 133 objetos** confirmados do Portal (+1
+DECLINOU e o Fabricio FORA do lote). Lista completa em `docs/ESCOPO-SEM-PRONTUARIO-PORTAL.md`.
+
+**Auditorias (§A.38):** `seguranca` rodou DUAS vezes (adversarial) e APROVOU as duas, **zero vetos**:
+(1) arquivador + reprocesso contra as 6 condições do Desenho 1; (2) a visualização contra o VS3 e o
+§A.6. `tester` independente: **zero defeitos**, +19 testes (achou e cobriu 7 gaps do teste do autor;
+o 8º, a régua de exclusão do runner, foi fechado extraindo `domain/portal-reprocesso-lote.ts`).
+Vereditos detalhados em `docs/PARECER-ARQUIVADOR-PORTAL.md`.
+
+**Gate:** ai-service `ruff` limpo nos meus arquivos + suíte 340 verde; backend typecheck 0, lint 0 nos
+meus arquivos, specs da frente verdes (arquivamento 12, tester 12, gatilho-live 4, reprocesso-lote 7,
+visualização 6+4), reauditoria 49 sem regressão, portal inteiro 1434. **Dois reds PRÉ-EXISTENTES do
+`origin/main`, não da frente (não toquei os arquivos):** `portal-painel.cobertura-independente`
+("LINHA tem exatamente os campos de LinhaDoPainelPortal") e um `F541` do `ruff` em `app/drive.py:476`.
+
+**§A.49 (coordenação):** recorte estrito do arquivador + reprocesso + (acréscimo) visualização.
+Toque em zona compartilhada do Portal: UMA linha no `/portal/ler` (guarda V3) e a dep `@Optional()` em
+`portal-credencial.service.ts` + o fallback em `documento-arquivo.service.ts` (ambos aditivos e inertes
+em produção, `@Optional()` para não obrigar 20 specs validados de outra frente a mudar). Tudo no meu
+worktree, sem push: reconciliação com a sessão do Portal só no publish (que não acontece sem binding).
+
+**PLANO DO BINDING remontado para o Rike** (`docs/PLANO-ARQUIVADOR-PORTAL.md`): comandos (a) criar a
+conta, (b) `storage.objectViewer` no balde `ea-portal-prod-entrada`, (c) gerar a chave em caminho
+absoluto protegido, (d) compartilhar as **13 pastas-pai** (ids conferidos no banco) como Editor SEM
+delegação domain-wide; hardening confirmado pela seguranca (SA sem papel de Vertex, `.env` magro sem
+`DATABASE_URL`, sem `DRIVE_DELEGATED_SUBJECT`); e o **RISCO ABERTO a decidir pelo diretor**: a conta
+pura só escreve em **Drive compartilhado**; se a árvore do prontuário for Meu Drive, cai em
+`storageQuotaExceeded`. A visualização NÃO acrescenta requisito de IAM.
+
+**META FINAL (após o binding, quando o Rike autorizar):** rodar `pnpm tsx src/db/rearquiva-portal.ts
+--aplicar` até cobrir 100% das 21 admissões / 133 objetos; o runner reporta `arquivados/ignorados/
+falhas` por admissão (100% = falhas 0 em todas), e a prova de pasta está no SQL do fim do ESCOPO.
+
+**BLOQUEADO em (depende só do diretor, §A.42/§A.0):** o binding de IAM (a-b-c-d) + a decisão Shared
+Drive vs. Meu Drive. Enquanto não vier: rota do arquivador 403/503, cliente "não configurado", gatilho
+LIVE no-op, Auditoria mostra "indisponível" como hoje, runner recusa de copiar. Nada toca produção.
+**Nada pushado; o push depende de base limpa + validação do diretor (§A.21/§A.7/§A.49).**
