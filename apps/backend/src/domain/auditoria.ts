@@ -14,6 +14,15 @@ export type EstadoDocumentoPersistido = "PENDENTE" | "ENTREGUE" | "INCONFORME";
  */
 export const ESTADO_AGUARDANDO_AUDITORIA = "AGUARDANDO_AUDITORIA" as const;
 
+/**
+ * Observação gravada na COLETA de documento da régua (recebido, IA ainda não rodou). Centralizada
+ * aqui porque DOIS leitores dependem dela byte a byte: o escritor (`AuditoriaService`, passo da
+ * coleta) e o seletor do selo do card (`documento-selo.ts`), que precisa distinguir "ainda
+ * aguardando análise" de "reprovado com motivo gravado". Mudou aqui, muda nos dois, sem divergir.
+ */
+export const OBSERVACAO_COLETADO_AGUARDANDO =
+  "Documento coletado, aguardando a análise por IA." as const;
+
 /** Veredito da IA → estado_documento. VALIDADO→ENTREGUE, INCONFORME→INCONFORME, PENDENTE→PENDENTE. */
 export function estadoDocumentoDeAuditoria(status: AuditoriaStatus): EstadoDocumentoPersistido {
   return AUDITORIA_PARA_ESTADO[status];

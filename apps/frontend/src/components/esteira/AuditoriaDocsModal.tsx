@@ -22,6 +22,10 @@ interface DocDetalhe {
   estado: "PENDENTE" | "ENTREGUE" | "INCONFORME" | "AGUARDANDO_AUDITORIA";
   // Motivo persistido do veredito (BLOCO 2): texto acionável da IA, sem PII (§A.6). Pode ser null.
   observacao?: string | null;
+  // Selo REPROVADO: o backend (`documento-selo`) marca `true` quando o documento foi reprovado pela
+  // auditoria automática mas ficou preso em AGUARDANDO_AUDITORIA (caminho do Portal grava o motivo e
+  // não rebaixa o estado). A tela NÃO recalcula: o veredito já veio pronto, sempre com `observacao`.
+  reprovado?: boolean;
   // OST B1 / Bloco 3: nome do consultor que validou o documento À MÃO. Null = veredito é da IA.
   // Fica VISÍVEL na linha, para quem abrir depois saber quem assumiu o documento.
   validadoPorNome?: string | null;
@@ -189,9 +193,16 @@ const ESTADO_PARA_STATUS: Record<"ENTREGUE" | "INCONFORME" | "PENDENTE", Auditor
 function pillDoc(
   result: ResultadoAuditoria | undefined,
   estado: DocDetalhe["estado"],
+  reprovado: boolean | undefined,
 ): { tone: PillTone; rotulo: string } | null {
   if (result) return { tone: STATUS_TONE[result.status], rotulo: STATUS_ROTULO[result.status] };
-  if (estado === "AGUARDANDO_AUDITORIA") return { tone: "in", rotulo: "Aguardando auditoria" };
+  if (estado === "AGUARDANDO_AUDITORIA") {
+    // Reprovado pela auditoria automática (motivo gravado), porém preso em AGUARDANDO_AUDITORIA
+    // (caminho do Portal): o selo acompanha o resultado real, vermelho como "Reprovado", não o azul
+    // de "Aguardando auditoria". Quem decide é o backend (`documento-selo`); a tela só exibe.
+    if (reprovado) return { tone: "dg", rotulo: "Reprovado" };
+    return { tone: "in", rotulo: "Aguardando auditoria" };
+  }
   if (estado === "PENDENTE") return null;
   const s = ESTADO_PARA_STATUS[estado];
   return { tone: STATUS_TONE[s], rotulo: STATUS_ROTULO[s] };
@@ -869,7 +880,7 @@ export function AuditoriaDocsModal({
             const tipoId = d.tipoDocumentoId ?? idPorNome.get(d.nome);
             const result = tipoId ? resultados[tipoId] : undefined;
             // Pill do documento (veredito da sessão, estado persistido ou "aguardando auditoria").
-            const pill = pillDoc(result, d.estado);
+            const pill = pillDoc(result, d.estado, d.reprovado);
             const auditando = auditandoId === tipoId;
             const erro = tipoId ? erroDoc[tipoId] : undefined;
             // Já houve veredito? Muda só o rótulo do botão de UPLOAD (enviar arquivo novo).
@@ -1069,10 +1080,14 @@ export function AuditoriaDocsModal({
                   const motivo = result?.motivo ?? d.observacao;
                   if (!motivo) return null;
                   const st = result?.status ?? d.estado;
+                  // Reprovado preso em AGUARDANDO_AUDITORIA: o motivo ACOMPANHA o selo "Reprovado" em
+                  // vermelho, não no cinza de "aguardando". Só vale para o veredito persistido (sem
+                  // `result` da sessão), que é o caso do caminho do Portal.
+                  const reprovadoAguardando = !result && st === "AGUARDANDO_AUDITORIA" && d.reprovado;
                   const cor =
                     st === "VALIDADO" || st === "ENTREGUE"
                       ? "text-ok"
-                      : st === "INCONFORME"
+                      : st === "INCONFORME" || reprovadoAguardando
                         ? "text-danger"
                         : st === "AGUARDANDO_AUDITORIA"
                           ? "text-dim"

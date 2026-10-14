@@ -69,6 +69,7 @@ import {
   limitarMotivo,
 } from "../domain/auditoria";
 import { auditoriaParada, horasParado } from "../domain/auditoria-parada";
+import { documentoReprovadoNaAuditoria } from "../domain/documento-selo";
 import { equivalentesDoSlot } from "../domain/documentos-equivalentes";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { FrenteTipo } from "../domain/frentes";
@@ -1847,6 +1848,9 @@ export class EsteiraService {
         estado: documentosAdmissao.estado,
         // Motivo do veredito da IA (BLOCO 2): texto acionável, sem PII (§A.6). Exibido na aba Auditoria.
         observacao: documentosAdmissao.observacao,
+        // Selo REPROVADO: distingue um documento reprovado preso em AGUARDANDO_AUDITORIA (caminho do
+        // Portal) de um que só espera conferência humana de autenticidade (§A.38, `documento-selo`).
+        conferirAutenticidade: documentosAdmissao.conferirAutenticidade,
         // OST B1 / Bloco 3: QUEM validou o documento à mão. Vai para a TELA (não fica só na trilha),
         // e é o que a reauditoria usa para perguntar antes de deixar a IA sobrescrever (Bloco 4).
         validadoPorNome: validadores.nome,
@@ -2070,6 +2074,15 @@ export class EsteiraService {
         exigencia: d.exigencia,
         estado: d.estado ?? "PENDENTE",
         observacao: d.observacao ?? null,
+        // Selo REPROVADO: documento reprovado pela auditoria automática que fica preso em
+        // AGUARDANDO_AUDITORIA (caminho do Portal grava o motivo, não rebaixa o estado). A régua pura
+        // separa isso de "aguardando de verdade", de parada de sistema e de suspeita de autenticidade
+        // (`domain/documento-selo`). Sempre acompanhado do motivo (`observacao`), por construção.
+        reprovado: documentoReprovadoNaAuditoria({
+          estado: d.estado,
+          observacao: d.observacao,
+          conferirAutenticidade: d.conferirAutenticidade,
+        }),
         validadoPorNome: d.validadoEm ? (d.validadoPorNome ?? "não informado") : null,
         validadoEm: d.validadoEm ?? null,
         // OST motivo verdadeiro / Bloco 5: MARCADOR DE TEMPO PARADO. Só é preenchido quando o
@@ -2096,6 +2109,7 @@ export class EsteiraService {
       tipoDocumentoId: string;
       estado: string | null;
       observacao: string | null;
+      conferirAutenticidade?: boolean | null;
       validadoPorNome?: string | null;
       validadoEm?: Date | null;
       // Carimbo do documento REAL, para o marcador de auditoria parada valer também no slot
@@ -2113,6 +2127,7 @@ export class EsteiraService {
         tipoDocumentoId: tiposDocumento.id,
         estado: documentosAdmissao.estado,
         observacao: documentosAdmissao.observacao,
+        conferirAutenticidade: documentosAdmissao.conferirAutenticidade,
         validadoPorNome: usuarios.nome,
         validadoEm: documentosAdmissao.validadoEm,
         atualizadoEm: documentosAdmissao.atualizadoEm,
@@ -2139,6 +2154,7 @@ export class EsteiraService {
           tipoDocumentoId: achado.tipoDocumentoId,
           estado: achado.estado,
           observacao: achado.observacao,
+          conferirAutenticidade: achado.conferirAutenticidade,
           validadoPorNome: achado.validadoPorNome,
           validadoEm: achado.validadoEm,
           atualizadoEm: achado.atualizadoEm,

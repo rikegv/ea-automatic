@@ -48,6 +48,7 @@ import {
   ESTADO_AGUARDANDO_AUDITORIA,
   limitarMotivo,
   observacaoDoVeredito,
+  OBSERVACAO_COLETADO_AGUARDANDO,
   separarRegrasPorCategoria,
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
@@ -370,13 +371,13 @@ export class AuditoriaService {
           admissaoId,
           tipoDocumentoId,
           estado: ESTADO_AGUARDANDO_AUDITORIA,
-          observacao: "Documento coletado, aguardando a análise por IA.",
+          observacao: OBSERVACAO_COLETADO_AGUARDANDO,
         })
         .onConflictDoUpdate({
           target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
           set: {
             estado: ESTADO_AGUARDANDO_AUDITORIA,
-            observacao: "Documento coletado, aguardando a análise por IA.",
+            observacao: OBSERVACAO_COLETADO_AGUARDANDO,
             // O RELÓGIO DA PARADA NÃO PODE SER REINICIADO POR UMA NOVA TENTATIVA QUE FALHA IGUAL.
             // Provado ao vivo nesta OST: o documento preso recebeu um "Reauditar", falhou com o
             // MESMO 415, e o carimbo pulou de 14h para 0h. Se cada tentativa zerasse o relógio, o
