@@ -1,10 +1,11 @@
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { ConflictException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { and, eq } from "drizzle-orm";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { candidatoAlteracoesLog, documentosAdmissao, tiposDocumento, usuarios } from "../db/schema";
 import { AuditoriaService } from "../auditoria/auditoria.service";
+import { PortalArquivamentoService } from "../portal/portal-arquivamento.service";
 
 /**
  * VALIDAÇÃO HUMANA DE DOCUMENTO (OST B1, Blocos 3 e 4).
@@ -33,6 +34,9 @@ export class ValidacaoHumanaService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly auditoria: AuditoriaService,
+    // AJUSTE A (fechar a lacuna do prontuário): o arquivador do Portal (opção B, conta da esteira).
+    // `@Optional` porque ele nasce inerte sem o binding/arme; sem ele, a validação humana segue igual.
+    @Optional() private readonly arquivamentoPortal?: PortalArquivamentoService,
   ) {}
 
   /**
@@ -119,6 +123,25 @@ export class ValidacaoHumanaService {
     // Agora o veredito humano passa pelo MESMO pós-veredito da IA (`aplicarPosVeredito`). Não há
     // código duplicado: os dois caminhos chamam o mesmo método.
     const pos = await this.posVeredito(admissaoId, user);
+
+    // AJUSTE A — O PRONTUÁRIO DO PORTAL TAMBÉM FECHA AQUI. O `posVeredito` acima arquiva o que está na
+    // STAGING (caminho da IA/esteira), que NÃO tem o objeto entregue pelo Portal (ele vive só no
+    // balde). Então um documento do Portal marcado SUSPEITO pela IA e aprovado À MÃO virava ENTREGUE
+    // sem nunca subir ao prontuário. Aqui disparamos o MESMO arquivador do Portal do caminho do
+    // candidato (`portal-credencial`), pelo tipo recém-validado: o objeto do balde é copiado para a
+    // mesma pasta, incremental, com dedup md5 e a mesma âncora. Best-effort (nunca lança), inerte sem
+    // arme, e no-op quando a admissão não tem objeto do Portal desse tipo. A rede agendada
+    // (`reconciliarVivos`) é a garantia de que nenhum caminho novo deixe buraco silencioso.
+    // Defesa em profundidade: `talvezArquivarDoVeredito` já engole a própria falha, mas o try aqui
+    // garante que NADA no arquivamento possa derrubar a validação humana (ação do consultor).
+    try {
+      await this.arquivamentoPortal?.talvezArquivarDoVeredito(admissaoId, tipoDocumentoId);
+    } catch (e) {
+      this.logger.warn(
+        `Arquivamento do Portal pós-validação-humana falhou (${e instanceof Error ? e.name : "erro"}); ` +
+          `a rede agendada recupera. A validação segue.`,
+      );
+    }
 
     return {
       documento: { tipoDocumentoId, estado: "ENTREGUE" as const, observacao },

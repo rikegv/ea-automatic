@@ -1,9 +1,10 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { and, eq, isNull, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, isNotNull, ne } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissoes, candidatos, clientes, portalCredenciais, tiposDocumento } from "../db/schema";
+import { FABRICIO_FORA_DO_LOTE } from "../domain/portal-reprocesso-lote";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { idDaPastaUrl, montarNomePasta, resolveSubpasta } from "../ai/drive-routing";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
@@ -101,6 +102,61 @@ export class PortalArquivamentoService {
           `será retentado. Nada foi perdido.`,
       );
     }
+  }
+
+  /**
+   * REDE DE SEGURANÇA AGENDADA (AJUSTE B, fechar a lacuna do prontuário). Varre as admissões VIVAS
+   * (EM_ADMISSAO/BANCO_AGUARDAR) que têm documento do Portal confirmado e não reprovado, e manda
+   * arquivar cada uma. É IDEMPOTENTE: o arquivador deduplica por md5, então re-rodar sobre um
+   * prontuário já completo é no-op ("já estavam"), nunca duplica. Garante que nenhum caminho de
+   * conclusão (validação humana, reabertura) deixe documento fora do prontuário em silêncio.
+   *
+   * Inerte sem arme. Best-effort por admissão: a falha de uma não interrompe a varredura. §A.6: só
+   * contagens e id de admissão (nunca nome/CPF/objeto). Exclui o Fabricio (resolvido à mão) por
+   * construção, igual ao runner retro.
+   */
+  async reconciliarVivos(): Promise<{
+    varridas: number;
+    arquivados: number;
+    falhas: number;
+    armado: boolean;
+  }> {
+    if (!this.armado()) return { varridas: 0, arquivados: 0, falhas: 0, armado: false };
+    const linhas = await this.db
+      .select({ id: portalCredenciais.admissaoId })
+      .from(portalCredenciais)
+      .innerJoin(admissoes, eq(admissoes.id, portalCredenciais.admissaoId))
+      .where(
+        and(
+          isNotNull(portalCredenciais.confirmadoEm),
+          isNull(portalCredenciais.reprovadoEm),
+          ne(portalCredenciais.admissaoId, FABRICIO_FORA_DO_LOTE),
+          inArray(admissoes.farolGlobal, ["EM_ADMISSAO", "BANCO_AGUARDAR"]),
+        ),
+      );
+    // Uma admissão aparece uma vez por documento confirmado; dedup em JS (uma varredura por admissão).
+    const ids = [...new Set(linhas.map((l) => l.id))];
+
+    let arquivados = 0;
+    let falhas = 0;
+    for (const id of ids) {
+      try {
+        const r = await this.arquivarPortal(id);
+        arquivados += r.arquivados;
+        falhas += r.falhas;
+      } catch (e) {
+        falhas += 1;
+        this.log.warn(
+          `Reconciliação do Portal: admissão ${id} falhou (${(e as Error).name}); ` +
+            `a próxima cadência tenta de novo.`,
+        );
+      }
+    }
+    this.log.log(
+      `Reconciliação do Portal: ${ids.length} admissão(ões) viva(s) varrida(s), ` +
+        `${arquivados} objeto(s) novo(s) arquivado(s), ${falhas} falha(s).`,
+    );
+    return { varridas: ids.length, arquivados, falhas, armado: true };
   }
 
   /**

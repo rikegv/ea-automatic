@@ -6,6 +6,7 @@ import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
 import { PortalArquivadorService } from "./portal-arquivador.service";
 import { PortalArquivamentoService } from "./portal-arquivamento.service";
+import { PortalReconciliacaoSchedulerService } from "./portal-reconciliacao-scheduler.service";
 import { PortalDocumentoVisualizacaoService } from "./portal-documento-visualizacao.service";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { PortalController } from "./portal.controller";
@@ -156,6 +157,10 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     // o Drive DELEGADO da operação para perto do caminho do arquivo). Nasce INERTE sem o binding.
     PortalArquivadorService,
     PortalArquivamentoService,
+    // AJUSTE B: a rede de segurança agendada que re-arquiva as admissões vivas com doc do Portal
+    // confirmado (idempotente, dedup md5). Inerte sem arme. Garante que nenhum caminho de conclusão
+    // deixe documento fora do prontuário em silêncio.
+    PortalReconciliacaoSchedulerService,
     // VISUALIZAÇÃO do documento do Portal na Auditoria (acréscimo): a conta cega lê o balde para
     // EXIBIR. Exportado para a `ReauditoriaModule`, que serve o arquivo na tela.
     PortalDocumentoVisualizacaoService,
@@ -219,6 +224,9 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     // A `ReauditoriaModule` (que já importa este módulo) injeta a visualização para servir o
     // documento do Portal na tela de Auditoria, lendo pela conta cega do Desenho 1.
     PortalDocumentoVisualizacaoService,
+    // AJUSTE A: a `ReauditoriaModule` injeta o arquivamento no `ValidacaoHumanaService`, para o doc
+    // aprovado À MÃO subir ao prontuário pelo mesmo arquivador do caminho do candidato.
+    PortalArquivamentoService,
   ],
 
 })
