@@ -21936,3 +21936,73 @@ na ficha e passa a resolver); nenhum endereco que o candidato realmente usa regr
 tentativa deles no Portal, a porta identifica e despacha o codigo. Enumeracao: o bit `identificado`
 segue o mesmo oraculo ja aceito pelo diretor (§A.27); muda apenas QUAIS e-mails resolvem (ficha da
 admissao viva).
+
+---
+
+## 2026-10-14 — Gerenciador do Portal: 5 ajustes (CONCLUIDA + resquicio da migracao Pandape) PUBLICADO
+
+**Commit `081e9db` (feat), migration prod 0158->0159, deploy publicar-producao (serve 081e9db, antes
+c28d8e0), backup artefatos *.bak-20261014-211724, backup DB ea-backup-producao-20261014-2116-antes-0159.dump.**
+Worktree `ea-portal-acesso` (branch `frente-portal-filtros-dinamicos`), rebase limpo d22a752 -> f65020c.
+Cinco ajustes na MESMA tela (Gerenciador do Portal), recorte estrito (§A.14). Autorizacao do diretor:
+"pode publicar em producao".
+
+**Os ajustes (o que entrou e por que):**
+- **AJUSTE 1 (copiar link ate concluir):** o card "Sem Link" (0155) foi ALARGADO. Antes so pegava
+  falha de emissao carimbada; agora pega tambem quem teve o link REVOGADO e ficou sem nenhum vivo
+  (candidato perdeu o link e o time nao conseguia copiar de novo), ate a admissao CONCLUIR. Decisao do
+  diretor via AskUserQuestion: "alargar o card Sem Link", em vez de reverter o recorte principal, pra
+  NAO arriscar a contagem dobrada da §A.27. Continua DISJUNTO de TEM_LINK_VIVO (seguranca provou). A
+  concluida sai so localmente (contarSemLink/listarSemLink), sem tocar FAROIS_FORA_DO_PAINEL.
+- **AJUSTE 2 (Pedidos de Ajuda, acesso>pedido):** sai quem acessou depois do pedido, volta se pedir de
+  novo (`.having` correlacionado por admissao). Vinha da sessao anterior que caiu.
+- **AJUSTE 3 (Intervencao Humana, botao "Resolvido"):** marco proprio `resolvido_em/_por_id`
+  (migration 0159, aditiva), evento `PORTAL_INTERVENCAO_RESOLVIDA` (so autorId na allowlist), rota
+  operacional `POST esteira/pendencias-portal/:id/resolver` sob guards + menu esteira. NAO reabre nem
+  devolve tentativa. Vinha da sessao anterior.
+- **AJUSTE 3B:** admissao CONCLUIDA sai SOZINHA da Intervencao Humana (`not exists` em
+  `admissoesNoTime`, contador e card juntos).
+- **AJUSTE 4A/4B (pagina principal so em andamento):** a aba de finalizadas ganha dois sinais
+  ADITIVOS, `AUDITORIA=ANALISE_OK` (4A) e farol `ADMISSAO_CONCLUIDA` (4B). Decisoes do diretor: 4A
+  "tratar como finalizadas -> aba Concluidas"; 4B "acrescentar concluida a aba atual". NAO mexe no
+  rotulo da situacao nem nos cards.
+- **AJUSTE 5 (Pedidos de Ajuda, analise finalizada):** quem ja esta `ANALISE_OK` sai da lista. Aditivo
+  ao AJUSTE 2 (um pega o timing do acesso, o outro o estagio).
+
+**Investigacao (causa dos status errados, §A.27, read-only em prod, §A.6 so contagem):** resquicio da
+migracao Pandape. **AJUSTE 4A = 6 admissoes** mostravam "Nao Acessou/Aguardando Termo" com docs
+entregues + AUDITORIA ANALISE_OK: os documentos entraram pela ESTEIRA, nao pelo Portal, e a situacao
+exige acesso DE PROPOSITO (regra validada `concluiu`). **AJUSTE 5 = 3 fantasmas** (classe da Ana Paula)
+no Pedidos de Ajuda com analise finalizada, que ja acessaram e concluiram (estavam na aba Concluido, por
+isso "nao aparecem no painel"). Correcao por LOGICA, sem apagar nem escrever em producao: os filtros
+pegam o padrao (entrega pela Esteira / analise finalizada) de forma robusta, nao so os casos da
+migracao, entao nao volta a acontecer.
+
+**Gate:** typecheck backend+frontend 0, lint 0, suite portal+dominio 1526 verde (base rebaseada). 2
+specs da sessao anterior que estavam vermelhos foram consertados: o slice do tester do "Resolvido"
+pegava o guard `return new Set()` (trocado por `lastIndexOf`); e a lista de handlers do spec de menu
+nao tinha o `resolver` novo (adicionado, e os `it.each` provam que ele e reivindicado pelo menu
+`esteira`, logo nao e rota aberta).
+
+**§A.38 seguranca = APROVADO** em DUAS passagens (os 5 ajustes + o delta do AJUSTE 1): zero PII nova,
+rota `resolver` sob guards globais e reivindicada pelo menu `esteira`, allowlist da trilha intacta (so
+`autorId`, `admissaoId` nao atravessa), card Sem Link DISJUNTO de TEM_LINK_VIVO (sem dobra de contagem
+§A.27), subconsultas `not exists` leem so farol/status de frente. Observacao nao-bloqueante (produto):
+admissao CONCLUIDA sem link vivo fica invisivel nas duas superficies (coerencia do "ate concluir").
+**§A.38 tester:** spec novo `portal-painel-aba-finalizada.tester.spec.ts` (4A/4B, 8 casos) + o do
+"Resolvido" (12).
+
+**Migration 0159 em prod:** backup DB antes; `db:migrate` aplicou SO a 0159 (prod estava em 0158,
+ledger 157); verificado: colunas `resolvido_em`/`resolvido_por_id` + FK usuarios + CHECK de completude
+presentes. **Deploy:** publicar-producao no ea-build pristino (build topologico), swap de artefatos,
+health backend/frontend 200/200, sem rollback. Dist servido carrega o codigo novo; rotas `resolver` e
+`contadores` vivas (401 sem token).
+
+**Provas em prod (read-only, §A.6):** AJUSTE 1 card Sem Link 3->6 (entram 3 revogados, saem 2
+concluidas). AJUSTE 5 Pedidos de Ajuda cai (saem os de analise finalizada, incl. Ana Paula). AJUSTE 3B
+concluida fora da Intervencao Humana. §A.13 ON-SCREEN do diretor na tela do Gerenciador fica como
+confirmacao final (as contagens batem com os predicados medidos).
+
+**§A.49:** peer `henrique-39` avisou que mexe no selo da Auditoria (`AuditoriaDocsModal`/`esteira.service`
+detalhe) -- SEM colisao com meus arquivos; respondido. Sem colisao no push (origin/main f65020c->081e9db,
+so meu commit).
