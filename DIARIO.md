@@ -21721,3 +21721,56 @@ hostil). **Limite do estrago:** isto afeta SÓ o arquivamento (escrita no Drive)
 Auditoria lê o balde (GCS), não o Drive**, então acende com (a)(b)(c), independente do tipo de Drive.
 Ou seja: com (a)(b)(c) + a instância ligada, o documento na Auditoria já aparece; o prontuário no
 Drive espera a decisão de (d). PLANO e PARECER atualizados.
+
+---
+
+## 2026-10-14 — Prontuário Drive: LIGADO EM PRODUÇÃO pela OPÇÃO B (credencial da esteira), reprocesso 0 falhas
+
+**Sessão remote-control. Decisão do diretor (opção B), consciente e assumindo o risco: NÃO usar a
+conta cega nem Drive compartilhado; REUSAR a credencial da esteira (`ea-automatic-sa` +
+`DRIVE_DELEGATED_SUBJECT=admin.soulan@soulan.com.br`), o mesmo mecanismo já provado que escreve as
+pastas de VT/prontuário hoje.** Entrega ponta a ponta, testada pela fábrica, só o on-screen final
+fica com o diretor.
+
+**O que foi provado antes de construir (§A.27):** a `ea-automatic-sa` já LÊ o balde
+`ea-portal-prod-entrada` (sonda: acesso OK) e já ESCREVE o Drive por delegação. Uma credencial só faz
+as duas pontas → opção B **dispensa o binding (a)(b)(c)**, a conta cega e o Drive compartilhado. A
+escrita cai na árvore de hoje (Meu Drive do `admin.soulan@`), nos `drive_pasta_pai` existentes, sem
+mover nada.
+
+**Como ficou a autenticação:** SIM, reusou a credencial da esteira. 3ª instância do `ai-service`
+(arquivador cego, `PORTAL_PAPEL=ARQUIVADOR`, `PORTAL_BUCKET=ea-portal-prod-entrada`,
+`GOOGLE_APPLICATION_CREDENTIALS` = a chave da esteira, `DRIVE_DELEGATED_SUBJECT=admin.soulan@`),
+unidade de usuário em `127.0.0.1:8027` (8030/8031 do emissor, 8026 leitor-prod; 8027 livre),
+rodando de uma cópia ESTÁVEL do código em `/home/henrique/apps/ea-portal-arquivador/codigo`. Backend
+ligado por `PORTAL_ARQUIVADOR_URL=http://127.0.0.1:8027` + `PORTAL_ARQUIVADOR_TOKEN` próprio, e
+`PORTAL_ARQUIVAMENTO_ARMADO=true` (gatilho vivo: documento novo nasce com prontuário).
+
+**Deploy (§A.49):** frente rebaseada em `origin/main` (conflitos resolvidos em `portal.module.ts`
+exports e `DIARIO.md`), gate verde (backend typecheck 0 + 1549 testes; ai-service 19), push a
+`origin/main` (`8d53d3d`), `publicar-producao.sh`. O swap do `.next` abortou por corrida do `rm` com
+o `next-server` vivo (deixou `.next` em 52K, parcial); recuperado à mão com o frontend parado
+(`mv .next.new .next`, build novo 407M), backend+frontend reiniciados, health 200/200. Produção
+estava servindo o código ANTIGO o tempo todo (processos nunca caíram): sem janela quebrada.
+
+**Reprocesso em massa (opção B, runner `dist/db/rearquiva-portal.js` do tree servido, com `node -r
+reflect-metadata`; via `tsx` NÃO funciona por falta de `emitDecoratorMetadata`):** 32 admissões do
+Portal, 186→206 objetos (entraram ~2 ao vivo durante a corrida). Primeira passada: 1 admissão deu
+`500` por `TimeoutError` transiente do Drive (`buscar_ou_criar_pasta`), as demais OK. Reexecução
+(idempotente, dedup md5): **0 falhas, 0 não-200**, os 15 objetos da transiente subiram. Prova de
+diferença 0: todo objeto confirmado está no Drive (novo ou "já estavam"), falhas_objeto=0. O runner
+trava no shutdown (pool do Nest não fecha) — trabalho concluído antes; processo encerrado à mão.
+
+**Visualização na Auditoria testada pela fábrica:** `POST /portal/documento` na instância devolveu
+HTTP 200, `image/jpeg`, 113 KB, binário válido (chave opaca, sem PII, §A.6). Backend com o fallback
+transparente no ar (`dist/portal/portal-documento-visualizacao.service.js` servido). Falta só o
+diretor abrir a Auditoria de um candidato com documento e confirmar na tela (PASSO 4).
+
+**DÉBITO DE SEGURANÇA ABERTO (registrado, não bloqueia, autorizado pelo diretor):** a opção B mantém
+a credencial ampla da `admin.soulan@` no processo que lê arquivo vindo da internet, contra o veto
+anterior da seguranca (VS3). Mitigação parcial: o arquivador é CEGO (não importa gemini/parser, só
+copia bytes) e não alcança Vertex nem banco. Revisão futura (voltar à conta cega + Drive
+compartilhado, Desenho 1) fica em aberto.
+
+**§A.6:** nenhum nome/CPF em log ou relatório; só ids de admissão (permitido pelo runner), contagens
+e chaves opacas. Commit da infra da opção B: `8d53d3d`. Instância e `.env` fora do repositório.
