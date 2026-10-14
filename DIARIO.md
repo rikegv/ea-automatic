@@ -22006,3 +22006,59 @@ confirmacao final (as contagens batem com os predicados medidos).
 **§A.49:** peer `henrique-39` avisou que mexe no selo da Auditoria (`AuditoriaDocsModal`/`esteira.service`
 detalhe) -- SEM colisao com meus arquivos; respondido. Sem colisao no push (origin/main f65020c->081e9db,
 so meu commit).
+
+## 2026-10-14 — Portal: copiar o link do Gerenciador devolve o MESMO link (sem encerrar o acesso) [COMMIT f16c9f5, no ar]
+
+**O pedido do diretor (Rike).** No Gerenciador do Portal, quando o candidato já tinha acessado o link,
+copiar/reenviar BLOQUEAVA (pop-up "o candidato já está usando o link, enviar outro encerraria o
+acesso"). O diretor perdia candidato: a pessoa perde o link, pede de novo, e não dava para reenviar.
+Causa: o ajuste anterior ("copiar disponível até concluir") misturou DOIS casos distintos, "já acessou"
+e "admissão concluída". Correção: copiar = SEMPRE o mesmo link, nunca gera novo, nunca encerra o acesso;
+remover a trava "já acessou"; manter só "concluída = indisponível".
+
+**Investigação (§A.27, onde a trava morava).** A abstenção "já acessou" é a `LINK_VIVO_EM_USO` em
+`portal-identidade.service.ts`, método `emitirComTrava` (ramo gated por `recusarSeJaAcessado`), e
+`emitirLinkParaCopiar` passava `recusarSeJaAcessado=true`. Além disso, mesmo sem a abstenção, o copiar
+REVOGAVA os vivos e cunhava um novo ("o anterior deixa de valer"). A rota antiga `POST portal/links/:id`
+chama o MESMO `emitirLinkParaCopiar`.
+
+**§A.49 — colisão tratada.** O "copiar disponível até concluir" NÃO estava em produção quando comecei:
+era trabalho não-commitado de outra sessão (ea-ajustes-link-portal). Reportei ao diretor, que mandou
+subir ("pode subir e liberar"). Durante a sessão, origin/main avançou com **`081e9db` "Gerenciador trata
+CONCLUIDA + 5 ajustes do card" (migration 0159)** da outra sessão, que implementou o "concluída =
+indisponível" por OUTRO recorte (painel/pendencias/page.tsx) e NÃO toca `portal-identidade.service.ts`
+nem o caminho de copiar. Rebaseei sobre ela (f65020c→d6ab8b0, merge-tree limpo, meus 3 arquivos
+disjuntos) e re-rodei o gate na base nova. Meu recorte é o COMPLEMENTO: o caminho de copiar.
+
+**O recorte (COMMIT f16c9f5, 1 arquivo de produção + 2 specs).**
+- `portal-identidade.service.ts`: `emitirLinkParaCopiar` agora chama
+  `emitirComTrava(..., recusarSeJaAcessado=false, devolverExistenteSeVivo=true)`. O ramo novo
+  `devolverExistenteSeVivo`, DENTRO da transação (mesmo `pg_advisory_xact_lock`), acha o link VIVO
+  (preferindo o que o candidato JÁ ABRIU) e devolve a URL re-cunhando o token do MESMO `jti` e MESMA
+  janela (Ed25519, assinatura determinística). ZERO escrita, ZERO trilha, não revoga, não estende o
+  prazo (a autoridade é `expira_em` da linha). Sem link vivo nenhum, emite o PRIMEIRO. O recorte de
+  farol (`FAROIS_FORA_DO_PAINEL`) segue antes. O ENVIO por e-mail (`emitirLinkParaEnvio`) fica
+  INTACTO: `recusarSeJaAcessado=true`, `devolverExistenteSeVivo=false` (segue abstendo).
+- Specs `portal-link-para-copiar.tester.spec.ts` e `portal-links-rota-antiga.tester.spec.ts`
+  reescritos para o novo contrato.
+
+**Gate.** typecheck/lint 0, suíte portal 1521 verde (na base rebaseada, convivendo com os specs do
+081e9db).
+
+**Auditorias (§A.38).** `seguranca` adversarial = **APROVADO**, sem veto: re-cunhar devolve a MESMA
+linha `portal_links` (mesmo `jti`), sem estender prazo (janela original; autoridade = `expira_em` da
+linha); zero escrita/trilha (§A.6); joins/consulta sob o advisory lock (concorrência coberta); envio
+por e-mail segue abstendo; rota antiga herda atrás de auth+menu. `tester` independente devolveu gaps;
+fechados: G1 (a URL devolvida VERIFICA e resolve para o MESMO `jti`), G2 (preserva a janela, não
+estende para agora+TTL), G5 (farol morto + link vivo acessado NÃO devolve: corte de farol vence),
+G6 (determinismo: duas cópias do acessado = mesma URL), G7 (suspenso emite novo). Resíduo de baixo
+risco documentado: "preferir o acessado entre MÚLTIPLOS vivos" não é modelável no fake single-link
+(múltiplos vivos é raro pós-revoga-na-emissão); o caso de UM acessado está provado.
+
+**Correção de higiene (seguranca+tester):** comentário dizia "HMAC" (é Ed25519) e "URL idêntica"
+(pode não ser byte-a-byte: token original cunhado com o relógio da app, aqui o `iat` vem de
+`criado_em`; é o MESMO link e expira junto, só não byte-idêntico). Comentário corrigido.
+
+**§A.13 (sem preview pesado, OOM):** a validar em produção pós-deploy, copiando o link de um candidato
+JÁ acessado (ex. Brenda), confirmando que copia sem pop-up e sem revogar o link vigente. Clique final
+na tela com o diretor.
