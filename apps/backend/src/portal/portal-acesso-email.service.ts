@@ -339,22 +339,31 @@ export class PortalAcessoEmailService {
     if (await this.tetoDeSolicitacoesEstourado(emailHash, contexto)) return resposta;
 
     /*
-     * A RESOLUÇÃO, E ELA É POR E-MAIL DA FICHA DO FUNIL, NUNCA POR CPF.
+     * A RESOLUÇÃO, E ELA É PELA FICHA DA ADMISSÃO, NUNCA POR CPF E NÃO MAIS PELO FUNIL.
      *
-     * `anonimizado_em is null` no filtro, e não depois: ficha expurgada não é candidata a nada, e
-     * lê-la para descartar depois é ler dado que a LGPD manda esquecer. Ela cai no mesmo silêncio do
-     * e-mail inexistente, que é o desfecho certo.
+     * DECISÃO DO DIRETOR (Rike, 2026-10-14): o gatilho do link é a LIBERAÇÃO ADMISSIONAL, e o time
+     * cadastra o e-mail na ficha da ADMISSÃO (`candidatos.email`), não na do funil de atração
+     * (`as_candidatos.email`). A porta tem de olhar a ficha do ADM. A v2 resolvia pelo e-mail do
+     * funil e devolvia "E-mail não identificado" a quem só tinha o endereço na ficha da admissão
+     * (casos reais medidos em produção: Cristian, Cleiton, o padrão de "assimetria D2").
+     *
+     * A LEITURA DA FICHA DA ADMISSÃO MORA EM `AdmissoesService`, não aqui, E ISSO É DESENHO (trava 1):
+     * este arquivo continua SEM importar `candidatos` e SEM tocar `candidato_cpf`, então a porta de
+     * e-mail segue, por construção, incapaz de achar pessoa por CPF (o veto da v1). O serviço de
+     * admissões é o dono da relação admissão<->ficha; ele casa o e-mail digitado com `candidatos.email`
+     * de uma admissão VIVA e devolve o id do candidato do FUNIL ligado a essa admissão. É nesse id que
+     * o pipeline está chaveado (`emitirEEnviarCodigo`/`identidade`), então nada muda depois do ramo, e
+     * toda admissão resolvida tem, por construção, admissão viva: o despacho do link nunca cai no vazio.
+     *
+     * A régua de "admissão viva" é a MESMA do resto do módulo (`FAROIS_FORA_DO_PAINEL`), passada ao
+     * serviço para ele não redefinir o conceito: declínio, rescisão e pré-admissão não abrem a porta.
+     * Ficha de funil anonimizada (LGPD) não conta, e cai no mesmo silêncio do e-mail inexistente.
      */
-    const candidatos = await this.db
-      .select({ id: asCandidatos.id })
-      .from(asCandidatos)
-      .where(
-        and(
-          sql`lower(trim(${asCandidatos.email})) = ${email}`,
-          isNull(asCandidatos.anonimizadoEm),
-        ),
-      )
-      .limit(TRAVA_AMBIGUO_TETO + 1);
+    const candidatos = await this.admissoes.candidatosDeFunilPorEmailDaFichaDeAdmissao(
+      email,
+      [...FAROIS_FORA_DO_PAINEL],
+      TRAVA_AMBIGUO_TETO + 1,
+    );
 
     if (candidatos.length === 0) {
       await this.registrar("PORTAL_ACESSO_EMAIL_RECUSADO", contexto, {
@@ -377,6 +386,11 @@ export class PortalAcessoEmailService {
      * (não escolhe no chute) CONTINUAM TRAVANDO, exatamente como antes. O registro fantasma NÃO é
      * tocado: nada de inativar, apagar nem anonimizar. A régua de "admissão viva" é a MESMA de
      * `admissaoVivaDoCandidato` (`FAROIS_FORA_DO_PAINEL`), reusada e não recopiada.
+     *
+     * NOTA (troca da resolução, 2026-10-14): com a resolução agora pela ficha da ADMISSÃO de uma
+     * admissão viva, o conjunto `candidatos` já nasce restrito a admissões vivas. Então `> 1` aqui
+     * significa MAIS DE UM candidato de funil distinto cujo e-mail de ficha de admissão viva bate com
+     * o digitado, e o desempate abaixo continua sendo a guarda que trava nesse caso.
      */
     let candidatoId: string;
     if (candidatos.length > 1) {

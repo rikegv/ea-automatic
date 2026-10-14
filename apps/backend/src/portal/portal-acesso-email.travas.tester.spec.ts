@@ -44,6 +44,7 @@ import { PortalPainelController } from "./portal-painel.controller";
 const DIR = __dirname;
 const SERVICO = join(DIR, "portal-acesso-email.service.ts");
 const CONTROLLER = join(DIR, "portal-acesso-email.controller.ts");
+const ADMISSOES_SERVICE = join(DIR, "../admissoes/admissoes.service.ts");
 const PAINEL_CONTROLLER = join(DIR, "portal-painel.controller.ts");
 const PORTAL_CONTROLLER = join(DIR, "portal.controller.ts");
 const PORTAL_DTO = join(DIR, "portal.dto.ts");
@@ -524,8 +525,25 @@ describe("trava 3: a resposta de `solicitar` carrega SÓ o bit `identificado` e 
   it("a ficha ANONIMIZADA cai no mesmo silêncio, e a cláusula está no filtro da consulta", () => {
     // Ler a ficha expurgada para descartar depois é ler dado que a LGPD manda esquecer, e o
     // descarte posterior seria um ramo a mais, ou seja, mais uma chance de os caminhos diferirem.
+    //
+    // A resolução da porta passou (2026-10-14) a identificar pela ficha da ADMISSÃO, e por causa da
+    // trava 1 (a porta não importa `candidatos` nem toca `candidato_cpf`) a consulta mora no
+    // `AdmissoesService`. Então o `solicitar` DELEGA, e o filtro de anonimizado vive no resolver de
+    // lá, onde continua SENDO o filtro da consulta, não um descarte posterior.
     const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
-    expect(corpo).toContain("isNull(asCandidatos.anonimizadoEm)");
+    expect(corpo, "a porta deixou de delegar a resolução ao serviço de admissões").toContain(
+      "this.admissoes.candidatosDeFunilPorEmailDaFichaDeAdmissao(",
+    );
+    // Fatia a partir do nome do método (o `corpoDoMetodo` por contagem de chaves casaria com o `{`
+    // do tipo de retorno `Promise<{ id: string }[]>`, que vem antes do corpo).
+    const fonteAdm = fonteDe(ADMISSOES_SERVICE);
+    const inicio = fonteAdm.indexOf("candidatosDeFunilPorEmailDaFichaDeAdmissao(");
+    expect(inicio, "o resolver da ficha de admissão sumiu do serviço").toBeGreaterThan(-1);
+    const resolver = fonteAdm.slice(inicio, inicio + 900);
+    expect(resolver).toContain("isNull(asCandidatos.anonimizadoEm)");
+    expect(resolver, "a resolução deixou de casar pela ficha da admissão").toContain(
+      "lower(trim(",
+    );
   });
 });
 

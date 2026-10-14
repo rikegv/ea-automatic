@@ -31,6 +31,7 @@ import {
   isNotNull,
   isNull,
   ne,
+  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -61,6 +62,7 @@ import {
 import {
   clienteLojas,
   admissaoBeneficio,
+  asCandidatos,
   asCandidaturas,
   admissaoIfractal,
   admissaoProjeto,
@@ -3860,6 +3862,49 @@ export class AdmissoesService {
       columns: { candidatoCpf: true, farolGlobal: true },
     });
     return !!adm && ehFarolVivo(adm.farolGlobal) && ehCpfProvisorio(adm.candidatoCpf);
+  }
+
+  /**
+   * OS CANDIDATOS DO FUNIL (`as_candidatos.id`) CUJA ADMISSÃO VIVA TEM A FICHA DO ADM CASANDO O E-MAIL.
+   *
+   * É a resolução da porta de e-mail (decisão do diretor Rike, 2026-10-14: a porta passa a identificar
+   * pela ficha da ADMISSÃO, `candidatos.email`, não pela do funil, `as_candidatos.email`). Mora AQUI,
+   * e não no serviço público do portal, pela MESMA razão de `ehAdmissaoSemCpf` e da reconciliação de
+   * CPF: a porta de e-mail tem trava de teste de NÃO importar `candidatos` nem tocar `candidato_cpf`
+   * (é o veto da v1, em que o CPF do corpo achava pessoa). Então a porta delega a leitura da ficha, e
+   * o único dado do corpo que entra aqui é o E-MAIL: NENHUM CPF do corpo participa da resolução. O
+   * `innerJoin` entre `admissoes` e `candidatos` é FK interna (coluna com coluna), nunca igualdade
+   * contra um valor vindo da requisição.
+   *
+   * Devolve o id do candidato do FUNIL (ligado por `as_candidaturas`) porque é nele que o pipeline da
+   * porta está chaveado (`portal_acesso_codigos.as_candidato_id`, a gravação de CPF e a reconciliação
+   * do PROV). `farolExcluido` é a MESMA lista de "admissão viva" que o portal já usa
+   * (`FAROIS_FORA_DO_PAINEL`), passada pelo chamador para o conceito não ser redefinido aqui.
+   *
+   * §A.6: devolve só ids, não loga, e a ficha de funil anonimizada (LGPD) fica de fora pelo filtro,
+   * nunca lida para descartar depois.
+   */
+  async candidatosDeFunilPorEmailDaFichaDeAdmissao(
+    email: string,
+    farolExcluido: FarolGlobal[],
+    limite: number,
+  ): Promise<{ id: string }[]> {
+    const alvo = (email ?? "").trim().toLowerCase();
+    if (!alvo.includes("@")) return [];
+    return this.db
+      .selectDistinct({ id: asCandidatos.id })
+      .from(asCandidatos)
+      .innerJoin(asCandidaturas, eq(asCandidaturas.candidatoId, asCandidatos.id))
+      .innerJoin(admissoes, eq(admissoes.id, asCandidaturas.admissaoId))
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .where(
+        and(
+          sql`lower(trim(${candidatos.email})) = ${alvo}`,
+          isNull(asCandidatos.anonimizadoEm),
+          notInArray(admissoes.farolGlobal, farolExcluido),
+        ),
+      )
+      .limit(limite);
   }
 
   /** Rótulos legíveis do par atual, para a trilha não guardar só códigos. */
