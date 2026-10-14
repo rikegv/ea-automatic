@@ -21362,3 +21362,70 @@ rota do sistema"), com backup. Vale automatizar o portal-app no publicar-produca
 chegarem direto na porta sem clicar) usando o caminho do Item 1, é ação externa a candidatos reais;
 (b) detecção AUTOMÁTICA por token (o endpoint que reverti) exigiria o Fernando acrescentar
 `/api/portal/modo-de-acesso` à allowlist da barreira + ao rewrite do portal-app.
+
+---
+
+## 2026-10-14 — Portal dos Candidatos: AJUSTE 1 no ar, ajustes 2 a 5 reportados (sessão noturna)
+
+Sessão remote-control noturna, OST do Portal com 5 ajustes (1 a 3 + complemento 4 e 5). Base
+`origin/main` e802d72, worktree limpo `ea-portal-acesso` (§A.49). Só UM ajuste foi construído e
+publicado; os outros quatro pararam em bloqueio real (§A.42) e viraram relatório/decisão do diretor.
+
+**AJUSTE 1 — PUBLICADO EM PRODUÇÃO (commit `ee6bb22`).** A porta de e-mail resolvia o candidato por
+e-mail e, achando duas fichas com o mesmo e-mail (a pessoa duplicada no funil, só uma ligada à
+admissão viva), TRAVAVA por ambiguidade e o código nunca saía (Claudia, Brenda). Agora o ramo
+`candidatos.length > 1` desempata pela ADMISSÃO VIVA no Gerenciador: EXATAMENTE UMA viva entre os
+homônimos resolve e envia; ZERO ou MAIS DE UMA continuam travando (critério seguro do diretor). O
+registro fantasma NÃO é tocado (sem inativar/apagar/anonimizar). Novo método `candidatosComAdmissaoViva`
+reusa `FAROIS_FORA_DO_PAINEL` de `admissaoVivaDoCandidato` (régua única, não cópia). Recorte = 2
+arquivos (`portal-acesso-email.service.ts` + spec novo `portal-acesso-email.resolve-vivo.tester.spec.ts`).
+- **Gate verde:** typecheck 0, lint 0, spec novo 14/14, suíte portal+admissoes 1731 passed. 1 red
+  PRÉ-EXISTENTE (`portal-painel.cobertura-independente`, campo `origemAdmissao`) é drift do origin/main,
+  NÃO meu (não toco painel nem LinhaDoPainelPortal).
+- **seguranca §A.38 = APROVADO** (adversarial): sem acesso a prontuário novo (o resolvido entra no
+  MESMO caminho auditado, divergência CPF+nascimento intacta); farol idêntico (DECLINOU/RESCISAO não
+  contam como vivo); §A.6 limpo (só id, sem log de PII); anti-enumeração preservada (constante única).
+  3 recomendações não-veto, registradas abaixo.
+- **tester INDEPENDENTE:** 7 gaps de cobertura; os 2 críticos (dedup do `Set`; reuso-não-cópia de
+  `FAROIS_FORA_DO_PAINEL`) foram fechados no spec, mais 4 endurecimentos.
+- **Prova em produção (read-only, §A.6 sem PII):** 2545 grupos de e-mail ambíguo; **21 resolvem agora**
+  (exatamente 1 admissão viva), **2524 continuam travando** (zero viva), **0 com múltiplas vivas** (o
+  caso perigoso de duas pessoas vivas no mesmo e-mail não existe na base). Casos nominais (por prefixo
+  de id): caso A e caso B, cada um 2 registros / 1 viva → resolvem. Pós-deploy: artefato servido contém
+  `candidatosComAdmissaoViva`; health 3011/3010 OK; backup `*.bak-20261014-010354`.
+- **Recomendações do seguranca (não bloqueiam, mapa para o diretor):** (1) e-mail compartilhado por
+  pessoas DISTINTAS (uma PROV viva, outra fantasma) é a MESMA pior-hipótese já aceita no caminho de 1
+  PROV, agora estendida ao homônimo com fantasma; contida por "1 vivo" + guarda de divergência; (2)
+  canal de tempo marginal no ramo (desprezível, backend loopback); (3) teto de 20 sem ORDER BY: com
+  21+ fichas no mesmo e-mail o conjunto é não-determinístico (patológico, contido downstream).
+
+**AJUSTE 2 — NÃO SUBIU, é DECISÃO do diretor (§A.27).** "Sinal honesto" (tela dizer "e-mail não
+cadastrado") REVERTE um controle de segurança JÁ AUDITADO: a resposta única `enviado:true` e a tela
+são, por construção e por veto de auditoria anterior, anti-ORÁCULO DE ENUMERAÇÃO ("não pode haver
+'e-mail não cadastrado'", shared-types e `AcessoPorEmail.tsx`). O brief tratou da EXPOSIÇÃO do e-mail
+(mascarar) mas não da ENUMERAÇÃO (descobrir se um e-mail é candidato), que é o que a reversão reabre e
+é sondável da internet pública. §A.26/§A.27/§A.38: reportar o impacto ANTES de construir. A tela, hoje,
+já é condicional ("Se ele estiver cadastrado, enviamos"), não mente "enviado". Proposta: registrar como
+regra (molde §A.45) a decisão do diretor com o trade-off na mesa; só então construir.
+
+**AJUSTE 3 — NÃO MEXIDO, colisão com Emissão 0155 (§A.14 + instrução do brief).** O link que o botão
+do Gerenciador copia é emitido por `emitirLinkParaCopiar`/`gerarLinkParaCopiar`
+(`portal-identidade.service.ts`/`portal-envio.service.ts`/`portal-envio.controller.ts`) = o gancho de
+emissão, zona da Emissão 0155 (frente parada, nada commitado no origin/main). Fazer o PROV copiar a
+URL da porta de e-mail em vez do link clássico toca essa pilha. O brief pediu explicitamente "reportar
+colisão antes de corrigir". Reportado, não construído; a coordenar com a 0155. Atenua: o P0 d495cc6 já
+dá ao PROV o botão "primeiro acesso por e-mail" na tela de CPF, então o link entregue não é beco.
+
+**AJUSTE 4 — NÃO REENVIADO (precondição do próprio brief).** Reenvio exige ajustes 1 a 3 no ar e
+provados, e no formato direcionado (= AJUSTE 3). Como 2 e 3 não subiram, a precondição falha e o brief
+manda: não reenviar, deixar a lista pronta e reportar. **Lista (read-only, §A.6):** 29 admissões vivas
+com link vivo nunca acessado; **17 PROV** (iriam para a porta de e-mail) + **12 CPF real** (link normal).
+
+**AJUSTE 5 — PARADO na trava VS3 (instrução do próprio brief).** Ver o documento do Portal na tela de
+Auditoria esbarra na separação de segurança. Hoje: o binário vai do navegador DIRETO para o bucket
+`PORTAL_GCS_BUCKET` (nunca passa pelo backend); a tela de Auditoria lê da STAGING local (nunca do GCS
+nem do Drive), e NADA move o objeto do GCS do Portal para a staging. Exibir exigiria uma rota NOVA de
+LEITURA (download/URL assinada de GET) do bucket do Portal, que ninguém tem: hoje só PUT (candidato),
+HEAD e DELETE (curadoria). Isso cruza VS3/VS7 (leitor isolado sem Drive/Vertex; "quem abre arquivo da
+internet não segura a chave do prontuário") e é mudança de IAM/arquitetura = decisão do diretor. O
+brief manda PARAR e reportar nesse caso. Descrito o mecanismo, não construído.
