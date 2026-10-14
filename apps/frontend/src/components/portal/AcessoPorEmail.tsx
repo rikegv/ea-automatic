@@ -55,11 +55,12 @@ import {
  * │ antes desta frente. Um botão "entrar agora" aqui seria a v1 do desenho, que foi VETADA.      │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ AS TRÊS RÉGUAS DE SEGURANÇA QUE A AUDITORIA FIXOU, e cada uma tem endereço nesta tela ─────┐
- * │ 1. NENHUM ORÁCULO DE ENUMERAÇÃO. O passo do e-mail avança para o código SEMPRE, exista ou    │
- * │    não o endereço. Não há, e não pode haver, "e-mail não cadastrado": a resposta do servidor │
- * │    é a mesma para todo e-mail, por desenho, e a tela não inventa uma diferença que o         │
- * │    servidor se recusa a dar.                                                                │
+ * ┌─ AS RÉGUAS DE SEGURANÇA DESTA TELA, e cada uma tem endereço aqui ──────────────────────────┐
+ * │ 1. ENUMERAÇÃO: DECISÃO DO DIRETOR (14/10/2026) REVERTEU o anti-enumeração. A tela agora      │
+ * │    mostra "e-mail não identificado, fale com o RH" e NÃO abre o campo do código quando o     │
+ * │    servidor devolve `identificado:false`, para o candidato não ter a sensação de que um      │
+ * │    código foi enviado. Isso revela se o e-mail existe (custo aceito pelo diretor). Antes a    │
+ * │    resposta era única por desenho. Ver DIARIO 2026-10-14 e o backend.                        │
  * │ 2. NENHUM DADO DA PESSOA ANTES DA IDENTIDADE PROVADA. O passo da identidade pede CPF e data  │
  * │    de nascimento e NÃO mostra nome, nem mascarado, nem cliente, nem cargo. Posse de caixa de │
  * │    e-mail não prova identidade: 6 e-mails medidos em produção são compartilhados por 12 CPFs,│
@@ -201,6 +202,14 @@ function Titulo({ titulo, apoio }: { titulo: string; apoio: string }) {
   );
 }
 
+/**
+ * DECISÃO DO DIRETOR (14/10/2026, usabilidade sobre anti-enumeração): quando o e-mail NÃO é
+ * identificado, a tela diz isto e NÃO abre o campo do código, para o candidato não ter a sensação
+ * de que um código foi enviado. §A.11: sem travessão.
+ */
+const MSG_EMAIL_NAO_IDENTIFICADO =
+  "E-mail não identificado. Confira o e-mail digitado ou fale com o RH.";
+
 export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) {
   const [passo, setPasso] = useState<PassoDoAcessoPorEmail>("EMAIL");
 
@@ -222,6 +231,8 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
    * NÃO avançar o passo continua idêntico. Ele some assim que a pessoa tenta de novo.
    */
   const [manutencao, setManutencao] = useState(false);
+  /** E-mail não identificado (decisão do diretor 14/10): mostra a mensagem e oferece o RH. */
+  const [naoIdentificado, setNaoIdentificado] = useState(false);
   /** Recado neutro que não é erro (o teto do pedido de código, por exemplo). */
   const [recado, setRecado] = useState<string | null>(null);
 
@@ -274,11 +285,29 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
       setErro(null);
       setRecado(null);
       setManutencao(false);
+      setNaoIdentificado(false);
       try {
         const r = await apiFetch<SolicitacaoDeCodigoResposta>(ROTA_SOLICITAR_CODIGO, {
           method: "POST",
           body: { email: normalizarEmail(email) },
         });
+        if (!r?.identificado) {
+          if (reenvio) {
+            // NO REENVIO a pessoa JÁ está no passo do código: o e-mail FOI identificado uma vez, e um
+            // `false` agora é teto ou trava no "pedir outro código", não "e-mail não existe". Mantém
+            // no passo do código (ela pode ter o código anterior), com recado neutro, sem dizer "não
+            // identificado", que ali seria mentira.
+            setRecado(FRASE_PEDIDO_NO_TETO);
+            return;
+          }
+          // DECISÃO DO DIRETOR (14/10): e-mail não identificado NÃO abre o campo do código, para não
+          // dar a sensação de que um código foi enviado. Fica no passo do e-mail, com a mensagem e a
+          // opção de falar com o RH.
+          setNaoIdentificado(true);
+          setErro(MSG_EMAIL_NAO_IDENTIFICADO);
+          return;
+        }
+        setNaoIdentificado(false);
         const minutos = Number(r?.expiraEmMinutos);
         setExpiraEm(Number.isFinite(minutos) && minutos > 0 ? Date.now() + minutos * 60_000 : null);
         setAgora(Date.now());
@@ -403,6 +432,8 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
         />
 
         {manutencao ? <AvisoManutencao /> : erro ? <Aviso tom="atencao">{erro}</Aviso> : null}
+
+        {naoIdentificado ? <BotaoFalarComRh variante="compacto" /> : null}
 
         <form
           onSubmit={(e) => {
@@ -540,6 +571,7 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
               setCodigo("");
               setErro(null);
               setRecado(null);
+              setNaoIdentificado(false);
               setExpiraEm(null);
             }}
             className="min-h-11 text-sm font-semibold text-portal-muted"

@@ -163,12 +163,14 @@ describe("AJUSTE 1: desempate por admissão viva na porta de e-mail", () => {
     expect(chamadas.length, "a emissão foi duplicada em ramos diferentes").toBe(1);
   });
 
-  it("o desfecho da porta continua sendo a MESMA constante única (anti-enumeração intacta)", () => {
-    // O AJUSTE 1 muda QUEM é resolvido, nunca O QUE a porta responde: todo `return` é `resposta`.
+  it("o AJUSTE 1 muda QUEM é resolvido, e todo `return` continua devolvendo a variável `resposta`", () => {
+    // O desempate por admissão viva não cria um caminho de retorno novo: todos os `return` são
+    // `resposta`. A resposta carrega `identificado` (decisão do diretor 14/10), escrito só no caminho
+    // do envio; o desempate apenas decide se chega lá.
     const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
     const retornos = [...corpo.matchAll(/return\s+([^;]+);/g)].map((m) => m[1].trim());
     expect(retornos.length).toBeGreaterThan(1);
-    for (const r of retornos) expect(r, `retorno fora da constante: ${r}`).toBe("resposta");
+    for (const r of retornos) expect(r, `retorno fora da variável resposta: ${r}`).toBe("resposta");
   });
 
   // ── Endurecimentos pedidos pelo `tester` independente (§A.38): o estrutural tem de pegar o

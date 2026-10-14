@@ -5217,10 +5217,23 @@ export const SITUACOES_DO_ACESSO_POR_EMAIL = [
 ] as const;
 export type SituacaoDoAcessoPorEmail = (typeof SITUACOES_DO_ACESSO_POR_EMAIL)[number];
 
-/** Resposta de `POST portal/acesso-email/solicitar`. É a MESMA para todo e-mail, por desenho. */
+/**
+ * Resposta de `POST portal/acesso-email/solicitar`.
+ *
+ * DECISÃO DO DIRETOR (14/10/2026, usabilidade sobre anti-enumeração): a resposta deixou de ser
+ * constante. Agora ela carrega `identificado`, para a tela PODER dizer "e-mail não identificado,
+ * fale com o RH" em vez de abrir o campo do código e dar ao candidato a sensação de que um código
+ * foi enviado quando o e-mail não existe. Isso REVELA se o e-mail está na base (oráculo de
+ * enumeração), o que a auditoria tinha vetado; o diretor decidiu aceitar esse custo em favor da
+ * usabilidade. Ver DIARIO 2026-10-14 e o cabeçalho de `portal-acesso-email.service.ts`.
+ */
 export interface SolicitacaoDeCodigoResposta {
-  /** SEMPRE `true`. Dizer "não achei" seria o oráculo de enumeração que a auditoria proibiu. */
-  enviado: true;
+  /**
+   * `true` só quando o e-mail foi IDENTIFICADO e um código foi despachado. `false` quando o e-mail
+   * não resolve (não está na base, ou a ambiguidade não quebrou) ou foi barrado por teto/trava. A
+   * tela abre o campo do código só quando `true`; caso contrário mostra "e-mail não identificado".
+   */
+  identificado: boolean;
   expiraEmMinutos: number;
 }
 

@@ -48,8 +48,10 @@ export class PortalAcessoEmailController {
   constructor(private readonly acesso: PortalAcessoEmailService) {}
 
   /**
-   * PASSO 1. Resposta ÚNICA, byte a byte, exista ou não o e-mail: é o anti-enumeração, e ele é
-   * calculado na primeira linha do serviço para que nenhum caminho novo tenha outra coisa a devolver.
+   * PASSO 1. DECISÃO DO DIRETOR (14/10/2026): a resposta deixou de ser única. Ela carrega
+   * `identificado`, para a tela dizer "e-mail não identificado, fale com o RH" em vez de abrir o
+   * campo do código quando o e-mail não existe. Isso revela se o e-mail está na base (enumeração),
+   * custo que o diretor aceitou em favor da usabilidade. Ver DIARIO 2026-10-14 e o serviço.
    */
   @Post("acesso-email/solicitar")
   @Public()

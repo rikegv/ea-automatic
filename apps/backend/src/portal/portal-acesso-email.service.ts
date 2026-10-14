@@ -294,10 +294,13 @@ export class PortalAcessoEmailService {
     ip?: string | null;
     userAgent?: string | null;
   }): Promise<SolicitacaoDeCodigoResposta> {
-    // O DESFECHO É UM SÓ, E ELE É CALCULADO NA PRIMEIRA LINHA: ver o cabeçalho da classe. Fica aqui
-    // para que nenhum caminho novo tenha por onde devolver outra coisa.
+    // DECISÃO DO DIRETOR (14/10/2026): a resposta deixou de ser constante. `identificado` nasce FALSE
+    // e só vira TRUE quando o e-mail resolve e um código é despachado. É esse bit que a tela usa para
+    // abrir (ou não) o campo do código e, quando não identifica, dizer "e-mail não identificado, fale
+    // com o RH". Isso REVELA se o e-mail está na base (enumeração), que a auditoria tinha vetado e o
+    // diretor decidiu aceitar em favor da usabilidade. Ver o cabeçalho da classe e o DIARIO 2026-10-14.
     const resposta: SolicitacaoDeCodigoResposta = {
-      enviado: true,
+      identificado: false,
       expiraEmMinutos: Math.round(CODIGO_TTL_MS / 60_000),
     };
 
@@ -439,6 +442,10 @@ export class PortalAcessoEmailService {
      * │ mensagem nenhuma saindo para se perder.                                                     │
      * └─────────────────────────────────────────────────────────────────────────────────────────────┘
      */
+    // IDENTIFICADO: o e-mail resolveu para uma pessoa e um código vai ser despachado. É o ÚNICO
+    // caminho que marca `true`; todo o resto devolve `identificado: false` (a tela diz "e-mail não
+    // identificado"). O envio em si segue solto (`void ... catch`), como antes.
+    resposta.identificado = true;
     void this.emitirEEnviarCodigo(candidatoId, email, emailHash, segredo, contexto).catch((erro) => {
       // §A.6: só o nome da classe do erro. A mensagem pode carregar o endereço ou o código.
       this.log.error(`falha inesperada ao emitir o codigo de acesso: ${(erro as Error).name}`);

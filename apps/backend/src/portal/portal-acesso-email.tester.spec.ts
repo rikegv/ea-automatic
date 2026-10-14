@@ -251,8 +251,9 @@ describe("constantes: propriedades, nunca valores", () => {
     expect(diasPara50).toBeGreaterThan(1_000);
   });
 
-  it("REQUISITO (resposta única anti-enumeração): o TTL é minuto exato, porque `expiraEmMinutos` volta igual nos dois caminhos", () => {
-    // A rota `solicitar` devolve `{ enviado: true, expiraEmMinutos }` sempre idêntico, calculado na
+  it("REQUISITO: o TTL é minuto exato, porque `expiraEmMinutos` volta igual para todo e-mail", () => {
+    // A rota `solicitar` devolve `{ identificado, expiraEmMinutos }`; o `expiraEmMinutos` é idêntico
+    // para todos (só `identificado` varia, decisão do diretor 14/10), calculado na
     // PRIMEIRA linha do método (seção 1 da v2). TTL que não fosse múltiplo de minuto exigiria
     // arredondamento, e arredondamento é o tipo de detalhe que difere entre dois caminhos de código
     // e vira canal de enumeração.
@@ -1028,13 +1029,14 @@ describe("a confirmação do código não devolve NADA da pessoa (proibição O1
     expect(semChaveExtra).toBe(true);
   });
 
-  it("REQUISITO (resposta única): a solicitação declara só `enviado` e `expiraEmMinutos`", () => {
-    // Qualquer campo a mais aqui é o oráculo de enumeração: "achei", "naoAchei", "candidato",
-    // "elegivel". A resposta é a MESMA para e-mail que existe e para e-mail que não existe, e é
-    // calculada na primeira linha do método, antes de qualquer consulta.
+  it("REQUISITO: a solicitação declara só `identificado` e `expiraEmMinutos`, nada da pessoa", () => {
+    // DECISÃO DO DIRETOR (14/10): a resposta passou a carregar `identificado` (abre ou não o campo do
+    // código), um custo de enumeração aceito em favor da usabilidade. O que ESTA régua ainda trava é
+    // que NENHUM dado da pessoa vaza por aqui: nada de "candidato", "nome", "elegivel". Só o bit e o
+    // prazo.
     const campos = camposDaInterface("SolicitacaoDeCodigoResposta");
-    expect([...campos].sort()).toEqual(["enviado", "expiraEmMinutos"]);
-    type ChaveExtra = Exclude<keyof SolicitacaoDeCodigoResposta, "enviado" | "expiraEmMinutos">;
+    expect([...campos].sort()).toEqual(["expiraEmMinutos", "identificado"]);
+    type ChaveExtra = Exclude<keyof SolicitacaoDeCodigoResposta, "identificado" | "expiraEmMinutos">;
     const semChaveExtra: ChaveExtra extends never ? true : false = true;
     expect(semChaveExtra).toBe(true);
   });

@@ -443,7 +443,7 @@ describe("trava 2: `portal_links` tem UM ponto de escrita no sistema, e não é 
 
 // ══ TRAVA 3: RESPOSTA ÚNICA DE `solicitar` ═════════════════════════════════════════════════════
 
-describe("trava 3: `solicitar` responde a mesma coisa para todo e-mail", () => {
+describe("trava 3: a resposta de `solicitar` carrega SÓ o bit `identificado` e o prazo, nada da pessoa", () => {
   /**
    * OS CINCO CASOS QUE TÊM DE SER INDISTINGUÍVEIS: e-mail inexistente, existente, AMBÍGUO (duas
    * fichas), TRAVADO e ANONIMIZADO. Instanciar o serviço para medir os cinco exigiria banco, então a
@@ -451,22 +451,50 @@ describe("trava 3: `solicitar` responde a mesma coisa para todo e-mail", () => {
    * ele é uma constante montada antes de qualquer consulta, então não há como os cinco diferirem,
    * inclusive nos casos que ninguém pensou em testar.
    */
-  it("existe UM único valor de retorno, montado ANTES de qualquer consulta", () => {
+  it("a resposta nasce em uma constante montada ANTES de qualquer consulta, com `identificado` FALSE", () => {
+    // DECISÃO DO DIRETOR (14/10): a resposta deixou de ser a MESMA para todo e-mail. Ela nasce
+    // `identificado: false` e só vira `true` no caminho que despacha o código. O que continua valendo
+    // é que ela é montada antes de qualquer consulta, e o único ponto que a muda é o do envio.
     const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
     const declaracao = corpo.indexOf("const resposta");
     expect(declaracao, "a resposta não é montada em uma constante").toBeGreaterThan(-1);
     const primeiroAwait = corpo.indexOf("await");
     expect(primeiroAwait, "método sem await, o teste perdeu o alvo").toBeGreaterThan(-1);
     expect(declaracao, "a resposta é montada depois de uma consulta").toBeLessThan(primeiroAwait);
-    expect(corpo).toMatch(/enviado:\s*true/);
+    expect(corpo).toMatch(/identificado:\s*false/);
     expect(corpo).toMatch(/expiraEmMinutos:\s*Math\.round\(CODIGO_TTL_MS/);
   });
 
-  it("TODO `return` de `solicitar` devolve a MESMA constante, e nenhum devolve dado do candidato", () => {
+  it("TODO `return` de `solicitar` devolve a variável `resposta`, e `identificado` é o ÚNICO campo que muda", () => {
+    // Nenhum caminho devolve um objeto literal diferente (nada de `{ existe: true }` solto); todos
+    // devolvem `resposta`. A única escrita que a diferencia é `resposta.identificado = true`, no
+    // caminho do envio. Assim o que a tela aprende é só "identificou ou não", nada da pessoa.
     const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
     const retornos = [...corpo.matchAll(/return\s+([^;]+);/g)].map((m) => m[1].trim());
     expect(retornos.length, "método sem retorno, o teste perdeu o alvo").toBeGreaterThan(1);
-    for (const r of retornos) expect(r, `retorno diferente da constante única: ${r}`).toBe("resposta");
+    for (const r of retornos) expect(r, `retorno fora da variável resposta: ${r}`).toBe("resposta");
+    const escritas = [...corpo.matchAll(/resposta\.(\w+)\s*=/g)].map((m) => m[1]);
+    expect(escritas, "só `identificado` pode ser escrito na resposta").toEqual(["identificado"]);
+  });
+
+  it("`resposta.identificado = true` mora DEPOIS das guardas e colado no envio (a POSIÇÃO é a régua)", () => {
+    // Mover a escrita para logo depois da constante (antes dos tetos, da ambiguidade e da trava)
+    // deixaria TODO e-mail voltar `true` e abrir o campo do código para quem não existe, que é o bug
+    // que a decisão do diretor existe para não cometer. O "escritas === [identificado]" acima não
+    // pega isso (continua verde se a linha subir); a posição pega.
+    const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
+    const posEscrita = corpo.indexOf("resposta.identificado = true");
+    const posTrava = corpo.indexOf("travaAtiva(this.db, candidatoId)");
+    const posEnvio = corpo.indexOf("emitirEEnviarCodigo");
+    expect(posEscrita, "a escrita de `identificado = true` sumiu").toBeGreaterThan(-1);
+    expect(posTrava, "a guarda de trava ativa sumiu").toBeGreaterThan(-1);
+    expect(posEnvio, "o despacho do código sumiu").toBeGreaterThan(-1);
+    expect(posEscrita, "`identificado = true` é marcado ANTES da guarda de trava ativa").toBeGreaterThan(posTrava);
+    expect(posEscrita, "`identificado = true` é marcado DEPOIS do despacho").toBeLessThan(posEnvio);
+    // Nenhum `return resposta` entre marcar `true` e despachar: senão um e-mail marcado identificado
+    // sairia sem código algum ter sido despachado.
+    const trecho = corpo.slice(posEscrita, posEnvio);
+    expect(trecho, "há um `return` entre marcar identificado e despachar").not.toContain("return resposta");
   });
 
   it("`solicitar` não lança nada por conta própria (status diferente também é resposta diferente)", () => {

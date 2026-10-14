@@ -49,9 +49,9 @@ function campo(id: string): HTMLInputElement {
   return el as HTMLInputElement;
 }
 
-/** Vai do zero até o passo do código, com a resposta única do contrato. */
+/** Vai do zero até o passo do código. `identificado: true` é o que abre o campo (decisão 14/10). */
 async function irAoCodigo() {
-  apiFetch.mockResolvedValueOnce({ enviado: true, expiraEmMinutos: 10 });
+  apiFetch.mockResolvedValueOnce({ identificado: true, expiraEmMinutos: 10 });
   render(<AcessoPorEmail />);
   fireEvent.change(campo("portal-acesso-email"), { target: { value: EMAIL } });
   fireEvent.click(screen.getByRole("button", { name: "Enviar código" }));
@@ -73,8 +73,11 @@ function preencherIdentidade() {
   fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 }
 
-describe("1. anti-enumeração: a tela avança SEMPRE", () => {
-  it("avança para o código quando o servidor responde a resposta única", async () => {
+describe("1. porta de e-mail: identifica abre o código, nao identifica mostra a mensagem (decisao do diretor 14/10)", () => {
+  // DECISÃO DO DIRETOR (14/10/2026): a usabilidade pesou mais que o anti-enumeração. A tela PODE
+  // dizer "e-mail não identificado" e NÃO abre o campo do código nesse caso. O custo (revelar se o
+  // e-mail existe) é aceito. Ver DIARIO 2026-10-14.
+  it("quando o servidor IDENTIFICA (identificado:true), avança para o código", async () => {
     await irAoCodigo();
     expect(apiFetch).toHaveBeenCalledWith("/portal/acesso-email/solicitar", {
       method: "POST",
@@ -82,27 +85,54 @@ describe("1. anti-enumeração: a tela avança SEMPRE", () => {
     });
   });
 
-  it("AVANÇA IGUAL quando o e-mail não resolve para ninguém (404 do servidor)", async () => {
-    apiFetch.mockRejectedValueOnce(new ApiError("Não encontrado", 404));
+  it("quando NÃO identifica (identificado:false), NÃO abre o campo do código e mostra a mensagem + RH", async () => {
+    apiFetch.mockResolvedValueOnce({ identificado: false, expiraEmMinutos: 10 });
     render(<AcessoPorEmail />);
     fireEvent.change(campo("portal-acesso-email"), { target: { value: EMAIL } });
     fireEvent.click(screen.getByRole("button", { name: "Enviar código" }));
-    // O passo do código aparece igual: nenhuma diferença observável entre e-mail que existe e
-    // e-mail que não existe. Um `return` aqui seria o oráculo de enumeração que a auditoria proibiu.
-    await waitFor(() => expect(campo("portal-acesso-codigo")).toBeTruthy());
+    await waitFor(() =>
+      expect(document.body.textContent?.toLowerCase()).toContain("não identificado"),
+    );
+    // O campo do código NÃO abre: a pessoa não fica com a sensação de que um código foi enviado.
+    expect(document.querySelector("#portal-acesso-codigo")).toBeNull();
+    // Fica no passo do e-mail, com o campo do e-mail ainda à vista para corrigir.
+    expect(document.querySelector("#portal-acesso-email")).toBeTruthy();
+    // E oferece falar com o RH.
+    expect(document.body.textContent?.toLowerCase()).toContain("rh");
   });
 
-  it("nenhum texto da tela diz que o e-mail não está cadastrado", async () => {
+  it("o passo do CÓDIGO (e-mail identificado) não afirma que o código chegou nem nomeia o e-mail", async () => {
     await irAoCodigo();
     const texto = document.body.textContent?.toLowerCase() ?? "";
-    expect(texto).not.toContain("não cadastrado");
-    expect(texto).not.toContain("nao cadastrado");
-    expect(texto).not.toContain("não existe");
-    expect(texto).not.toContain("não encontramos");
-    // O que a tela diz é CONDICIONAL ("Se ... estiver cadastrado"), e é assim que ela evita afirmar
-    // qualquer coisa sobre a existência do e-mail. O texto exato pode variar (AJUSTE 2: deixou de
-    // afirmar que o código "chegou"); o que a régua trava é a FORMA condicional.
-    expect(document.body.textContent?.toLowerCase()).toContain("estiver cadastrado");
+    expect(texto).not.toContain("chegou nele");
+    // A frase do passo do código é condicional ("se ... estiver cadastrado").
+    expect(texto).toContain("estiver cadastrado");
+  });
+
+  it("REENVIO que volta identificado:false fica no passo do código, recado neutro, SEM 'não identificado'", async () => {
+    // O e-mail JÁ foi identificado (está no passo do código). Um false no "pedir outro código" é
+    // teto/trava, não "não existe": a tela não pode virar "e-mail não identificado" nem fechar o campo.
+    await irAoCodigo();
+    apiFetch.mockResolvedValueOnce({ identificado: false, expiraEmMinutos: 10 });
+    fireEvent.click(screen.getByRole("button", { name: "Pedir outro código" }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
+    expect(document.querySelector("#portal-acesso-codigo")).toBeTruthy();
+    expect(document.body.textContent?.toLowerCase()).not.toContain("não identificado");
+  });
+
+  it("corrigir o e-mail depois de 'não identificado' e identificar abre o campo e limpa a mensagem", async () => {
+    apiFetch.mockResolvedValueOnce({ identificado: false, expiraEmMinutos: 10 });
+    render(<AcessoPorEmail />);
+    fireEvent.change(campo("portal-acesso-email"), { target: { value: EMAIL } });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar código" }));
+    await waitFor(() =>
+      expect(document.body.textContent?.toLowerCase()).toContain("não identificado"),
+    );
+    apiFetch.mockResolvedValueOnce({ identificado: true, expiraEmMinutos: 10 });
+    fireEvent.change(campo("portal-acesso-email"), { target: { value: "outro@exemplo.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar código" }));
+    await waitFor(() => expect(campo("portal-acesso-codigo")).toBeTruthy());
+    expect(document.body.textContent?.toLowerCase()).not.toContain("não identificado");
   });
 
   it("a porta DESLIGADA (503) é AVISO DE MANUTENÇÃO calmo, e não manda digitar código que nunca vem", async () => {
