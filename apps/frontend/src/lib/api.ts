@@ -325,21 +325,43 @@ export async function apiDownloadPost(
  * Como o endpoint exige Authorization Bearer, não dá para apontar a aba direto na URL: busca-se o
  * blob com o token e abre-se um object URL. Mesmo padrão de auth do `apiDownload`.
  */
-export async function apiOpenInline(path: string, token?: string | null): Promise<void> {
-  const res = await fetchComRenovacao(
-    path,
-    (t) => {
-      const headers: Record<string, string> = {};
-      if (t) headers["Authorization"] = `Bearer ${t}`;
-      return { headers, credentials: "include" };
-    },
-    token,
-  );
-  if (!res.ok) throw await erroDeRespostaBinaria(res);
+export async function apiOpenInline(
+  path: string,
+  token?: string | null,
+  janelaPreAberta?: Window | null,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetchComRenovacao(
+      path,
+      (t) => {
+        const headers: Record<string, string> = {};
+        if (t) headers["Authorization"] = `Bearer ${t}`;
+        return { headers, credentials: "include" };
+      },
+      token,
+    );
+  } catch (e) {
+    if (janelaPreAberta && !janelaPreAberta.closed) janelaPreAberta.close();
+    throw e;
+  }
+  if (!res.ok) {
+    if (janelaPreAberta && !janelaPreAberta.closed) janelaPreAberta.close();
+    throw await erroDeRespostaBinaria(res);
+  }
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
-  window.open(url, "_blank", "noopener,noreferrer");
+  // Quando a aba foi aberta ANTES do await (no gesto do clique), navegamos ela aqui. É o que impede
+  // o bloqueio de pop-up que o navegador aplica a `window.open` chamado depois de um await longo: o
+  // documento do Portal transita pela conta cega e leva segundos, prazo em que a chamada deixa de
+  // ser "resposta direta ao clique" e o navegador a barra. Sem a aba pré-aberta, mantém-se o
+  // comportamento antigo (abrir agora), para os chamadores rápidos que já funcionavam.
+  if (janelaPreAberta && !janelaPreAberta.closed) {
+    janelaPreAberta.location.href = url;
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
   // Revoga depois de um intervalo: a nova aba precisa do URL vivo enquanto carrega o PDF.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

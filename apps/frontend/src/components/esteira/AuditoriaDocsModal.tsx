@@ -456,13 +456,15 @@ export function AuditoriaDocsModal({
    * inline, no mesmo padrão do `/kit/download` (§A.6).
    */
   const abrirArquivo = useCallback(
-    async (tipoDocumentoId: string, indice: number) => {
+    async (tipoDocumentoId: string, indice: number, janela?: Window | null) => {
       try {
         await apiOpenInline(
           `/esteira/auditoria/${admissaoId}/documento/${tipoDocumentoId}/arquivo/${indice}`,
           token,
+          janela,
         );
       } catch (e) {
+        if (janela && !janela.closed) janela.close();
         const msg =
           e instanceof ApiError
             ? e.message
@@ -483,6 +485,12 @@ export function AuditoriaDocsModal({
    */
   const visualizar = useCallback(
     async (tipoDocumentoId: string) => {
+      // Abre a aba JÁ no clique (gesto do usuário), ANTES de qualquer await. Sem isto, quando o
+      // arquivo único abre sozinho e o documento demora a transitar (Portal via conta cega), o
+      // `window.open` cairia depois do await e o navegador o bloquearia: a tela carregava e a aba
+      // nunca abria. Se não for arquivo único (ou der erro/indisponível), a aba é fechada.
+      const janela = typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
+      if (janela) janela.opener = null;
       setCarregandoArquivos(tipoDocumentoId);
       setErroDoc((e) => ({ ...e, [tipoDocumentoId]: "" }));
       try {
@@ -492,9 +500,12 @@ export function AuditoriaDocsModal({
         );
         setArquivosPorTipo((a) => ({ ...a, [tipoDocumentoId]: resp }));
         if (resp.disponivel && resp.arquivos.length === 1) {
-          await abrirArquivo(tipoDocumentoId, resp.arquivos[0].indice);
+          await abrirArquivo(tipoDocumentoId, resp.arquivos[0].indice, janela);
+        } else {
+          if (janela && !janela.closed) janela.close();
         }
       } catch (e) {
+        if (janela && !janela.closed) janela.close();
         const msg =
           e instanceof ApiError
             ? e.message
@@ -1035,7 +1046,13 @@ export function AuditoriaDocsModal({
                           key={a.indice}
                           type="button"
                           className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[11.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-text"
-                          onClick={() => tipoId && void abrirArquivo(tipoId, a.indice)}
+                          onClick={() => {
+                            if (!tipoId) return;
+                            const janela =
+                              typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
+                            if (janela) janela.opener = null;
+                            void abrirArquivo(tipoId, a.indice, janela);
+                          }}
                         >
                           <Icon name="eye" className="h-3 w-3" />
                           {a.rotulo}
