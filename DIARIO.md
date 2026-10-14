@@ -22062,3 +22062,51 @@ risco documentado: "preferir o acessado entre MÚLTIPLOS vivos" não é modeláv
 **§A.13 (sem preview pesado, OOM):** a validar em produção pós-deploy, copiando o link de um candidato
 JÁ acessado (ex. Brenda), confirmando que copia sem pop-up e sem revogar o link vigente. Clique final
 na tela com o diretor.
+
+---
+
+## 2026-10-14 — Auditoria: documento reprovado preso em AGUARDANDO_AUDITORIA mostra selo "Reprovado" [COMMIT 41e35a8, no ar]
+
+**Pedido (OST, remote-control):** no card da aba Auditoria, documento REPROVADO pela auditoria
+automática exibia o selo "Aguardando auditoria" mesmo com o motivo da recusa gravado logo abaixo. O
+time lia "aguardando" e não via a reprovação. Corrigir só o SELO, mantendo o motivo embaixo.
+
+**Causa (investigação §A.14/§A.27):** o selo é derivado do `estado` do documento (`pillDoc`,
+`AuditoriaDocsModal.tsx`). O caminho do Portal (`portal-credencial.service.ts`, ramo
+INCONFORME/PENDENTE) grava o motivo em `observacao` mas **NÃO rebaixa o estado**, que fica em
+`AGUARDANDO_AUDITORIA` (comportamento de sempre do Portal). Só o upload manual vira `INCONFORME`. Por
+isso reprovação do Portal aparecia como "Aguardando auditoria". Medido em produção: dos 71 docs em
+AGUARDANDO_AUDITORIA, **31 eram reprovações** presas, 36 aguardavam de verdade, 4 eram suspeita de
+autenticidade (contagem, sem PII).
+
+**Conserto:** régua pura nova `documentoReprovadoNaAuditoria` (`domain/documento-selo.ts`) decide, a
+partir de `estado` + `observacao` + `conferir_autenticidade`, quando um AGUARDANDO_AUDITORIA é de fato
+recusa. Separa dos três casos do mesmo estado que NÃO são recusa: coletado/não auditado, parada de
+sistema (`MOTIVO_FALHA_IA`) e suspeita de autenticidade (validado aguardando humano, §A.38). O motivo
+sempre acompanha o selo (sem `observacao`, não vira "Reprovado" — condição do diretor). O backend
+expõe a flag `reprovado` no detalhe (`esteira.service.ts`, com `conferir_autenticidade` somado ao
+select e carregado nos slots equivalentes); o `pillDoc` apenas LÊ a flag: selo vermelho "Reprovado"
+(tone `dg`) com o motivo em vermelho. "Aguardando auditoria" (azul) fica reservado a quem não foi
+auditado. Texto de coleta extraído para `OBSERVACAO_COLETADO_AGUARDANDO` (fonte única escritor+régua).
+
+**Escopo (§A.14):** NÃO mexi no selo "Inconforme" do upload manual (vocabulário usado também no modal
+do Gerenciador e na ajuda). Logo convivem "Reprovado" (preso do Portal) e "Inconforme" (manual), ambos
+vermelhos. Diretor aprovou subir assim; unificar tudo em "Reprovado" fica como follow-up disponível,
+não construído.
+
+**Gate:** typecheck backend+frontend 0; lint dos arquivos 0; spec nova `documento-selo.spec.ts` 8/8;
+suíte backend das áreas tocadas 3300 verdes. **§A.38:** `seguranca` NÃO acionado — não toca
+CPF/auth/RBAC/credencial; `observacao` é PII-free por construção e já trafegava à tela, só somei um
+booleano derivado. `tester` independente não acionado (frente pequena, régua pura 100% coberta).
+
+**§A.13:** preview pesado bloqueado por OOM (a OST liberou prova por print). Render fiel do card
+(componente `Pill` e tokens de tema reais), claro e escuro, mostrando os dois selos; validado pelo
+diretor. Flag também provada contra os dados reais de produção (31 presos separados dos 36 aguardando
+e 4 autenticidade) + unit tests.
+
+**Deploy:** recorte nominal de 6 arquivos (`domain/documento-selo.ts`+`.spec`, `domain/auditoria.ts`,
+`auditoria.service.ts`, `esteira.service.ts`, `AuditoriaDocsModal.tsx`), commit 41e35a8, push em
+origin/main (rebase limpo sobre 555a7cb; sem colisão com as sessões paralelas b3/b7/e9, todas
+coordenadas §A.49). `publicar-producao.sh`: produção servindo 41e35a8, health 3011=200/3010=200,
+backup `*.bak-20261014-215807`. Sem migration. Artefato servido confere `documento-selo.js` no dist;
+30 docs em produção passam a exibir "Reprovado" (eram 31; 1 mudou de estado no intervalo, churn normal).
