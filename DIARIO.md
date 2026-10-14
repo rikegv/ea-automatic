@@ -21509,3 +21509,50 @@ construída em sessões anteriores que caíram; retomada, rebaseada, provada e p
 - **Aviso herdado (registrado):** `portal-painel.so-link-vivo` ficou no escopo por ser consequência
   direta do `semLink` no resumo (a invariante "farol==TEM_LINK_VIVO, 4 consultas" virou "4 consultas COM
   link vivo", porque o recorte Sem Link é outro universo, FROM admissoes).
+
+---
+
+## 2026-10-14 — Portal: porta de e-mail diz "não identificado" (reversão do anti-enumeração, decisão do diretor)
+
+Terceira iteração do AJUSTE 2, agora interativa. Depois de validar a mensagem honesta, o diretor
+reparou que **abrir o campo do código** dá a sensação de que um código foi enviado mesmo quando o
+e-mail não existe. Ele pediu, e CONFIRMOU num AskUserQuestion com o trade-off de enumeração na mesa,
+que a tela mostre **"E-mail não identificado. Fale com o RH"** e **não abra o campo** nesse caso.
+
+**ISSO REVERTE UM CONTROLE DE SEGURANÇA AUDITADO** (o anti-enumeração: a resposta era única para todo
+e-mail; a tela avançava sempre; "proibido revelar se o e-mail existe"). O diretor decidiu aceitar o
+custo (a porta é pública; agora um atacante pode descobrir quais e-mails são candidatos) em favor da
+usabilidade. Decisão registrada no tipo, no serviço, no controller, na tela e nos testes para não ser
+revertida por engano (padrão §A.45). **Proposta: virar seção §A permanente**, se o diretor quiser.
+
+**Mudança (commit `514e6bc`, rebaseado sobre fae4c3b):** `SolicitacaoDeCodigoResposta` deixou de ser
+`{enviado:true,...}` e passou a `{identificado:boolean, expiraEmMinutos}`. No serviço, `identificado`
+nasce FALSE e vira TRUE num ÚNICO ponto, colado antes do `emitirEEnviarCodigo` (só quando resolve e
+despacha). Todos os outros caminhos (inexistente, formato inválido, teto hora/dia, ambíguo não
+resolvido, trava) devolvem FALSE, indistinguíveis entre si. A tela abre o campo do código só com
+`identificado:true`; senão mostra a mensagem + `BotaoFalarComRh` e fica no passo do e-mail. No
+REENVIO, um `false` NÃO vira "não identificado" (o e-mail já foi identificado; é teto/trava): fica no
+código com recado neutro. Recorte = 8 arquivos (shared-types, serviço, controller, 3 specs backend, 2
+frontend).
+
+**seguranca §A.38 = APROVADO:** só o bit `identificado` vaza (nada de PII, id, nome, farol); `false`
+conflui inexistente/teto/trava/ambíguo (conservador); nenhuma guarda caiu (503, teto, ambiguidade,
+trava, divergência CPF+nascimento, bilhete). 2 recs não-veto: (1) o bit reflete "resolveu e despachou",
+não "admissão viva" (texto já preciso); (2) e-mail real no teto aparece como "não identificado" (nota
+de produto).
+
+**tester INDEPENDENTE:** 2 gaps CRÍTICOS fechados: (C1) o estrutural não pegava a POSIÇÃO da escrita de
+`identificado=true` (um refactor que a subisse deixava TODO e-mail abrir o campo) → novo teste de
+posição; (C2) reenvio com `false` abria/mantinha o campo e dizia "não identificado" (mentira p/ teto) →
+corrigido + testado. Mais M3 (fuga de estado no "trocar e-mail") e M5 (comentários obsoletos).
+
+**Gate:** typecheck 0, lint 0; specs da porta backend 149 passed; frontend 21 passed, 1 red
+PRÉ-EXISTENTE não-meu (teste 3 "Confirme Seus Dados" vs "Criar Cadastro", falha igual no origin/main).
+
+**Deploy 2 alvos:** main app por `publicar-producao.sh` (serve `514e6bc`, backup `*.bak-20261014-024911`);
+Portal público `ea-portal-app` rebuild manual do `.next-prod` (ea-build/origin/main, backup
+`.next-prod.bak-20261014-025802`, restart, health 3021 200). **§A.13 em PRODUÇÃO no domínio real**
+(`clientesportalsoulan.com.br`, Playwright, e-mail sintético, sem PII): e-mail que não resolve mostra
+"E-mail não identificado. Confira o e-mail digitado ou fale com o RH", NÃO abre o campo do código, fica
+no passo do e-mail, oferece RH. Backend conferido: solicitar devolve `{identificado:false}` para e-mail
+sintético. Screenshot enviado ao diretor.
