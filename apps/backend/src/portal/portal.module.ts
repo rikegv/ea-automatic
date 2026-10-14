@@ -4,6 +4,10 @@ import { AdmissoesModule } from "../admissoes/admissoes.module";
 import { PortalAcessoEmailController } from "./portal-acesso-email.controller";
 import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
+import { PortalArquivadorService } from "./portal-arquivador.service";
+import { PortalArquivamentoService } from "./portal-arquivamento.service";
+import { PortalDocumentoVisualizacaoService } from "./portal-documento-visualizacao.service";
+import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { PortalController } from "./portal.controller";
 import { PortalCorreioService } from "./portal-correio.service";
 import { PortalCredencialService } from "./portal-credencial.service";
@@ -144,6 +148,18 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     // escopo `gmail.send` e a caixa delegada são destrave do diretor.
     PortalCorreioService,
     PortalCredencialService,
+    // ARQUIVADOR DO PORTAL (Desenho 1, frente Prontuário Drive). O cliente fala com a TERCEIRA
+    // instância magra do ai-service (`PORTAL_ARQUIVADOR_URL`/`TOKEN`), que copia o objeto do balde
+    // para o prontuário, cega. O orquestrador resolve a pasta do prontuário IGUAL à esteira, por
+    // isso reusa a `DrivePastaPaiService` (só lê a tabela `drive_pasta_pai`, não carrega credencial
+    // de Drive: providenciá-la aqui NÃO viola a ausência de `AiModule`, que existe para não trazer
+    // o Drive DELEGADO da operação para perto do caminho do arquivo). Nasce INERTE sem o binding.
+    PortalArquivadorService,
+    PortalArquivamentoService,
+    // VISUALIZAÇÃO do documento do Portal na Auditoria (acréscimo): a conta cega lê o balde para
+    // EXIBIR. Exportado para a `ReauditoriaModule`, que serve o arquivo na tela.
+    PortalDocumentoVisualizacaoService,
+    DrivePastaPaiService,
     // GRAVAÇÃO dos dados do GI validados pelo candidato (peça 2). Escreve `admissao_dados_gi` e o
     // rastro PII-free do aceite; é o único ponto de escrita dessa tabela pelo candidato.
     PortalDadosGiService,
@@ -200,6 +216,9 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     PortalEnvioService,
     PortalPendenciasService,
     PortalLinkRetryService,
+    // A `ReauditoriaModule` (que já importa este módulo) injeta a visualização para servir o
+    // documento do Portal na tela de Auditoria, lendo pela conta cega do Desenho 1.
+    PortalDocumentoVisualizacaoService,
   ],
 
 })

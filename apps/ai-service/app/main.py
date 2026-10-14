@@ -22,6 +22,7 @@ from app.routers import (
     planilha,
     planilha_viva,
     portal,
+    portal_arquivar,
     vt,
 )
 
@@ -41,6 +42,10 @@ app.include_router(planilha.router)
 app.include_router(planilha_viva.router)
 # Portal do Candidato: leitor em memória. INERTE sem PORTAL_BUCKET (responde 503).
 app.include_router(portal.router)
+# Arquivador do Portal (Desenho 1): copia o objeto do balde para o prontuário, cego. Só responde na
+# instância ARQUIVADOR (PORTAL_PAPEL=ARQUIVADOR); recusa 403 na operação e no leitor. INERTE sem o
+# papel e sem PORTAL_BUCKET.
+app.include_router(portal_arquivar.router)
 app.include_router(vt.router)
 
 

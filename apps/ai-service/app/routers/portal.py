@@ -43,6 +43,7 @@ from starlette.status import (
 
 from app import gemini, portal_bucket, portal_extracao
 from app.auth import require_internal_token
+from app.portal_papel import recusar_se_arquivador
 from app.config import get_settings
 from app.portal_fluxo import OrcamentoEstourado
 from app.portal_processo import (
@@ -74,7 +75,11 @@ _MOTIVO_TEMPO = (
 
 @router.post("/ler", response_model=PortalLerResponse, response_model_by_alias=True)
 def portal_ler(
-    req: PortalLerRequest, _: None = Depends(require_internal_token)
+    req: PortalLerRequest,
+    _: None = Depends(require_internal_token),
+    # GUARDA V3 (condição 3 do Desenho 1): o processo que tem a chave de escrita do prontuário (o
+    # ARQUIVADOR) NÃO lê documento. Inerte nas instâncias de operação/leitor (não são arquivador).
+    __: None = Depends(recusar_se_arquivador),
 ) -> PortalLerResponse:
     settings = get_settings()
 

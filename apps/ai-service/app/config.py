@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     # variável daqui é obrigatória no boot, porque o mesmo código sobe numa SEGUNDA INSTÂNCIA de
     # ambiente magro (sem DATABASE_URL e sem DRIVE_*), e faltar configuração não pode derrubar.
     portal_bucket: str = ""
+    # ── PAPEL DA INSTÂNCIA DO PORTAL (Desenho 1, o ARQUIVADOR) ────────────────────────────────
+    # A separação de capacidade por instância, forçada em CÓDIGO e não só por deploy (condição 3 do
+    # Desenho 1 do Prontuário Drive, a "guarda V3"). Valores:
+    #   ""           → instância da OPERAÇÃO/LEITOR: pode servir /portal/ler, NUNCA /portal/arquivar.
+    #   "ARQUIVADOR" → instância do ARQUIVADOR (tem escrita no Drive): pode servir /portal/arquivar,
+    #                  e é RECUSADA no /portal/ler, porque quem segura a chave do prontuário não pode
+    #                  ser o processo que abre arquivo hostil (VS3 / §A.6). Sem parser, sem Vertex.
+    # Nasce vazio: a rota /portal/arquivar fica inerte (403) até o ambiente magro do arquivador
+    # declarar PORTAL_PAPEL=ARQUIVADOR, do mesmo jeito que PORTAL_BUCKET mantém o leitor inerte.
+    portal_papel: str = ""
     # Teto por arquivo, decisão do diretor: 10 MB. Cortado ANTES de carregar (pelo metadado do
     # objeto) e de novo DURANTE a leitura (orçamento de bytes), porque metadado é declaração.
     portal_bytes_max: int = 10 * 1024 * 1024
@@ -66,6 +76,15 @@ class Settings(BaseSettings):
     @property
     def is_producao(self) -> bool:
         return self.app_env.strip().lower() in _PROD_ENVS
+
+    @property
+    def is_arquivador(self) -> bool:
+        """A instância declarou o papel de ARQUIVADOR (tem escrita no Drive do prontuário)?
+
+        É a única coisa que liga a rota /portal/arquivar e, simetricamente, a única que recusa a
+        rota /portal/ler: quem copia bytes para o prontuário não interpreta documento hostil.
+        """
+        return self.portal_papel.strip().upper() == "ARQUIVADOR"
 
     @model_validator(mode="after")
     def _proibir_mock_em_producao(self) -> "Settings":

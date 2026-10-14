@@ -1,6 +1,14 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { Readable } from "node:stream";
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from "@nestjs/common";
 import { and, eq } from "drizzle-orm";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -19,6 +27,7 @@ import {
 } from "../auditoria/auditoria.service";
 import { podeReabrirDocumento } from "../domain/reabertura-documento";
 import { PortalPendenciasService } from "../portal/portal-pendencias.service";
+import { PortalDocumentoVisualizacaoService } from "../portal/portal-documento-visualizacao.service";
 import { StagingService } from "../staging/staging.service";
 import {
   mimeDeVisualizacao,
@@ -62,7 +71,23 @@ export class DocumentoArquivoService {
     private readonly staging: StagingService,
     private readonly auditoria: AuditoriaService,
     private readonly portalPendencias: PortalPendenciasService,
+    // VISUALIZAÇÃO do documento do Portal (acréscimo à frente Prontuário Drive). Fallback INERTE:
+    // só entra quando a staging não tem o arquivo E a conta cega está ligada (binding do diretor).
+    // `@Optional()` pelo mesmo motivo do gatilho LIVE: em produção o Nest injeta (provider exportado
+    // do PortalModule), mas os specs validados que constroem este serviço à mão (4 args) não podem
+    // ser obrigados a mudar por uma dependência nova (§A.14/§A.26). Sem ela, o `?.` cai no fallback
+    // desligado, que é o comportamento de hoje.
+    @Optional() private readonly portalDocs?: PortalDocumentoVisualizacaoService,
   ) {}
+
+  /** Extensão para o nome exibido de um documento do Portal (mime da credencial é a autoridade). */
+  private extensaoDoMime(mime: string): string {
+    const m = (mime || "").toLowerCase();
+    if (m.includes("pdf")) return ".pdf";
+    if (m.includes("png")) return ".png";
+    if (m.includes("jpeg") || m.includes("jpg")) return ".jpg";
+    return "";
+  }
 
   /** Tipo de documento pelo id, ou 404. */
   private async carregarTipo(tipoDocumentoId: string) {
@@ -116,6 +141,23 @@ export class DocumentoArquivoService {
       });
     }
 
+    // FALLBACK PORTAL (acréscimo Prontuário Drive): a staging não alimenta o documento entregue pelo
+    // Portal (ele vive no balde). Quando não há nada na staging, a conta cega do Desenho 1 lista os
+    // objetos confirmados do balde para a mesma tela abrir. INERTE sem o binding: `disponivel()` é
+    // false, a lista volta vazia e o comportamento é o de sempre (indisponível).
+    if (visualizaveis.length === 0 && this.portalDocs?.disponivel()) {
+      const doPortal = await this.portalDocs!.listar(admissaoId, tipoDocumentoId);
+      const arquivosPortal: ArquivoVisualizavel[] = doPortal.map((d, i) => ({
+        indice: i,
+        rotulo: rotuloArquivo(tipo.nome, i, doPortal.length),
+        mime: d.mime,
+        tamanhoBytes: d.tamanhoBytes,
+      }));
+      if (arquivosPortal.length > 0) {
+        return { disponivel: true, arquivos: arquivosPortal };
+      }
+    }
+
     if (visualizaveis.length === 0) {
       return { disponivel: false, mensagem: MSG_INDISPONIVEL, arquivos: [] };
     }
@@ -131,7 +173,28 @@ export class DocumentoArquivoService {
     const tipo = await this.carregarTipo(tipoDocumentoId);
     const arquivos = await this.arquivosDoTipo(admissaoId, tipo.codigo);
     const alvo = arquivos[indice];
-    if (!alvo) throw new NotFoundException(MSG_INDISPONIVEL);
+    if (!alvo) {
+      // FALLBACK PORTAL: sem arquivo na staging, serve o objeto do balde pela conta cega, na MESMA
+      // ordem determinística que `listarArquivos` usou (o índice tem de casar). INERTE sem binding.
+      if (this.portalDocs?.disponivel()) {
+        const doPortal = await this.portalDocs!.listar(admissaoId, tipoDocumentoId);
+        const alvoPortal = doPortal[indice];
+        if (alvoPortal) {
+          const { bytes, contentType } = await this.portalDocs!.baixar(alvoPortal.objeto);
+          // §A.6: tipo e índice, NUNCA o nome do objeto nem o caminho.
+          this.logger.log(
+            `Visualização de documento do Portal: tipo=${tipo.codigo}, arquivo=${indice + 1}.`,
+          );
+          const mime = alvoPortal.mime || contentType;
+          return {
+            stream: Readable.from(bytes),
+            mime,
+            nomeExibicao: `${tipo.nome}${indice > 0 ? `-${indice + 1}` : ""}${this.extensaoDoMime(mime)}`,
+          };
+        }
+      }
+      throw new NotFoundException(MSG_INDISPONIVEL);
+    }
 
     const mime = mimeDeVisualizacao(alvo.caminho);
     if (!mime) throw new NotFoundException(MSG_INDISPONIVEL);

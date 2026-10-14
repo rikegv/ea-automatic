@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -66,6 +67,7 @@ import {
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
+import { PortalArquivamentoService } from "./portal-arquivamento.service";
 import { MOTIVO_POR_RECUSA, PortalLeitorService } from "./portal-leitor.service";
 import { admissaoOpaca } from "./portal-objeto";
 import { PortalTrilhaService } from "./portal-trilha.service";
@@ -119,6 +121,19 @@ export class PortalCredencialService {
      * concordam. Fonte única da régua (§A.19).
      */
     private readonly regua: ReguaCompletudeService,
+    /**
+     * GATILHO LIVE do arquivamento no prontuário (frente Prontuário Drive, Desenho 1). INERTE sem o
+     * binding de IAM do diretor: `talvezArquivarDoVeredito` só dispara quando ARMADO e best-effort
+     * (nunca lança no caminho quente). Ele é a ponte que faltava para o documento do Portal chegar
+     * ao Drive, e por isso entra exatamente onde o documento vira ENTREGUE.
+     *
+     * `@Optional()` DE PROPÓSITO, e não é afrouxamento: em produção o Nest sempre injeta (o provider
+     * está no módulo), mas os testes que constroem este serviço à mão (origem Portal, de outra
+     * sessão) não passam a dependência, e a dependência nova NÃO pode obrigar a tocar 17 specs de
+     * outra frente (§A.14/§A.49). Com `@Optional()`, a construção com 6 argumentos segue válida e o
+     * chamador guarda com `?.`.
+     */
+    @Optional() private readonly arquivamento?: PortalArquivamentoService,
   ) {}
 
   /**
@@ -1290,6 +1305,17 @@ export class PortalCredencialService {
                 ...marcaAutenticidade,
               })
               .where(guardaDoDocumento);
+            // ── A PONTE PARA O PRONTUÁRIO (frente Prontuário Drive, Desenho 1). ──
+            // Só quando o documento REALMENTE virou ENTREGUE (não-suspeito): aí o objeto do balde é
+            // copiado para o prontuário no Drive, pela instância ARQUIVADOR cega. Suspeito fica em
+            // AGUARDANDO_AUDITORIA e NÃO arquiva (espera a conferência humana). INERTE sem binding,
+            // e best-effort: `talvezArquivarDoVeredito` nunca lança no caminho do candidato.
+            if (destino.estado === "ENTREGUE") {
+              await this.arquivamento?.talvezArquivarDoVeredito(
+                credencial.admissaoId,
+                credencial.tipoDocumentoId,
+              );
+            }
           } else {
             // INCONFORME/PENDENTE: o estado NÃO muda (comportamento de sempre do Portal), só o motivo.
             await this.db

@@ -212,6 +212,53 @@ class ArquivamentoDrive(_CamelModel):
     motivo_falhas: list[str] = Field(default_factory=list)
 
 
+# ── Portal → Drive: o ARQUIVADOR (Desenho 1 do Prontuário Drive) ─────────────────────────────
+# A diferença para o `ArquivarRequest` da esteira é a ORIGEM do byte: lá o arquivo chega por
+# `stagingPath` (disco local da operação); aqui cada item aponta para um OBJETO no balde de entrada
+# do Portal, lido EM MEMÓRIA pela service account dedicada do arquivador. Nada toca disco. O destino
+# e a régua de pasta (âncora, dedup por md5, subpasta) são idênticos ao `/drive/arquivar`.
+class PortalObjetoIn(_CamelModel):
+    """Um objeto confirmado no balde de entrada, a copiar para o prontuário.
+
+    `objeto` é o nome OPACO que o backend escolheu ao assinar a credencial de escrita (sem PII). Ele
+    nunca é logado nem devolvido (§A.6). `nome_final` é o `{Tipo}_{Nome}` com que o arquivo é gravado
+    no Drive, igual à esteira; carrega o nome do candidato, a exceção já registrada do prontuário, e
+    nunca é logado.
+    """
+
+    objeto: str
+    nome_final: str
+    subpasta: DriveSubpasta = "DOCUMENTOS_PESSOAIS"
+
+
+class PortalArquivarRequest(_CamelModel):
+    """Pedido de arquivamento de objetos do Portal, de UMA admissão, vindo do BACKEND.
+
+    Resolve a pasta do prontuário UMA vez (âncora `pasta_id` quando a admissão já tem, senão busca
+    ou cria sob `parent_folder_id` pelo `pasta_nome`), e copia cada objeto do `bucket` para a
+    subpasta. O `bucket` é conferido contra a allowlist de um balde só, igual ao leitor: sem isso
+    quem tivesse o token interno transformaria o arquivador num copiador de qualquer balde.
+    """
+
+    bucket: str
+    parent_folder_id: str
+    pasta_nome: str
+    pasta_id: str | None = None
+    itens: list[PortalObjetoIn] = Field(default_factory=list)
+
+
+class PortalDocumentoRequest(_CamelModel):
+    """Pedido de LEITURA de um objeto do balde para VISUALIZAÇÃO humana na tela de Auditoria.
+
+    A mesma conta cega do Desenho 1 que lê o balde para arquivar lê aqui para EXIBIR: copia os bytes,
+    não interpreta. O que volta é o binário, que o backend repassa INLINE ao auditor autenticado. O
+    `objeto` é o nome OPACO (sem PII) e nunca é logado (§A.6).
+    """
+
+    bucket: str
+    objeto: str
+
+
 # ── Coleta de VT (§A.17): bucket do GCS onde o app externo (Firebase) grava os PDFs ──────────
 # A fonte deixou de ser uma pasta do Drive e passou a ser um bucket do GCS; o EA só LÊ o bucket.
 class ListarColetaVtRequest(_CamelModel):
