@@ -359,36 +359,51 @@ export class PortalAcessoEmailService {
       return resposta;
     }
 
+    /*
+     * ══ AJUSTE 1 (diretor Rike, 2026-10-13): E-MAIL COMPARTILHADO RESOLVE PELO REGISTRO VIVO ══════
+     *
+     * Quem pede o código pela porta de e-mail JÁ ESTÁ no Gerenciador e no admissional, então a
+     * identidade certa é a do registro com ADMISSÃO VIVA, não a de "qualquer um que carregue o
+     * e-mail". Antes, DOIS registros com o mesmo e-mail (a mesma pessoa duplicada no funil, só um
+     * ligado à admissão viva) travavam por ambiguidade e o código nunca saía. Casos reais medidos em
+     * produção: Claudia, Brenda, cada uma com 1 ficha viva (PROV) e 1 fantasma sem admissão.
+     *
+     * O CRITÉRIO É SEGURO, e é o do diretor: só resolve automaticamente quando houver EXATAMENTE UMA
+     * admissão viva entre os homônimos de e-mail. Zero vivas (ninguém no admissional) ou mais de uma
+     * (não escolhe no chute) CONTINUAM TRAVANDO, exatamente como antes. O registro fantasma NÃO é
+     * tocado: nada de inativar, apagar nem anonimizar. A régua de "admissão viva" é a MESMA de
+     * `admissaoVivaDoCandidato` (`FAROIS_FORA_DO_PAINEL`), reusada e não recopiada.
+     */
+    let candidatoId: string;
     if (candidatos.length > 1) {
       /*
-       * E-MAIL AMBÍGUO: TRAVA, E NEM CHEGA A EMITIR CÓDIGO (contrato, seção 5).
-       *
-       * Escolher um dos candidatos seria escolher a identidade de alguém, e a medição de produção
-       * mostra que isso não é hipótese: 5 dos 6 endereços compartilhados carregam DOIS NOMES. Todos
-       * os envolvidos são travados, porque todos estão em disputa, e é o time que desempata.
-       *
-       * ┌─ ELE SAIU DO CAMINHO DA REQUISIÇÃO, e o motivo é o MESMO do correio ─────────────────────┐
-       * │ O ramo fazia até `TRAVA_AMBIGUO_TETO` escritas SEQUENCIAIS antes de responder, e isso é   │
-       * │ mensurável no relógio: a diferença de tempo dizia "este endereço está na base E pertence  │
-       * │ a mais de uma pessoa", que é justamente o oráculo que a resposta única existe para fechar, │
-       * │ sobre os 6 endereços compartilhados medidos em produção. A resposta é a mesma constante,   │
-       * │ mas o CAMINHO não era, e canal de tempo é canal.                                          │
-       * │                                                                                          │
-       * │ E ELE NÃO INFLUENCIA A RESPOSTA, então não tem o que fazer no caminho dela: o desfecho já  │
-       * │ está calculado na primeira linha do método, trave ou não trave.                            │
-       * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+       * E-MAIL AMBÍGUO: desempata pela admissão viva (AJUSTE 1). O desempate é a ÚNICA leitura a mais;
+       * o ramo antigo continua igual na forma e no canal de tempo: a trava, quando acontece, segue no
+       * caminho solto (`void ... catch`), fora da resposta que já está calculada na primeira linha.
        */
-      const alvos = candidatos.slice(0, TRAVA_AMBIGUO_TETO).map((c) => c.id);
-      void this.travarAmbiguo(alvos, contexto).catch((erro) => {
-        // §A.6: só o nome da classe do erro, e a CONTAGEM. Nenhum id, nenhum endereço.
-        this.log.error(
-          `falha ao travar e-mail ambiguo (${alvos.length} candidato(s)): ${(erro as Error).name}`,
-        );
-      });
-      return resposta;
+      const idsCompartilhados = candidatos.slice(0, TRAVA_AMBIGUO_TETO).map((c) => c.id);
+      const vivos = await this.candidatosComAdmissaoViva(idsCompartilhados);
+      if (vivos.length !== 1) {
+        /*
+         * ZERO ou MAIS DE UMA admissão viva: TRAVA, e nem chega a emitir código (contrato, seção 5).
+         * Escolher entre dois vivos seria escolher a identidade de alguém, e a medição de produção
+         * mostra que o e-mail compartilhado por DUAS pessoas distintas existe: todos seguem em
+         * disputa, e é o time que desempata.
+         */
+        void this.travarAmbiguo(idsCompartilhados, contexto).catch((erro) => {
+          // §A.6: só o nome da classe do erro, e a CONTAGEM. Nenhum id, nenhum endereço.
+          this.log.error(
+            `falha ao travar e-mail ambiguo (${idsCompartilhados.length} candidato(s)): ${(erro as Error).name}`,
+          );
+        });
+        return resposta;
+      }
+      // Exatamente uma admissão viva: é a pessoa do admissional. Segue pelo MESMO caminho do caso de
+      // um só candidato (trava anterior + envio). O(s) registro(s) fantasma ficam intocados.
+      candidatoId = vivos[0];
+    } else {
+      candidatoId = candidatos[0].id;
     }
-
-    const candidatoId = candidatos[0].id;
 
     // TRAVADO RECUSA COM A MESMA FRASE NEUTRA, e nem gasta um e-mail: enquanto a disputa não é
     // resolvida pelo time, a porta não anda para aquela pessoa.
@@ -1273,6 +1288,33 @@ export class PortalAcessoEmailService {
       .orderBy(desc(admissoes.criadoEm))
       .limit(1);
     return linha?.admissaoId ?? null;
+  }
+
+  /**
+   * AJUSTE 1: dos candidatos que COMPARTILHAM um e-mail, QUAIS têm admissão VIVA no Gerenciador.
+   *
+   * Mesmo recorte de farol de `admissaoVivaDoCandidato` (`FAROIS_FORA_DO_PAINEL`, reusado e não
+   * recopiado: cópia diverge da original no primeiro ajuste), resolvido em UMA consulta. É o
+   * desempate da resolução por e-mail: UM só vivo resolve a porta para aquela pessoa; zero ou vários
+   * mantêm a trava de ambiguidade. O `Set` dedup o candidato que tem mais de uma admissão viva, para
+   * que ele conte como UMA pessoa viva, não como vários.
+   *
+   * §A.6: devolve só ids internos de candidato, nenhum dado pessoal, e não loga nada.
+   */
+  private async candidatosComAdmissaoViva(candidatoIds: string[]): Promise<string[]> {
+    if (candidatoIds.length === 0) return [];
+    const linhas = await this.db
+      .select({ candidatoId: asCandidaturas.candidatoId })
+      .from(asCandidaturas)
+      .innerJoin(admissoes, eq(admissoes.id, asCandidaturas.admissaoId))
+      .where(
+        and(
+          inArray(asCandidaturas.candidatoId, candidatoIds),
+          isNotNull(asCandidaturas.admissaoId),
+          notInArray(admissoes.farolGlobal, [...FAROIS_FORA_DO_PAINEL]),
+        ),
+      );
+    return [...new Set(linhas.map((l) => l.candidatoId))];
   }
 
   /**
