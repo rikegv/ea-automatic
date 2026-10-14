@@ -1,0 +1,78 @@
+[Unit]
+# Arquivador do Portal do Candidato: TERCEIRA instancia do ai-service, dedicada a LER o balde de
+# entrada e, cega, entregar os bytes (visualizacao na Auditoria) e copia-los ao prontuario (parte d,
+# fora desta frente). Nao substitui e nao encosta na `ea-ai-service` (operacao, 8000) nem no leitor
+# (8020/8026). Separacao de papel travada em codigo (app/portal_papel.py, guarda V3).
+#
+# ESTA E A UNIDADE PROVISORIA, do gerenciador de usuario, espelho do leitor provisorio. Aplica SO o
+# que foi MEDIDO como efetivo aqui (memoria, CPU, processos, ambiente magro). O isolamento de sistema
+# de arquivos e de rede NAO cabe em unidade de usuario nesta maquina (medido no leitor: diretrizes de
+# namespace sao aceitas e ignoradas em silencio). A unidade definitiva, de sistema e com usuario
+# proprio, esta em ea-portal-arquivador.system.service.
+#
+# PORTA 8027: 8030/8031 sao do emissor do Portal, 8026 e o leitor de producao, 8020 o leitor
+# provisorio, 8000/8001 a operacao/homolog. 8027 estava livre (conferido 2026-10-14).
+Description=Portal do Candidato - arquivador cego (provisorio, gerenciador de usuario, 127.0.0.1:8027)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+
+# CWD FORA DO REPOSITORIO: e assim que o ambiente fica magro. O pydantic-settings le o `.env` do
+# diretorio de trabalho, entao esta instancia le /home/henrique/apps/ea-portal-arquivador/.env
+# (PORTAL_PAPEL=ARQUIVADOR, PORTAL_BUCKET, credencial propria absoluta, sem banco, sem delegacao) e
+# NUNCA o .env do ai-service.
+WorkingDirectory=/home/henrique/apps/ea-portal-arquivador
+
+# O codigo e o mesmo, importado por caminho do repositorio servido (origin/main, apos a frente subir).
+# Nada e escrito no repositorio.
+Environment=PYTHONPATH=/home/henrique/apps/ea-automatic/apps/ai-service
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TMPDIR=/home/henrique/apps/ea-portal-arquivador/tmp
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/henrique/apps/ea-automatic/apps/ai-service/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8027
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# ---- Limites: um arquivo hostil derruba no maximo o arquivador ----
+MemoryHigh=512M
+MemoryMax=768M
+MemorySwapMax=0
+CPUQuota=150%
+TasksMax=64
+LimitNOFILE=1024
+# SEM LimitNPROC nesta unidade (teto de processos e por USUARIO do sistema; aqui o usuario e o do
+# diretor, que ja tem dezenas de processos). Quem segura a multiplicacao e o TasksMax (por servico,
+# medido efetivo no leitor). O teto de processos existe na unidade de sistema.
+LimitCORE=0
+OOMPolicy=stop
+
+# ---- Endurecimento que funciona em unidade de usuario (medido no leitor) ----
+NoNewPrivileges=yes
+UMask=0077
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectHostname=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @debug @swap
+
+# NAO declarar aqui: ProtectSystem, ProtectHome, PrivateTmp, ReadOnlyPaths, InaccessiblePaths,
+# IPAddressDeny, PrivateDevices, CapabilityBoundingSet. Aceitas e ignoradas em silencio no
+# gerenciador de usuario, dariam falsa sensacao de isolamento; as ultimas nem deixam a unidade subir
+# (codigo 218). Todas estao na unidade de sistema, que e onde de fato valem.
+
+[Install]
+WantedBy=default.target
