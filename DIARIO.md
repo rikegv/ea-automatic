@@ -22283,3 +22283,41 @@ infra (follow-up):** `publicar-producao.sh` não poda backups > 48h (acumulou 15
 derrubaram o 1º deploy por ENOSPC; podados, 22G livres). Portal público (`apps/portal-app`) está FORA do
 `publicar-producao` e fora do pnpm-workspace (node_modules hand-bootstrapped) — candidato a entrar no
 mecanismo padrão.
+
+## 2026-10-15 — G.I DIAGNÓSTICO (só leitura): o false-send NÃO chega à tela de Cadastro; quem chega é PANDAPÉ
+
+**Rike apontou FALSO SUCESSO:** a fábrica reportou "promovido ao Cadastro" mas na tela REAL de Cadastro
+de Funcionários do G.I os candidatos nossos NÃO aparecem. "Saiu da fila GetAll" nunca foi prova.
+Investiguei só leitura. Dois achados duros:
+- **(A) A credencial da fábrica NÃO lê a tela de Cadastro.** Sondagem ao vivo: `GET /Funcionario/GetAll`
+  = **403**, `/Funcionario/Get` = 403, `/ApiFicha/GetAll` = 403 (POST 405, GetAllPaged 404). Só
+  `/FuncionarioSelecao/GetAll` (a pré-admissão/seleção) devolve 200. `GiApiService` só escreve em
+  `/FuncionarioSelecao/Add`. Ou seja: só enxergamos e escrevemos a SELEÇÃO, nunca o FUNCIONÁRIO. Logo
+  qualquer "promovido/confirmado" da nossa parte é INFERÊNCIA, não prova (a §A.48 assumiu promoção sem
+  nunca conseguir ler a tela, 403).
+- **(B) Os 13 nomes que o Rike VÊ na tela são TODOS PANDAPÉ.** Cruzei Alessandra/Amanda/Flávio/Gilson/
+  Gleice/Leonardo/Raquel/Ryan/Sarah/Sonia/Tais/Vinicius/Zelda: cada nome distintivo casa com uma
+  admissão `origem=PANDAPE`, `ADMISSAO_CONCLUIDA`, `enviadoEA=false`, FORA do nosso `FuncionarioSelecao`.
+  Eles chegaram ao Cadastro pela INTEGRAÇÃO NATIVA do Pandapé (§A.5, Pandapé envia ao G.I por fora do
+  EA), NUNCA pelo nosso `FuncionarioSelecao/Add`. ZERO dos nossos false-sends (Kauã, Edson, Fabricio,
+  Lays, Valéria, Jonas, Karine, Naara, Carlos, Pedro) aparece entre eles.
+
+**CONCLUSÃO:** `FuncionarioSelecao/Add` + `apiSinc=false` (nosso único canal de escrita) NÃO é caminho
+provado até a tela de Cadastro de Funcionários. A SELEÇÃO e o FUNCIONÁRIO são áreas distintas no G.I; a
+promoção Seleção -> Funcionário é um passo do LADO do G.I (import pela equipe) ou uma permissão que
+nossa credencial NÃO tem (403), não algo que o `false` faça sozinho pela nossa API. O que popula o
+Cadastro hoje é o Pandapé, por outro canal.
+
+**ORIGEM (critério PASSO 1):** `admissoes.origem` só tem dois valores (`MANUAL`, `PANDAPE`). PLATAFORMA
+(A&S + Portal + wizard F6) = `MANUAL`; PANDAPÉ = `PANDAPE`. Fila "pra cadastrar" (vivo + auditoria
+concluída + não cadastrado) = 28: **9 MANUAL** (Jonas `72f57c73`, Karine `2ef1ac05`, Naara `0f1963ca`,
+Valéria `ddd57fd5`, Carlos Eduardo `bf314abf`, Pedro Isaac `c0ed251c`, Kauã `7f45b8d1`, Lays
+`2bc2735b` enviados com false; Samuel `12d971ef` barrado por `GI_SALARIO_INVALIDO`=salário zero) +
+**19 PANDAPÉ** (fora do nosso escopo, §A.5/§A.47).
+
+**NÃO MEXI EM CÓDIGO.** Não removi a guarda `GI_SALARIO_INVALIDO` (salário zero/ausente): manda R$0 pra
+folha e contraria a instrução da rodada 1 ("salário inválido = legítimo, não forçar"); a unidade nula
+JÁ não trava (regra 14/10). E, acima de tudo, mandar mais false-send por um canal não provado seria
+repetir o falso-sucesso. Entreguei lista nominal dos 8 MANUAL já enviados com false para o Rike bater
+na tela dele, declarando que NÃO consigo confirmar (403). Próximo passo real depende do G.I: como a
+Seleção vira Funcionário (import da equipe? endpoint/permissão que não temos?). Decisão/insumo do Rike.
