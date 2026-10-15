@@ -29,7 +29,7 @@ import { EnviarParaGiService } from "./enviar-para-gi.service";
  * │ fechamento da auditoria: a trava de ORIGEM (só `MANUAL`), a operabilidade (`admissaoOperavel`),  │
  * │ o encerramento, as guardas duras (empresa/filial, salário, unidade, cliente) e a IDEMPOTÊNCIA    │
  * │ (`jaEnviado`) são as de lá, sem uma segunda cópia que divergisse no primeiro ajuste. apiSinc é   │
- * │ `true` fixo (§A.48): o registro PERSISTE e o sincronizador do G.I o promove à tela de Cadastro.  │
+ * │ `false` fixo (§A.48): o registro SAI da pré-seleção e o sincronizador do G.I o promove ao Cadastro.│
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ IDEMPOTENTE, NÃO DUPLICA, NÃO REABRE NADA VALIDADO ──────────────────────────────────────────┐

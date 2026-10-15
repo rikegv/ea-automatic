@@ -1409,45 +1409,43 @@ dois lados é frente própria, a decidir pelo diretor.
 *(Decisão do diretor, 02/10/2026, após a varredura duplicar 259 pré-admissões em produção. O
 coordenador mediu, o diretor deu a regra.)*
 
-## A.48: A ADMISSÃO VAI AO GI COM apiSinc = TRUE (persiste e o sincronizador promove ao Cadastro)
+## A.48: A ADMISSÃO VAI AO GI COM apiSinc = FALSE (sai da pré-seleção e o sincronizador promove ao Cadastro)
 
-**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = TRUE`, FIXO no código**, nos TRÊS
-caminhos (botão manual, gatilho automático, reconciliação). O valor NÃO vem de ambiente
-(`GI_API_SINC_ADMISSAO_DIGITAL` é ignorado). Travado por teste (`gi-apisinc-sempre-true.tester.spec.ts`).
+**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = FALSE`, FIXO no código**, nos TRÊS
+caminhos (botão manual, gatilho automático, reconciliação). O valor NÃO vem de ambiente. Travado por
+teste (`gi-apisinc-sempre-false.tester.spec.ts`). **NUNCA reinverter para `true`.**
 
-**O FUNDAMENTO, com PROVA NA TELA do diretor (Edson e Fabricio, validados em 14/10/2026):**
-- **`true` "Sincroniza com Admissão Digital"**: o registro **PERSISTE** na pré-admissão
-  (`FuncionarioSelecao`) e um **SINCRONIZADOR do lado do G.I** o **PROMOVE para a tela de Cadastro de
-  Funcionários**, onde o time trabalha. Edson e Fabricio foram enviados com `true`, persistiram, e o
-  diretor os VIU e validou na tela de Cadastro. É o valor que FUNCIONA.
-- **`false` "Sincroniza com GI"**: o registro é **CONSUMIDO** e **SOME** da `FuncionarioSelecao/GetAll`
-  em menos de 10 min, **sem chegar à tela de Cadastro**. Sair da fila com `false` NÃO é promoção, é
-  sumiço: o diretor não acha esses registros em lugar nenhum da tela dele.
+**O FUNDAMENTO, CONFIRMADO NA TELA DE CADASTRO pelo diretor (15/10/2026), com TRÊS nomes:**
+- **`false`**: o registro **SAI da pré-seleção** (`FuncionarioSelecao`) e o **SINCRONIZADOR do lado do
+  G.I o PROMOVE para a tela de Cadastro de Funcionários**, onde o time trabalha. O diretor VIU na tela
+  **Edmara, Kauã e Samuel** aparecerem (com cliente) depois de enviados com `false`. É o que FUNCIONA.
+- **`true`**: o registro fica **PRESO na pré-seleção** (`FuncionarioSelecao/GetAll`, status 2) e **NUNCA
+  é promovido**. Kauã (entrada `true` idReg40) ficou preso lá **desde 14/10 sem subir**; Edson e
+  Fabricio (também `true`) idem, e por isso NÃO estão na tela de Cadastro.
 
-**A PROMOÇÃO pré-admissão -> Cadastro é DO LADO DO G.I, não nossa.** Nós escrevemos só na pré-seleção
-(`FuncionarioSelecao/Add`); o sincronizador do G.I faz o resto, num CICLO (o diretor observou algo da
-ordem de ~20 min). **Por isso a nossa credencial leva `403` em `Funcionario/*` (a tela de Cadastro), e
-isso é ESPERADO, NÃO é bloqueio do caminho.** A confirmação final de que um registro chegou é SEMPRE o
-diretor abrindo a tela de Cadastro (a fábrica não consegue ler essa tela: só a pré-seleção, `GetAll`).
+**A PROMOÇÃO pré-seleção -> Cadastro é DO LADO DO G.I.** Nós escrevemos só na pré-seleção
+(`FuncionarioSelecao/Add`); o sincronizador do G.I faz o resto, num CICLO (ordem de ~20 min). **Por isso
+a credencial leva `403` em `Funcionario/*` (a tela de Cadastro), ESPERADO, NÃO é bloqueio.** A
+confirmação final de que um registro chegou é SEMPRE o diretor abrindo a tela de Cadastro (a fábrica só
+lê a pré-seleção, `GetAll`; não lê a tela de Cadastro).
 
-**LGPD: o veto de retenção foi LIBERADO pelo diretor (15/10/2026), risco assumido por ele.** O `true`
-retém dados no fornecedor, e o `seguranca` havia vetado o `true` permanente por isso (§A.6). O diretor
-liberou: todo o sistema já é pautado em LGPD, o G.I administra essas fontes e a plataforma também. O
-veto deixou de ser bloqueio; o `true` é a regra.
+**O VAI-E-VOLTA QUE ISTO ENCERRA, para NENHUMA sessão futura repetir.** O valor correto foi confundido
+várias vezes porque a fábrica NÃO consegue ler a tela de Cadastro (403) e inferia pelo `GetAll`:
+- "saiu do `GetAll`" foi lido ora como "promovido" ora como "sumiu", e "persiste no `GetAll`" (que é o
+  que o `true` faz) foi confundido com "aparece na tela de Cadastro". **São coisas diferentes:** o
+  `GetAll` é a pré-seleção; a tela de Cadastro é o destino, e só o diretor a vê.
+- O que Edson/Fabrício "apareceram" em 14/10 era a LISTA DE PRÉ-SELEÇÃO (persiste com `true`), não a
+  tela de Cadastro. Na tela de Cadastro eles NÃO estão (seguem presos com `true`).
+- **A prova que fechou:** enviados com `false`, Edmara/Kauã/Samuel APARECERAM na tela de Cadastro; os
+  mesmos candidatos com `true` ficavam presos na pré-seleção e não apareciam. **Só a tela do diretor
+  decide, e ela disse `false`.**
 
-**O ERRO QUE ISTO CORRIGE, para NENHUMA sessão futura repetir.** Entre 02 e 06/10 houve a leitura de
-que `false` promovia ao Cadastro e `true` prendia num "limbo"; em 15/10 de manhã a fábrica chegou a FIXAR
-`false` no código com essa premissa (commit `c3e1d5a`) e reportou "promovido ao Cadastro" porque o
-registro "saía da fila". **Era FALSO SUCESSO: "saiu da fila" com `false` é sumiço, não promoção.** O
-diretor apontou que os `false`-sends NÃO aparecem na tela, enquanto Edson/Fabricio (enviados com `true`)
-aparecem. A prova controlada fechou: os MESMOS dois têm a entrada `true` que PERSISTE (visível) e a
-entrada `false` (reenvio de teste) que SUMIU. **`true` é o certo. NUNCA reinverter para `false`.**
+**SUCESSO = o candidato APARECE na tela de Cadastro de Funcionários** (após o ciclo do sincronizador),
+confirmado pelo diretor na tela. "Saiu da fila", "persiste na fila" ou "promovido em tese" NÃO é prova.
 
-**SUCESSO = o candidato APARECE na tela de Cadastro de Funcionários** (depois do ciclo do
-sincronizador), confirmado pelo diretor na tela. "Saiu da fila" ou "promovido em tese" NÃO é prova.
-
-*(Decisão do diretor: `false` em 06/10 (premissa que se mostrou errada), CORRIGIDO para `true` em
-15/10/2026 com prova na tela (Edson/Fabricio) e veto de retenção LGPD liberado. Detalhe no DIARIO.)*
+*(Decisão do diretor: `false` desde 06/10; uma reversão para `true` em 15/10 (premissa Edson/Fabrício)
+foi DESFEITA no mesmo dia quando a tela de Cadastro provou que `false` é o que promove, com Edmara,
+Kauã e Samuel aparecendo. Detalhe no DIARIO. FIM do vai-e-volta: a autoridade é a tela do diretor.)*
 
 ## A.49: PRODUCAO SOBE DO origin/main POR WORKTREE LIMPO, NUNCA DO TREE DE SESSAO (regra permanente)
 

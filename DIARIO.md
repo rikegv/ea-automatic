@@ -76,15 +76,15 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
   autenticação por token estático (o painel monta o `Authorization: Bearer`). **Confirmado ao vivo:**
   duas admissões reais chegaram e caíram na Liberação Admissional. O corte temporal do go-live está
   feito e o sistema recebe fluxo vivo. **Não re-litigar** (entrada de 21/07).
-- **G.I: `apiSinc=TRUE` é o CORRETO (DEFINITIVO, 15/10/2026, com PROVA NA TELA).** `true` PERSISTE na
-  pré-admissão (`FuncionarioSelecao`) e o SINCRONIZADOR do G.I promove à tela de **Cadastro de
-  Funcionários**; foi assim que Edson e Fabricio apareceram e o diretor VALIDOU na tela. `false` CONSOME
-  e o registro SOME sem chegar ao Cadastro (foi o FALSO SUCESSO: "saiu da fila" lido como promoção, era
-  sumiço). A promoção é do LADO do G.I, por isso `403` em `Funcionario/*` é ESPERADO, não bloqueio.
-  Valor `true` FIXO no código, nos três caminhos (botão, automático, reconciliação). Veto de retenção
-  LGPD LIBERADO pelo diretor (risco dele). **Sucesso = aparecer na tela de Cadastro (o diretor confirma),
-  NÃO "saiu da fila".** CORRIGE a leitura anterior ("false=correto", 06/10 a 15/10 de manhã): estava
-  invertida. **Não re-litigar, NUNCA reinverter para false.**
+- **G.I: `apiSinc=FALSE` é o CORRETO (DEFINITIVO, 15/10/2026, CONFIRMADO NA TELA DE CADASTRO).** Com
+  `false` o registro SAI da pré-seleção e o SINCRONIZADOR do G.I o PROMOVE à tela de **Cadastro de
+  Funcionários**: o diretor VIU na tela **Edmara, Kauã e Samuel** aparecerem (com cliente) após envio
+  com `false`. Com `true` o registro fica PRESO na pré-seleção (status 2) e NUNCA sobe (Kauã idReg40
+  preso desde 14/10; Edson/Fabrício idem, não estão na tela). A promoção é do LADO do G.I, por isso
+  `403` em `Funcionario/*` é ESPERADO. **Sucesso = APARECER na tela de Cadastro (o diretor confirma),
+  nunca "saiu/persiste na fila".** O vai-e-volta (false 06/10 -> true de manhã 15/10 -> false de tarde)
+  acabou: a autoridade é a tela do diretor, e ela disse FALSE. Valor FIXO nos três caminhos. **Não
+  re-litigar, NUNCA reinverter para true.**
 
 ---
 
@@ -22450,3 +22450,30 @@ dentro de `aplicarPosVeredito` se o scheduler um dia dirigir admissões que prec
 têm `drive_pasta_url` não-nulo, nem disparam); (b) o runner de backfill via tsx falhou no bootstrap do
 Nest a partir do worktree de sessão (pegadinha §A.49, DI finicky) — o scheduler deployado fez o backfill
 sozinho na 1ª passada, então não precisou; se precisar rodar à mão, rodar do artefato/tree servido.
+
+---
+
+## 2026-10-15 (tarde 2) — G.I: TRUE DESFEITO, FALSE CONFIRMADO NA TELA (fim do vai-e-volta)
+
+**A reversão para `true` (commits af1cc6c/95c219c, de ~16:24) ESTAVA ERRADA e foi desfeita.** O diretor
+abriu a tela REAL de Cadastro de Funcionários (que a fábrica não lê, 403) e mostrou: os meus reenvios
+com `true` NÃO apareciam; só a Edmara (enviada com `false` às 15:44) estava lá, com cliente. Investiguei:
+`true` deixa o registro PRESO na pré-seleção (status 2, Kauã idReg40 preso desde 14/10, Edson/Fabrício
+idem); quem CHEGA à tela é o que SAI da pré-seleção, e isso é o `false`. O "Edson/Fabrício apareceram
+14/10" era a lista de pré-seleção, não a tela de Cadastro (confusão de nomes, agravada pelo 403).
+
+**PROVA NA TELA DO DIRETOR:** reenviei os presos com `false` e o diretor VIU **Kauã** (GARRETT MOTION) e
+**Samuel** (SOULAN, Contrato CLT) APARECEREM na tela de Cadastro, com cliente. Confirmado pelos olhos
+dele, não por inferência. `false` é o CORRETO (a leitura original da §A.48 de 06/10).
+
+**TRAZER TODOS:** varri todo o Grupo Plataforma pra cadastrar (MANUAL + vivo + auditoria concluída + não
+cadastrado) = 18 candidatos, reenviei com `false`: 17 OK (idReg 92-108), 1 recusado legítimo (Fernanda
+Nascimento Kerkhoff `3a98888b`, `GI_SEM_EMPRESA_FILIAL`, falta vínculo empresa/filial). Devem aparecer
+na tela após o ciclo do sincronizador.
+
+**CÓDIGO (permanente, revertido para `false`):** `enviar-para-gi.service.ts` monta com
+`apiSincAdmissaoDigital: false`; comentários e scheduler corrigidos; §A.48 reescrita para `false` (com
+os 3 nomes da tela). A guarda de salário (nulo/zero passa, só negativo recusa) PERMANECE (correta,
+Samuel apareceu com ela). specs `gi-apisinc-sempre-true` -> `gi-apisinc-sempre-false`. LIÇÃO: apiSinc é
+comportamento do G.I que a fábrica NÃO consegue medir (403); a autoridade é a tela do diretor. Recomendo
+tornar o valor configurável por env no futuro, para nunca mais precisar de commit para ajustar.

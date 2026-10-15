@@ -666,10 +666,10 @@ describe("EnviarParaGiService: admissao ENCERRADA nao sai por caminho nenhum", (
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// O `apiSincAdmissaoDigital` (item 3): SEMPRE `true`, FIXO, nos DOIS gatilhos (§A.48 reescrita 15/10)
+// O `apiSincAdmissaoDigital` (item 3): SEMPRE `false`, FIXO, nos DOIS gatilhos (§A.48, decisao 15/10)
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE true, manual e automatico", () => {
+describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE false, manual e automatico", () => {
   const ARMADO = { GI_DISPARO_ARMADO: "true" };
 
   // O AUTOMATICO (fechamento da auditoria). Passa pela trava de origem (o fixture atende com origem
@@ -689,32 +689,33 @@ describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE true, manual e au
     return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
   }
 
-  // ⚠️ A DECISAO PERMANENTE (diretor, 15/10/2026, PROVA NA TELA): apiSinc=`true` PERSISTE o registro na
-  // pre-admissao e o SINCRONIZADOR do G.I o PROMOVE para a tela de Cadastro de Funcionarios (validado com
-  // Edson e Fabricio); `false` CONSOME o registro e ele SOME sem chegar ao Cadastro (foi o falso sucesso).
-  // Nao ha mais leitura de ambiente: estes testes provam que mesmo com `GI_API_SINC_ADMISSAO_DIGITAL=false`
-  // no `.env` o envio sai `true` (o knob esta morto), que e a trava contra REINVERTER o valor por `.env`.
-  it("AUTOMATICO sem a variavel: o campo SAI e vale true", async () => {
-    expect((await payloadAutomatico({})).apiSincAdmissaoDigital).toBe(true);
+  // ⚠️ A DECISAO FINAL (diretor, 15/10/2026, PROVA NA TELA DE CADASTRO): apiSinc=`false` faz o registro
+  // SAIR da pre-selecao e o SINCRONIZADOR do G.I o PROMOVE para a tela de Cadastro de Funcionarios
+  // (validado com Edmara, Kaua e Samuel); `true` PRENDE o registro na pre-selecao (status 2) e ele NUNCA
+  // e promovido ao Cadastro (foi o que segurou Kaua/Edson/Fabricio). Nao ha mais leitura de ambiente:
+  // estes testes provam que mesmo com `GI_API_SINC_ADMISSAO_DIGITAL=true` no `.env` o envio sai `false`
+  // (o knob esta morto), que e a trava contra REINVERTER o valor por `.env`.
+  it("AUTOMATICO sem a variavel: o campo SAI e vale false", async () => {
+    expect((await payloadAutomatico({})).apiSincAdmissaoDigital).toBe(false);
   });
 
-  it("MANUAL sem a variavel: o campo SAI e vale true", async () => {
-    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(true);
+  it("MANUAL sem a variavel: o campo SAI e vale false", async () => {
+    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(false);
   });
 
   it.each([["true"], [" TRUE "], ["True"], ["1"], ["sim"], ["false"], [""]])(
-    "AUTOMATICO ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai true",
+    "AUTOMATICO ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai false",
     async (valor) => {
       const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
-      expect(payload.apiSincAdmissaoDigital).toBe(true);
+      expect(payload.apiSincAdmissaoDigital).toBe(false);
     },
   );
 
   it.each([["true"], [" TRUE "], ["1"], ["false"]])(
-    "MANUAL ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai true",
+    "MANUAL ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai false",
     async (valor) => {
       const payload = await payloadManual({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
-      expect(payload.apiSincAdmissaoDigital).toBe(true);
+      expect(payload.apiSincAdmissaoDigital).toBe(false);
     },
   );
 

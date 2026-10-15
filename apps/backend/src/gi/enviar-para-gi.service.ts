@@ -228,18 +228,17 @@ export class EnviarParaGiService {
   }
 
   /**
-   * `apiSincAdmissaoDigital` do payload: SEMPRE `true`, FIXO, em TODOS os caminhos (manual, automático
+   * `apiSincAdmissaoDigital` do payload: SEMPRE `false`, FIXO, em TODOS os caminhos (manual, automático
    * e reconciliação). NÃO é lido de ambiente.
    *
-   * A VERDADE, COM PROVA NA TELA (decisão do diretor, 15/10/2026, §A.48 reescrita após o falso sucesso):
-   * `true` é o valor que FUNCIONA. O registro enviado com `true` PERSISTE na pré-admissão
-   * (`FuncionarioSelecao`) e o SINCRONIZADOR do G.I o promove para a tela de Cadastro de Funcionários,
-   * como o diretor VALIDOU com Edson e Fabricio aparecendo na tela dele. `false` CONSOME o registro: ele
-   * SOME da `FuncionarioSelecao/GetAll` mas NÃO chega ao Cadastro (foi o falso sucesso: "saiu da fila"
-   * foi lido como promoção, era sumiço). A promoção pré-admissão -> Cadastro é do LADO do G.I, por isso
-   * a credencial leva 403 em `Funcionario/*` (esperado). O veto de retenção LGPD foi LIBERADO pelo
-   * diretor (risco dele). Antes havia `apiSincAdmissaoDigital()` lendo `GI_API_SINC_ADMISSAO_DIGITAL`;
-   * removido. Travado por teste (`gi-apisinc-sempre-true.tester.spec.ts`).
+   * A VERDADE, CONFIRMADA NA TELA DE CADASTRO (decisão FINAL do diretor, 15/10/2026): `false` é o valor
+   * que FUNCIONA. Com `false`, o registro SAI da pré-seleção (`FuncionarioSelecao`) e o SINCRONIZADOR do
+   * G.I o PROMOVE para a tela de Cadastro de Funcionários, onde o time trabalha. O diretor viu na tela
+   * Edmara, Kauã e Samuel aparecerem (com cliente) depois de enviados com `false`. Com `true` o registro
+   * fica PRESO na pré-seleção (status 2) e NUNCA é promovido (Kauã/Edson/Fabricio ficaram presos desde
+   * 14/10). A promoção é do LADO do G.I, por isso a credencial leva 403 em `Funcionario/*` (esperado, NÃO
+   * é bloqueio; a confirmação final é sempre o diretor na tela, a fábrica só lê a pré-seleção). Travado
+   * por teste (`gi-apisinc-sempre-false.tester.spec.ts`). NUNCA reinverter para `true`.
    */
 
   /**
@@ -348,11 +347,11 @@ export class EnviarParaGiService {
     // gatilho AUTOMÁTICO continua passando `false` (respeita a idempotência, não re-dispara por estado).
     // As demais guardas (encerramento, empresa/filial, salário, cliente) seguem valendo para os dois.
     //
-    // ⚠️ apiSinc É SEMPRE `true` AGORA (decisão do diretor, 15/10/2026, com PROVA NA TELA): `true`
-    // PERSISTE na pré-admissão e o SINCRONIZADOR do G.I o promove à tela de Cadastro de Funcionários,
-    // como o diretor validou com Edson e Fabricio; `false` CONSOME e o registro SOME sem chegar (foi o
-    // falso sucesso). O `ignorarJaEnviado=true` do manual segue valendo, por outro motivo: o "sucesso
-    // falso" do carimbo. O valor do apiSinc é decidido lá embaixo, no único ponto que monta o payload.
+    // ⚠️ apiSinc É SEMPRE `false` (decisão FINAL, confirmada na tela de Cadastro em 15/10/2026): com
+    // `false` o registro SAI da pré-seleção e o sincronizador do G.I o promove à tela de Cadastro
+    // (Edmara/Kauã/Samuel apareceram); com `true` fica PRESO na pré-seleção, nunca promovido. O
+    // `ignorarJaEnviado=true` do manual segue valendo, por outro motivo: o "sucesso falso" do carimbo.
+    // O valor do apiSinc é decidido lá embaixo, no único ponto que monta o payload.
     return this.enviarComGuardas(admissaoId, autorId, true);
   }
 
@@ -460,16 +459,15 @@ export class EnviarParaGiService {
     // A OPÇÃO DE SINCRONISMO entra PELO MONTADOR, dentro da allowlist fechada, nunca injetada depois
     // dela: campo enfiado no payload por fora não passa pelas redes de runtime daquela fronteira.
     //
-    // O VALOR DO apiSinc É FIXO `true`, nos DOIS gatilhos e na reconciliação (decisão do diretor,
-    // 15/10/2026, §A.48 reescrita de novo, com PROVA NA TELA). CORREÇÃO DE RUMO: medido com Edson e
-    // Fabricio, que o diretor VALIDOU aparecendo na tela de Cadastro de Funcionários, `true` é o valor
-    // que FUNCIONA: o registro PERSISTE na pré-admissão e o SINCRONIZADOR do G.I o promove para o
-    // Cadastro (a promoção é do lado do G.I; por isso a nossa credencial leva 403 em `Funcionario/*`,
-    // esperado, NÃO é bloqueio). `false` CONSOME e o registro SOME sem chegar ao Cadastro (foi o falso
-    // sucesso: "saiu da fila" não era promoção, era sumiço). O veto de retenção LGPD foi LIBERADO pelo
-    // diretor (risco dele). `GI_API_SINC_ADMISSAO_DIGITAL` continua sem efeito (não é mais lido).
+    // O VALOR DO apiSinc É FIXO `false`, nos DOIS gatilhos e na reconciliação. DECISÃO FINAL, confirmada
+    // NA TELA DE CADASTRO pelo diretor (15/10/2026): com `false` o registro SAI da pré-seleção e o
+    // SINCRONIZADOR do G.I o PROMOVE para a tela de Cadastro de Funcionários (Edmara, Kauã e Samuel
+    // apareceram lá, com cliente, depois de enviados com `false`). Com `true` o registro fica PRESO na
+    // pré-seleção (status 2) e NUNCA é promovido (Kauã/Edson/Fabricio ficaram presos desde 14/10). A
+    // promoção é do lado do G.I, por isso a credencial leva 403 em `Funcionario/*` (esperado). Esta é a
+    // leitura correta da §A.48, confirmada por 3 nomes na tela do diretor, não mais por inferência.
     const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined, {
-      apiSincAdmissaoDigital: true,
+      apiSincAdmissaoDigital: false,
     });
 
     if (!this.disparoArmado()) {
