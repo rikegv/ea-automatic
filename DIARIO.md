@@ -22669,3 +22669,52 @@ e com b3 (`src/gi/*`). Validação final na tela é do diretor.
 **BACKFILL (caminho a, EXCEÇÃO ao veto V12 autorizada pelo Rike — tratar documento JÁ AUDITADO como confirmável, risco assumido por ele):** runner one-off re-lê o documento guardado (`portal_credenciais.objeto`, não reprovado) pelo leitor do portal (ai-service isolado :8026) e grava FILL-IF-NULL via `filtrarCamposGi`. Descoberta: `regras:[]` faz o ai-service NÃO extrair; passei uma regra de conformidade genérica. seguranca APROVADO + tester corrigiram 3 bugs (`btrim(<date>)`, `expurgar_em` nos dois ramos=now+30d, overflow de varchar → pula sem derrubar). **Resultado: 39 admissões carimbadas, 0 erros.** RG recuperou forte (72→37 vazios); título 2; CTPS a IA quase não releu o NÚMERO (dossiê parcial série/UF/data). Restam com número vazio (fora do caminho a, time/manual): RG 37, CTPS 76, título 21 — a IA não relê com confiança ou o doc foi entregue por fora do portal. Lista id8 dos 39 enviada ao b3 (23 já-no-G.I p/ reenviar sobrescrevendo + 16 ainda-não); re-send ao G.I é do b3 (`src/gi/*`, apiSinc=false). Trilha da exceção V12 em `candidato_alteracoes_log` (marcador+contagem, PII-free).
 
 **ABERTO:** validação on-screen do diretor; o número de CTPS/título dos presos não-recuperáveis (decisão do Rike: time/manual). §A.49: disjunto de f4 (ondas, camada de tela) e b3 (GI, só lê).
+
+## 2026-10-15 (noite) — G.I: PROBLEMA RESOLVIDO na tela de Cadastro. A CAUSA RAIZ era a CHAVE, não o nosso envio
+
+**CONFIRMADO NA TELA DO DIRETOR ("problema resolvido"):** todo o Grupo Plataforma passou a aparecer na
+tela de Cadastro de Funcionários do G.I, com cliente e em maiúscula. Encerra a saga do dia.
+
+**A CAUSA RAIZ REAL (do e-mail do suporte do G.I, Gilberto/Claudio, que o Rike encaminhou):**
+1. **Nosso endpoint está CERTO:** `POST /FuncionarioSelecao/Add` (o G.I confirmou "Sim, é pelo
+   funcionarioselecao"). O registro cai na pré-seleção (`GetAll`, `statusPreCadastro=2`) em segundos.
+2. **Quem leva da pré-seleção para a tela de Cadastro é um SINCRONIZADOR instalado pelo G.I num
+   servidor deles** (acesso via Guilherme/scavasin.com), que roda a cada ~10 min e NÃO pode ser
+   fechado. É do LADO DELES. Por isso a credencial leva 403 em `Funcionario/*` (esperado, não é furo).
+   A fábrica NÃO consegue ler a tela de Cadastro; a prova final é SEMPRE o diretor na tela.
+3. **A CHAVE é `Empresa-Filial-CodigoFuncionario`.** O EA mandava `codigoFuncionario = 0` em TODOS, então
+   todos de um mesmo (empresa,filial) COLIDIAM na mesma chave e o sincronizador só mantinha UM (o resto
+   sumia). Essa era a razão de "alguns aparecem, outros não": nada de diferença no nosso dado (Edmara e
+   Jonas eram idênticos); era a colisão da chave.
+
+**OS QUATRO CONSERTOS, todos em produção hoje (0 regressão, seguranca+tester em cada um):**
+- **apiSinc = FALSE** fixo (commit `c3e1d5a`->revertido->`8a5ca37` final; §A.48). Promove ao Cadastro;
+  `true` prende na pré-seleção. CORRIGE O VAI-E-VOLTA: eu inverti para `true` no meio (premissa
+  Edson/Fabrício, que era a LISTA de pré-seleção, não a tela de Cadastro) e desfiz com prova de tela.
+- **codigoFuncionario SINTÉTICO único** por admissão (commit `98013b8`): `codigoFuncionarioSinteticoGi`
+  (FNV-1a do uuid, faixa [1e9,2e9), int32, acima dos códigos reais). A matrícula REAL é cadastrada
+  depois, na tela de pré-cadastro do time; o sintético é só um crachá p/ diferenciar. Estável =>
+  reenviar não cria chave nova (atualiza o mesmo registro).
+- **Telefone normalizado** (commit `82795f4`): tira código do país (55) e, se passar de 11, fica com os
+  últimos 11. Resolve "Out of range value for column 'SMSNroCel'" (telefone com 55 → smsNroCel de 11; a
+  coluna aceita 9). Destravou 3 (Milena/Rafael/Thiago).
+- **Nomes em MAIÚSCULA** (commit `82795f4`): padrão do diretor; `maiuscula` ANTES do `cortarTexto`
+  (achado do seguranca sobre char que expande). Só nome/lugar; código/doc/data/e-mail/UF não sobem.
+
+**RESULTADO do reenvio final:** 32 de 33 `GI_ENVIADO` (chave única + telefone + maiúscula), 1 recusa
+legítima (Fernanda `3a98888b`, `GI_SEM_EMPRESA_FILIAL`, falta vínculo). Daniel `96851004` excluído
+(segue manual). Dossiê: 39 recuperados (sessão Portal/Régua `06894be`) + reenviados completos.
+
+**COMO LI O E-MAIL DO G.I (pegadinha de ferramenta, p/ a próxima sessão):** o PDF era imagem/fonte
+embutida; sem poppler/pip na VM. Extraí o texto com Python stdlib: `zlib.decompress` dos streams +
+parse das CMaps `ToUnicode` (bfchar/bfrange) p/ decodificar os operadores `Tj`/`TJ`. Swagger reconstruído
+como PNG via zlib (FlateDecode -> PNG). Scripts no scratchpad da sessão f3dc6527.
+
+**ABERTO (lado G.I / operacional, não nosso código):** (a) o sincronizador do G.I promover os últimos
+envios (com Gilberto/programação deles); (b) Fernanda: cadastrar o vínculo empresa/filial; (c) número de
+CTPS/título dos ~não-recuperáveis: time/manual; (d) duplicatas na pré-seleção dos reenvios têm a MESMA
+chave (mesmo codigoFuncionario) => mesma pessoa, o time importa uma. **DÉBITOS (§A.38, risco do diretor):**
+unicidade do codigoFuncionario é probabilística (FNV%1e9, D-codfunc-1); premissa de que a matrícula real
+substitui o sintético no pré-cadastro é fluxo do G.I, confirmada só na tela (P-codfunc-1); telefone
+"últimos 11" é fail-safe (pode montar número errado p/ telefone-lixo, autorizado); apiSinc=true retido no
+fornecedor foi liberado (§A.48, mas o valor final é false, então não se aplica).
