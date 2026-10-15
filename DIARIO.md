@@ -22525,3 +22525,39 @@ do tree ea-build (01dece2), só a 0160 subiu (`when` 1792001276612 > último apl
 0159). Verificado: catálogo EXAME com "Exame Solicitado" ordem 5, conclui=false, vizinhos nas ordens
 6..11. Ordem de deploy: CÓDIGO (enum) ANTES da migration (rótulo), para o salvamento nunca aceitar um
 status que o enum ainda não conhece. §A.13: validação final na tela é do diretor (Esteira -> abas).
+
+---
+
+## 2026-10-15 (tarde 4) — OST das ondas, Onda 2a: Excel em 5 telas EM PRODUÇÃO (`133ff22`)
+
+**Onda 2 (exportar Excel em 6 telas), parte A: as 5 telas cujo filtro vive no browser.** Auditoria,
+Exame, Cadastro e Integração (abas da Esteira) + IFractal (rota própria). A 6ª tela, o Gerenciador do
+Portal (com o link vivo por candidato), é a Onda 2b, SEPARADA por tocar caminho de credencial (§A.38).
+
+**Investigação:** o Excel do Gerenciador de Admissão é server-side (ExcelJS, `gerarXlsxRelatorio`,
+rota `/admissoes/relatorio`, re-roda a query filtrada com paginação desligada). As 5 telas-alvo, ao
+contrário, FILTRAM NO BROWSER (`itemsVisiveis`/`ord.itens`), então o servidor não enxerga o filtro de
+coluna/status. Logo a fonte fiel do "o que está na tela" é a linha já renderizada no cliente.
+
+**Conserto (um mecanismo, não uma solução por tela):** (1) backend `gerarXlsxGenerico(aba, colunas,
+linhas)` novo em `relatorio-export.ts`, SEM tocar o `gerarXlsxRelatorio` validado (§A.26) + endpoint
+genérico `POST /relatorio/xlsx` (`RelatorioModule`, sem providers; autenticado pelo JwtAuthGuard
+global e operação ABERTA no MenuGuard, porque não é reivindicada por menu). Ele só formata o que
+recebe: não acessa dado novo, não grava, não loga linha (§A.6). DTO com tetos (200 colunas, 50000
+linhas) e nome de arquivo saneado contra header injection. (2) frontend `ExportarExcelButton`
+compartilhado (apiDownloadPost, as linhas visíveis) + helper `esteira-export.ts` (colunas por aba) e
+colunas próprias do IFractal. Como quem passa as linhas é a tela já filtrada, o comportamento é o do
+Gerenciador: SEM filtro vai tudo o que está na tela, COM filtro vai só o filtrado. É a tela inteira,
+não a seleção.
+
+**Por que NÃO retrofitei o modal de colunas do Gerenciador:** ele é específico de admissões
+(`COLUNAS_RELATORIO`). Reaproveitar o MOTOR (`gerarXlsx*`) e o helper de download (`apiDownloadPost`),
+não a UI, é o reaproveitamento certo sem regredir o validado.
+
+**GATE:** typecheck backend+frontend limpo; `relatorio-export.spec` +3 testes do `gerarXlsxGenerico`
+(cabeçalho/ordem, chave ausente = célula vazia, número somável x texto) = 17/17; suíte backend 9811
+passed, SÓ as 3 falhas pré-existentes (0 regressão). **DEPLOY:** commit `133ff22` (push ff origin/main),
+`publicar-producao.sh` serve `133ff22`, health 200/200, backup `*.bak-20261015-192225`. Sem migration.
+Sanidade: `POST /api/relatorio/xlsx` sem token = 401 (rota registrada e guardada). §A.13 na tela do
+diretor (botão "Exportar Excel" nas 5 telas). PRÓXIMO: Onda 2b (Portal, link vivo) com revisão do
+`seguranca` antes de subir; depois Onda 3 (agendar exame em massa).
