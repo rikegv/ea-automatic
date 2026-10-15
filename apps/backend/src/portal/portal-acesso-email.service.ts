@@ -1052,7 +1052,7 @@ export class PortalAcessoEmailService {
      * │ um Master corrigir à mão. Nunca auto-confirmamos merge de duplicata sem humano.                │
      * └─────────────────────────────────────────────────────────────────────────────────────────────┘
      */
-    await this.reconciliarCpfProvisorioDaEsteira(desfecho.candidatoId, cpf);
+    await this.reconciliarCpfProvisorioDaEsteira(desfecho.candidatoId, cpf, dataNascimento);
 
     return this.despacharLink(desfecho.candidatoId, contexto);
   }
@@ -1197,14 +1197,20 @@ export class PortalAcessoEmailService {
    * Reaponta a admissão viva de marcador PROVISÓRIO para o CPF REAL recém-gravado. Server-side, ator
    * SISTEMA (`corrigirCpf(..., null)`), fail-safe. Ver o bloco em `identidade`.
    */
-  private async reconciliarCpfProvisorioDaEsteira(candidatoId: string, cpfReal: string): Promise<void> {
+  private async reconciliarCpfProvisorioDaEsteira(
+    candidatoId: string,
+    cpfReal: string,
+    dataNascimento?: string | null,
+  ): Promise<void> {
     try {
       // A ADMISSÃO VEM DO VÍNCULO, nunca de uma busca por CPF: este serviço público não toca coluna de
       // CPF da esteira (trava 1 de `portal-acesso-email.travas`). A decisão "é provisório?" e a troca
       // moram em `AdmissoesService.reconciliarCpfProvisorio` (ator SISTEMA, no-op se o CPF já é real).
+      // A DATA DE NASCIMENTO viaja junto e é gravada na FICHA (`candidatos`) por aquele serviço, porque
+      // o portal não pode tocar aquela tabela (trava 1) e DELEGA essa escrita.
       const admissaoId = await this.admissaoVivaDoCandidato(candidatoId);
       if (!admissaoId) return;
-      await this.admissoes.reconciliarCpfProvisorio(admissaoId, cpfReal);
+      await this.admissoes.reconciliarCpfProvisorio(admissaoId, cpfReal, dataNascimento);
     } catch (erro) {
       // §A.6: só o nome da classe do erro; a mensagem pode carregar id ou CPF.
       this.log.error(`reconciliacao do CPF pendente nao ocorreu: ${(erro as Error).name}`);

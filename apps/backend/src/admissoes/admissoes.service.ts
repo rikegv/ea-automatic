@@ -3824,17 +3824,44 @@ export class AdmissoesService {
   }
 
   /**
-   * PONTE DO CPF PENDENTE, server-side (porta de e-mail do portal). Se a admissão AINDA carrega um
-   * marcador PROVISÓRIO, troca-o pelo CPF REAL que o candidato acabou de provar no portal, reusando
-   * `corrigirCpf` com ator SISTEMA (`null`). NO-OP quando o CPF já é real: NUNCA reescreve um CPF
-   * verdadeiro. A decisão de "é provisório?" mora AQUI, e não no serviço público do portal, de
+   * PONTE DO CPF E DA DATA PENDENTES, server-side (porta de e-mail do portal). Se a admissão AINDA
+   * carrega um marcador PROVISÓRIO, troca-o pelo CPF REAL que o candidato acabou de provar no portal,
+   * reusando `corrigirCpf` com ator SISTEMA (`null`). NO-OP quando o CPF já é real: NUNCA reescreve um
+   * CPF verdadeiro. A decisão de "é provisório?" mora AQUI, e não no serviço público do portal, de
    * propósito, porque aquela classe tem trava de teste de não tocar coluna de CPF da esteira; o portal
    * só descobre a admissão pelo vínculo e DELEGA. Ver o bloco em `portal-acesso-email.identidade`.
    */
-  async reconciliarCpfProvisorio(admissaoId: string, cpfReal: string): Promise<void> {
+  async reconciliarCpfProvisorio(
+    admissaoId: string,
+    cpfReal: string,
+    dataNascimento?: string | null,
+  ): Promise<void> {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
-    if (!adm || !ehCpfProvisorio(adm.candidatoCpf)) return;
-    await this.corrigirCpf(admissaoId, { cpf: cpfReal }, null);
+    if (!adm) return;
+    if (ehCpfProvisorio(adm.candidatoCpf)) {
+      await this.corrigirCpf(admissaoId, { cpf: cpfReal }, null);
+    }
+    /*
+     * A DATA DE NASCIMENTO ACOMPANHA O CPF NESTA PONTE. Ela chega junto no MESMO passo do portal
+     * (`identidade` grava cpf+nascimento no FUNIL, `as_candidatos`), mas `corrigirCpf` só sabe COPIAR
+     * a data da linha PROVISÓRIA, que nasce SEM ela. Sem este preenchimento a data fica presa no
+     * funil e a FICHA da admissão (`candidatos`) segue NULL, e é isso que faz a porta de link
+     * (`identificar`) falhar o `casouData` para sempre, além de deixar a ficha que a esteira, a folha
+     * e o G.I leem sem a data. PREENCHE SÓ QUANDO ESTÁ VAZIA, por CPF técnico: nunca sobrescreve uma
+     * data real já existente ("o que está validado não se altera"), nunca reabre nada. §A.6: sem nome,
+     * sem log do valor.
+     */
+    if (dataNascimento) {
+      const atual = await this.db.query.admissoes.findFirst({
+        where: eq(admissoes.id, admissaoId),
+      });
+      if (atual?.candidatoCpf) {
+        await this.db
+          .update(candidatos)
+          .set({ dataNascimento })
+          .where(and(eq(candidatos.cpf, atual.candidatoCpf), isNull(candidatos.dataNascimento)));
+      }
+    }
   }
 
   /**
