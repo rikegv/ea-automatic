@@ -63,6 +63,16 @@ export class GravarDadosGiDto {
   @IsArray({ message: "Envio inválido" })
   @ArrayMaxSize(200, { message: "Envio inválido" })
   campos!: CampoSubmetidoGi[];
+
+  /**
+   * O CÓDIGO do tipo de documento cuja conferência o candidato acabou de confirmar (o front confirma
+   * UM documento por vez). ESCOPA a anulação da conferência àquele documento; ausente no passo final.
+   * Não é o id da admissão (esse vem só da sessão): ver a nota de segurança em `GravarDadosGiEntrada`.
+   */
+  @IsOptional()
+  @IsString({ message: "Envio inválido" })
+  @MaxLength(60, { message: "Envio inválido" })
+  tipoDocumento?: string;
 }
 
 /**

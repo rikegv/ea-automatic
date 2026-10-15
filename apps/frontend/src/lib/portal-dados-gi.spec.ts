@@ -8,6 +8,7 @@ import {
   RACA,
   UF_NASCIMENTO,
   camposVaziosDe,
+  corpoDoEnvioDadosGi,
   rotuloDaOpcao,
   separarCampos,
   valoresConfirmadosDe,
@@ -143,5 +144,27 @@ describe("valoresConfirmadosDe e camposVaziosDe", () => {
     const confirmados = valoresConfirmadosDe(vistos);
     const { novos } = separarCampos([{ campo: "pis", rotulo: "PIS" }], confirmados);
     expect(novos.map((c) => c.campo)).toEqual(["pis"]);
+  });
+});
+
+describe("corpoDoEnvioDadosGi: quando o POST sai e com qual corpo", () => {
+  const campos = [{ campo: "rgNumero", valor: "12.345.678-9" }];
+
+  it("campos + documento: envia os dois (confirmação por documento)", () => {
+    expect(corpoDoEnvioDadosGi(campos, "RG")).toEqual({ campos, tipoDocumento: "RG" });
+  });
+
+  it("campos sem documento: envia só os campos (passo final)", () => {
+    expect(corpoDoEnvioDadosGi(campos)).toEqual({ campos });
+  });
+
+  it("sem campos e sem documento: NÃO envia (nada a gravar nem a anular)", () => {
+    expect(corpoDoEnvioDadosGi([])).toBeNull();
+  });
+
+  it("⚠️ GAP#7-RESIDUAL: sem campos MAS com documento, ENVIA {campos:[], tipoDocumento} para anular a conferência", () => {
+    // O PIS/PASEP, cujo único campo já veio da CTPS, chega com zero campos novos; sem este POST a
+    // conferência dele ficaria presa "aguardando confirmação" para sempre.
+    expect(corpoDoEnvioDadosGi([], "PIS_PASEP")).toEqual({ campos: [], tipoDocumento: "PIS_PASEP" });
   });
 });

@@ -90,3 +90,24 @@ describe("OPCAO 2: carimbo da confirmacao humana no limite HTTP", () => {
     }
   });
 });
+
+describe("CTPS: a chave da data de expedicao e a que a IA EMITE (ctpsDataExpedicao), nao ctpsData", () => {
+  // A IA (`ai-service/app/portal_extracao.py`) emite `ctpsDataExpedicao`; o front ecoa a chave da
+  // sugestao. Enquanto a allowlist so conhecia `ctpsData`, a data da CTPS era descartada em silencio.
+  it("ctpsDataExpedicao persiste na COLUNA ctpsData (alinhamento 15/10/2026)", () => {
+    const { filtrado } = gravar(
+      carimbarConfirmacaoHumana([
+        { campo: "ctpsNumero", valor: "1234567" },
+        { campo: "ctpsDataExpedicao", valor: "2016-08-10" },
+      ]),
+    );
+    expect(filtrado.update).toHaveProperty("ctpsNumero");
+    // A chave do vocabulario e `ctpsDataExpedicao`; a COLUNA gravada e `ctpsData`.
+    expect(filtrado.update).toHaveProperty("ctpsData", "2016-08-10");
+  });
+
+  it("a chave ANTIGA `ctpsData` NAO grava mais nada (era a fonte do descarte silencioso)", () => {
+    const { filtrado } = gravar(carimbarConfirmacaoHumana([{ campo: "ctpsData", valor: "2016-08-10" }]));
+    expect(filtrado.update).not.toHaveProperty("ctpsData");
+  });
+});

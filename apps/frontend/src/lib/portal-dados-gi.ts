@@ -441,6 +441,31 @@ export interface CampoConfirmadoGi {
 /** O corpo de `POST /portal/dados-gi`. */
 export interface CorpoDadosGi {
   campos: CampoConfirmadoGi[];
+  /**
+   * O CÓDIGO do tipo de documento desta conferência (ex.: "RG"). Vai na confirmação POR DOCUMENTO para
+   * o backend anular só a conferência DAQUELE documento. OMITIDO no passo final (sobras de vários
+   * documentos): sem ele o backend não anula conferência nenhuma, só grava o dossiê.
+   */
+  tipoDocumento?: string;
+}
+
+/**
+ * DECIDE O CORPO DO POST, ou `null` para NÃO enviar. Função pura (testável sem React).
+ *
+ * ⚠️ POR QUE NÃO BASTA "não enviar quando não há campos": um documento cujo catálogo INTEIRO já foi
+ * preenchido por documentos anteriores (dedup) chega à sua casa de conferência com ZERO campos novos,
+ * mas a conferência DELE segue viva (`confirmado_em=null`, `campos>0`) e precisa ser ANULADA, senão o
+ * documento fica "aguardando confirmação" para sempre (caso do PIS/PASEP, cujo único campo `pis` também
+ * sai da CTPS). Então, quando há um DOCUMENTO a confirmar (`tipoDocumento`), o POST SAI mesmo com
+ * `campos` vazio — é ele que dispara a anulação da conferência no backend. Sem documento e sem campos
+ * (nada a gravar nem a anular), não há POST.
+ */
+export function corpoDoEnvioDadosGi(
+  campos: CampoConfirmadoGi[],
+  tipoDocumento?: string,
+): CorpoDadosGi | null {
+  if (campos.length === 0 && !tipoDocumento) return null;
+  return tipoDocumento ? { campos, tipoDocumento } : { campos };
 }
 
 /** Um campo do G.I que o candidato já viu na trilha: o rótulo e o valor que ELE confirmou. */

@@ -57,8 +57,9 @@ export const CAMPOS_GI: Readonly<Record<string, CampoGiDef>> = {
   //
   // ⚠️ A CHAVE PRECISA EXISTIR AQUI ANTES DE A IA EMITIR, senão ela morre em SILÊNCIO: foi exatamente
   // o que aconteceu com `ctpsDataExpedicao` (a IA emitia, a allowlist só conhecia `ctpsData`, e o
-  // valor era descartado sem ninguém ver). Estas três entram por isso, em par com a mudança da
-  // extração (`ai-service/app/portal_extracao.py`), que é outra camada.
+  // valor era descartado sem ninguém ver). Esse caso ficou PRESO até 15/10/2026 — a chave foi
+  // finalmente alinhada logo abaixo (grupo CTPS). Estas três entram pelo mesmo motivo, em par com a
+  // mudança da extração (`ai-service/app/portal_extracao.py`), que é outra camada.
   cidadeNascimento: {
     coluna: "cidadeNascimento",
     rotulo: "Cidade de nascimento",
@@ -83,7 +84,12 @@ export const CAMPOS_GI: Readonly<Record<string, CampoGiDef>> = {
   ctpsUf: { coluna: "ctpsUf", rotulo: "UF da CTPS", tipo: "uf" },
   // Cidade de expedição da CTPS (0141) -> `cidadeExpedicao` no GI.
   cidadeCtps: { coluna: "ctpsCidade", rotulo: "Cidade de expedição da CTPS", tipo: "texto" },
-  ctpsData: { coluna: "ctpsData", rotulo: "Data de expedição da CTPS", tipo: "data" },
+  // ⚠️ A CHAVE é `ctpsDataExpedicao`, que é a que a IA EMITE (`ai-service/app/portal_extracao.py`), NÃO
+  // `ctpsData`. Enquanto a allowlist só conhecia `ctpsData`, a data de expedição da CTPS era descartada
+  // em SILÊNCIO (o front ecoa a chave da sugestão, a IA manda `ctpsDataExpedicao`, e `filtrarCamposGi`
+  // não achava a chave) — exatamente o caso-escola citado acima. Alinhado em 15/10/2026. A COLUNA segue
+  // `ctpsData` (é o nome da coluna de `admissao_dados_gi`, que o `gi-leitor` lê).
+  ctpsDataExpedicao: { coluna: "ctpsData", rotulo: "Data de expedição da CTPS", tipo: "data" },
   // Grupo 3 (PIS)
   pis: { coluna: "pis", rotulo: "PIS/PASEP", tipo: "texto" },
   // Grupo 3 (título de eleitor)

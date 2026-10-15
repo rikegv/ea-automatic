@@ -22,9 +22,9 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { ConferenciaDocumento, PassoFinal } from "@/components/portal/CamposGi";
 import {
   camposVaziosDe,
+  corpoDoEnvioDadosGi,
   valoresConfirmadosDe,
   type CampoConfirmadoGi,
-  type CorpoDadosGi,
 } from "@/lib/portal-dados-gi";
 import { dicaDoPasso } from "@/lib/dicas-documento";
 import { BotaoFalarComRh, TelaDeIdentificacao } from "@/components/portal/Identificacao";
@@ -709,11 +709,15 @@ export default function PortalDoCandidatoPage() {
    * identificação com o link em memória.
    */
   const gravarDadosGi = useCallback(
-    async (campos: CampoConfirmadoGi[]): Promise<boolean> => {
+    async (campos: CampoConfirmadoGi[], tipoDocumento?: string): Promise<boolean> => {
       if (!sessao) return false;
-      if (campos.length === 0) return true;
+      // `tipoDocumento` escopa a anulação da conferência àquele documento no backend. O corpo SAI mesmo
+      // com `campos` vazio quando há documento a confirmar (conferência de resíduo deduplicado precisa
+      // ser anulada, senão o doc fica preso "aguardando confirmação" — ex.: PIS/PASEP). Sem documento e
+      // sem campos, não há o que gravar nem anular: não envia. O passo final omite `tipoDocumento`.
+      const corpo = corpoDoEnvioDadosGi(campos, tipoDocumento);
+      if (!corpo) return true;
       try {
-        const corpo: CorpoDadosGi = { campos };
         await apiFetch("/portal/dados-gi", { method: "POST", token: sessao, body: corpo });
         return true;
       } catch (err) {
@@ -733,8 +737,15 @@ export default function PortalDoCandidatoPage() {
    * confirmados antes não são reenviados.
    */
   const gravarConferencia = useCallback(
-    async (itens: { campo: string; rotulo: string; valor: string }[]): Promise<boolean> => {
-      const ok = await gravarDadosGi(itens.map(({ campo, valor }) => ({ campo, valor })));
+    async (
+      itens: { campo: string; rotulo: string; valor: string }[],
+      codigoTipoDocumento: string,
+    ): Promise<boolean> => {
+      // O código do documento desta casa escopa a anulação da conferência no backend (só este doc).
+      const ok = await gravarDadosGi(
+        itens.map(({ campo, valor }) => ({ campo, valor })),
+        codigoTipoDocumento,
+      );
       if (!ok) return false;
       setCamposVistos((atual) => {
         const novo = { ...atual };
@@ -1459,7 +1470,7 @@ export default function PortalDoCandidatoPage() {
                     rotulo:
                       envioEfetivo.sugestao.campos.find((s) => s.campo === c.campo)?.rotulo ?? c.campo,
                   }));
-                  return gravarConferencia(itens);
+                  return gravarConferencia(itens, passoAtual.codigoTipoDocumento);
                 }}
                 aoAvancar={avancar}
                 temProximo={proximoPasso(passos, indice, visita) !== null}

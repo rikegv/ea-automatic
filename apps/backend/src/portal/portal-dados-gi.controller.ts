@@ -52,6 +52,8 @@ export class PortalDadosGiController {
       admissaoId: req.portal!.admissaoId,
       jtiLink: req.portal!.jtiLink,
       campos: carimbarConfirmacaoHumana(dto.campos),
+      // O documento confirmado ESCOPA a anulação da conferência (nunca a admissão, que vem da sessão).
+      tipoDocumento: dto.tipoDocumento ?? null,
       ip: this.ipDaBarreira(req),
     });
   }
