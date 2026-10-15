@@ -35,6 +35,19 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
 
 > Decididas pelo diretor ou confirmadas por diagnóstico com evidência. Só o diretor reabre.
 
+- **PORTAL APROVOU = PLATAFORMA APROVA (regra permanente do diretor, 15/10/2026).** O que acontece no
+  Portal reflete na plataforma: documento APROVADO no Portal fica aprovado na plataforma, e linha de
+  documentação FECHADA (régua obrigatória completa) FECHA a frente aqui também. Portal e plataforma
+  não podem divergir. **Consequência de código, cravada:** a auditoria AUTOMÁTICA do Portal
+  (`portal-credencial.service.ts`, ramo ENTREGUE) PASSA a chamar `AuditoriaService.aplicarPosVeredito`
+  (o choke-point do avanço), igual à validação humana já fazia; a frente AUDITORIA avança sozinha de
+  `ANALISE_PENDENTE` para `ANALISE_OK` quando a régua fecha. **Rede de segurança permanente:**
+  `ReconciliacaoAuditoriaScheduler` (molde do `ReconciliacaoGiScheduler`, kill-switch
+  `AUDITORIA_RECONCILIACAO=off`, idempotente) varre vivos `EM_ADMISSAO` com AUDITORIA pendente + régua
+  completa e reaplica o pós-veredito, fechando o edge-trigger sem retry. A lógica de avanço SEMPRE
+  existiu (§A.3, regra 2/complemento); o que faltava era o DISPARO nesse caminho. Em produção desde
+  15/10 (commit `43483b7`). NÃO reabrir: ligar o Portal ao avanço é decisão fechada.
+
 - **De/para vaga→cliente é MANUAL POR DESIGN.** A API do Pandapé **não expõe** o vínculo vaga→cliente
   (confirmado no swagger oficial e ao vivo em 17/07: `VacancyModel` não tem campo de cliente,
   `/v2/requests` também não; existe base de clientes com CNPJ, mas nenhuma aresta até a vaga). O
@@ -22377,3 +22390,63 @@ admissão com régua aberta sem teste pegar; mesmo limite do `reconciliacao-regu
 nula o negativo antes -> envio PASSA com null, não recusa); falta teste de costura e a narrativa dos
 specs superdimensiona. (B3) apiSinc=true da reconciliação só coberto transitivamente. (B4, FEITO) texto
 de produção do `GI_SALARIO_INVALIDO` atualizado (ausente/zero passam, só negativo recusa).
+
+---
+
+## 2026-10-15 — Frente "Auditoria → Avanço": auto-audit do Portal avança a frente (origem + rede + backfill)
+
+**EM PRODUÇÃO (commit `43483b7`, serve 43483b7, health 200/200, backup `*.bak-20261015-164014`).**
+
+**O DEFEITO (investigado §A.14, read-only, antes de construir).** No Farol, aba Auditoria, a coluna
+STATUS mostrava "Análise Finalizada" (AMARELO) + "6 aprovados" + "Pendências Obrig. Completo" enquanto
+a coluna AVANÇO mostrava "Análise Pendente", na MESMA admissão (id8 `f53b682d` e +4). Causa raiz: as
+duas colunas leem fontes diferentes. STATUS reescreve o rótulo pelo PROGRESSO DOS DOCUMENTOS
+(`rotuloDaAuditoria`: `entregues===total && inconformes===0` → "Análise Finalizada",
+`esteira/page.tsx:2239-2246`), mas a COR e a coluna AVANÇO leem o estado CRU da frente
+(`frentes_admissao.status=ANALISE_PENDENTE`, `conclui=false` → tom `wn` amarelo). A régua obrigatória
+fechou mas a frente NUNCA avançou a `ANALISE_OK`: o avanço é edge-trigger SÓ dentro de
+`aplicarPosVeredito` (`auditoria.service.ts:658`), e a auditoria AUTOMÁTICA do Portal
+(`portal-credencial.service.ts`, ramo ENTREGUE) gravava ENTREGUE + arquivava mas NÃO chamava o
+pós-veredito. Sem retry. Padrão (não isolado): **5** vivas `EM_ADMISSAO` com régua obrigatória completa
++ AUDITORIA presa em pendente (id8 `e89f6563 467d6f6a 4e0ea210 6fcca21b f53b682d`). O amarelo era,
+por desenho, o ALERTA dessa divergência.
+
+**O CONSERTO (decisão do diretor: "Portal aprovou = plataforma aprova", ver DECISÕES FECHADAS).**
+1. ORIGEM: `portal-credencial.service.ts`, no ramo ENTREGUE (após `talvezArquivarDoVeredito`), chama
+   `aplicarPosVeredito(admissaoId, ATOR_SISTEMA_POS_VEREDITO)` best-effort (try/catch, log de ERRO só
+   com `e.name`, §A.6). Ator SISTEMA encanado como `ExecutorPosVeredito` (`id: string|null`, SEM cast;
+   `autor_id` da trilha é FK nullable, precedente `exame-scheduler`); `ContextoEnvioAutomaticoGi.autorId`
+   alargado p/ `string|null`. `AuditoriaModule` importado no `PortalModule` sem ciclo.
+2. REDE: `ReconciliacaoAuditoriaScheduler` (novo, molde do `ReconciliacaoGiScheduler`): kill-switch
+   `AUDITORIA_RECONCILIACAO=off`, 1ª passada 2min, 10min, trava de processo, catch, log contagem-only.
+   Alvo `EM_ADMISSAO` + AUDITORIA `ANALISE_PENDENTE`/`concluida=false` + cliente/cargo não nulos;
+   completude pela fonte única (`ReguaCompletudeService`); reaplica `aplicarPosVeredito` (idempotente).
+3. BACKFILL: `db/backfill-auditoria-avanco.ts` (dry por padrão, `--aplicar`, conjunto computado).
+
+**MAPA DE IMPACTO §A.27 (antes de executar).** Avançar NÃO é cosmético: abre o gate do Cadastro
+(`nascerCadastroEIntegracao`) e recomputa o farol. As 5 têm TODAS `data_admissao` preenchida e não são
+banco, então `deriveFarolGlobal` NUNCA as leva a BANCO_AGUARDAR (que exige data AUSENTE). Previsto:
+3 com Exame APTO (`467d6f6a 6fcca21b e89f6563`) abririam o Cadastro; 2 com Exame aberto (`4e0ea210`
+ASO_PENDENTE, `f53b682d` AGENDADO) não. Na transição dispara o envio ao G.I (idempotente `jaEnviado`,
+`apiSinc` conforme §A.48 vigente = TRUE, decidido pela frente do G.I). Nenhum PARAR disparado.
+
+**PROVA EM PRODUÇÃO (16:44:03, 1ª passada do scheduler novo, sozinho).** As 5 → AUDITORIA `ANALISE_OK`
+`concluida=true`, 1 evento `para_status=ANALISE_OK` cada com `autor_id` NULO (ator SISTEMA); farol de
+todas = `EM_ADMISSAO` (0 foram a BANCO/CONCLUIDA); Cadastro nasceu nas 3 de Exame APTO, não nas 2 de
+Exame aberto (gate correto). 0 vivas restaram presas. STATUS e AVANÇO agora CONCORDAM (ANALISE_OK,
+verde, sem o amarelo de divergência).
+
+**AGENTES (§A.38/§A.39).** `backend` construiu origem+scheduler+backfill. `seguranca` APROVADO SEM VETO
+(reauditoria do diff real, 4 condições confirmadas: autor_id `string|null` sem cast; catch best-effort
+não-mudo + scheduler como rede; zero ciclo no boot; logs contagem-only; +4 perguntas adversariais:
+autorId atravessa limpo ao G.I, pausada aceitável pois `admissaoOperavel` barra o envio, SUPER_ADMIN do
+ator é dado inerte). `tester` independente 18/18 + specs do autor (reconciliacao 7, portal-origem 5).
+Gate: typecheck limpo + 594 testes, 0 falha (inclui `gi-apisinc-sempre-true`, 0 regressão). Rebase
+serial sobre `95c219c` (a frente do G.I inverteu §A.48 p/ TRUE no meio; disjunto, meu alargamento de
+tipo conviveu, re-gate verde).
+
+**DÉBITO/FOLLOW-UP (não bloqueiam):** (a) truncar id8 (ou debug) os logs por-admissão de arquivamento
+dentro de `aplicarPosVeredito` se o scheduler um dia dirigir admissões que precisem arquivar (hoje as 5
+têm `drive_pasta_url` não-nulo, nem disparam); (b) o runner de backfill via tsx falhou no bootstrap do
+Nest a partir do worktree de sessão (pegadinha §A.49, DI finicky) — o scheduler deployado fez o backfill
+sozinho na 1ª passada, então não precisou; se precisar rodar à mão, rodar do artefato/tree servido.
