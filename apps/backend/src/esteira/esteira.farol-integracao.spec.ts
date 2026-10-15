@@ -135,33 +135,32 @@ describe("EsteiraService.listar — desfecho carimbado tira a pessoa da fila (it
     expect(avalia(where, linha(aba.tipo, "EM_ADMISSAO"))).toBe(true);
   });
 
-  it("BANCO_AGUARDAR some SÓ da INTEGRAÇÃO (agendar quem está no banco não faz sentido)", async () => {
-    const { svc, captured } = montar();
-    await svc.listar("integracao", {});
-    expect(avalia(captured[0], linha("INTEGRACAO", "BANCO_AGUARDAR"))).toBe(false);
-  });
-
-  it.each(ABAS.filter((a) => a.tipo !== "INTEGRACAO"))(
-    "BANCO_AGUARDAR CONTINUA visível na aba $rota (contagem validada, §A.26)",
+  it.each(ABAS)(
+    "BANCO_AGUARDAR some da aba $rota (banco sai de TODAS as frentes, decisão 15/10/2026)",
     async (aba) => {
       const { svc, captured } = montar();
       await svc.listar(aba.rota, {});
-      // O trabalho segue durante o banco: documento chega, exame acontece, cadastro se prepara. É
-      // por isso que a correção de 13/08/2026 pôs a tag "Banco, Aguardar" em vez de esconder a linha.
-      expect(avalia(captured[0], linha(aba.tipo, "BANCO_AGUARDAR"))).toBe(true);
+      // Supera a tag "Banco, Aguardar" de 13/08/2026: o banco agora some de Auditoria, Exame,
+      // Cadastro e Integração. Só é visto no filtro de banco de candidatos (Gerenciador).
+      expect(avalia(captured[0], linha(aba.tipo, "BANCO_AGUARDAR"))).toBe(false);
+      // Admissão viva continua aparecendo, em todas elas.
+      expect(avalia(captured[0], linha(aba.tipo, "EM_ADMISSAO"))).toBe(true);
     },
   );
 
-  it("a exclusão do banco vale também para os KPIs da Integração, não só para a lista", async () => {
-    const { svc, captured } = montar();
-    await svc.listar("integracao", {});
-    // Todo WHERE que FILTRA POR FAROL nesta chamada (itens e KPIs) nasce do MESMO `clientePeriodo`.
-    // Se algum deixasse o banco passar, o card contaria alguém que a fila não mostra. Os demais
-    // WHERE capturados (o catálogo de status, por exemplo) não olham farol e ficam de fora.
-    const comFarol = captured.filter(mencionaFarol);
-    expect(comFarol.length).toBeGreaterThan(1);
-    for (const where of comFarol) {
-      expect(avalia(where, linha("INTEGRACAO", "BANCO_AGUARDAR"))).toBe(false);
-    }
-  });
+  it.each(ABAS)(
+    "a exclusão do banco vale também para os KPIs da aba $rota, não só para a lista",
+    async (aba) => {
+      const { svc, captured } = montar();
+      await svc.listar(aba.rota, {});
+      // Todo WHERE que FILTRA POR FAROL nesta chamada (itens e KPIs) nasce do MESMO `clientePeriodo`.
+      // Se algum deixasse o banco passar, o card contaria alguém que a fila não mostra. Os demais
+      // WHERE capturados (o catálogo de status, por exemplo) não olham farol e ficam de fora.
+      const comFarol = captured.filter(mencionaFarol);
+      expect(comFarol.length).toBeGreaterThan(1);
+      for (const where of comFarol) {
+        expect(avalia(where, linha(aba.tipo, "BANCO_AGUARDAR"))).toBe(false);
+      }
+    },
+  );
 });

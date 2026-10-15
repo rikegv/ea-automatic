@@ -183,6 +183,11 @@ export type StatusAuditoria = (typeof STATUS_AUDITORIA)[number];
  */
 export const STATUS_EXAME = [
   "A_AGENDAR",
+  // "Exame Solicitado": status manual (decisão do diretor, 15/10/2026). O time marca à mão quando
+  // o exame já foi solicitado mas ainda não há agendamento confirmado. NÃO conclui a frente e NÃO é
+  // governado pelo scheduler (fica entre "A Agendar" e "Agendado" na ordem operacional, por isso
+  // voltar de "Agendado" para cá conta como recuo). O rótulo mora no catálogo (migration 0160).
+  "EXAME_SOLICITADO",
   "AGENDADO",
   "AGUARDANDO_ASO",
   "ASO_PENDENTE",

@@ -246,24 +246,23 @@ export class EsteiraService {
         "AGUARDANDO_LIBERACAO",
         "LIBERACAO_RECUSADA",
         /**
-         * BANCO_AGUARDAR SAI **SÓ** DA INTEGRAÇÃO (item 2 da OST dos 3 ajustes, decisão do diretor).
+         * BANCO_AGUARDAR SAI DE TODAS AS FRENTES DE TRABALHO DA ESTEIRA (decisão do diretor,
+         * 15/10/2026, OST das ondas de status/Excel/agendamento). SUPERA a correção de 13/08/2026
+         * que mantinha a tag "Banco, Aguardar" visível nas abas Auditoria, Exame e Cadastro.
          *
-         * O RECORTE É DELIBERADO e não é meio-caminho. Integração é AGENDAMENTO com hora marcada:
-         * marcar a integração de quem está no banco é marcar uma reunião para uma data que ninguém
-         * sabe se existe. Nas outras três frentes o trabalho CONTINUA durante o banco (documento
-         * chega, exame acontece, cadastro se prepara), e é exatamente por isso que a correção de
-         * 13/08/2026 acrescentou a tag "Banco, Aguardar" na coluna Status em vez de esconder a linha.
+         * REGRA: todo candidato em BANCO_AGUARDAR some de Auditoria, Exame, Cadastro E Integração.
+         * Ele só é visto pelo filtro de banco de candidatos (Gerenciador com o farol "Banco,
+         * Aguardar"). Volta a uma frente apenas quando o usuário muda o status no farol (na prática,
+         * tirar o is_banco ou dar data de admissão, já que o farol do banco é derivado).
          *
-         * ALCANCE PROVADO (§A.26): estender a exclusão às outras abas tiraria da fila aberta 2 na
-         * Auditoria, 8 no Exame e 3 no Cadastro, derrubando os KPIs junto e desfazendo aquela
-         * correção. Painel, Gerenciador e Alto Volume não são tocados em nenhum dos casos, porque
-         * leem farol e as expressões compartilhadas, nunca esta fila.
+         * ALCANCE (§A.27): a exclusão vale para a FILA e para os KPIs de cada aba (itens e cards
+         * nascem do mesmo `clientePeriodo`), então os cards de Auditoria/Exame/Cadastro deixam de
+         * contar os do banco. Esse é o efeito pedido. Painel, Gerenciador e Alto Volume não são
+         * tocados, porque leem farol e as expressões compartilhadas, nunca esta fila.
          *
-         * DECLÍNIO E RESCISÃO **JÁ** saíam de todas as abas por esta mesma lista, carimbados de onde
-         * for: o botão da Esteira e o lápis do Gerenciador gravam o farol, e a Integração lê o mesmo
-         * filtro das outras três. O único desfecho que faltava sair era o banco.
+         * DECLÍNIO e RESCISÃO já saíam de todas as abas por esta mesma lista; agora o banco também.
          */
-        ...(tipo === "INTEGRACAO" ? (["BANCO_AGUARDAR"] as const) : []),
+        "BANCO_AGUARDAR",
       ]),
     ];
     if (filtros.codCliente?.length) {

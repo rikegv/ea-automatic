@@ -1100,6 +1100,13 @@
       "when": 1792000276612,
       "tag": "0159_portal_intervencao_resolvida",
       "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1792001276612,
+      "tag": "0160_exame_solicitado",
+      "breakpoints": true
     }
   ]
 }
