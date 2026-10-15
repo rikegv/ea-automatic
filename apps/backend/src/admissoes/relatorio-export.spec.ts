@@ -8,6 +8,7 @@ import {
 import {
   fmtDataHoraRelatorio,
   fmtDataRelatorio,
+  gerarXlsxGenerico,
   gerarXlsxRelatorio,
   nomeArquivoRelatorio,
   numeroDoSalario,
@@ -130,5 +131,55 @@ describe("relatório exportável — formatação", () => {
 
   it("o nome do arquivo carrega a data do dia", () => {
     expect(nomeArquivoRelatorio(new Date(2026, 7, 5))).toBe("relatorio-candidatos-2026-08-05.xlsx");
+  });
+});
+
+describe("gerarXlsxGenerico (OST das ondas, Onda 2): exportação de colunas e linhas da tela", () => {
+  const COLUNAS = [
+    { chave: "candidato", rotulo: "Candidato", largura: 28 },
+    { chave: "status", rotulo: "Status", largura: 20 },
+    { chave: "docsPendentes", rotulo: "Documentos Pendentes" },
+  ];
+
+  it("cabeçalho na ordem das colunas e cada linha casada pela chave", async () => {
+    const buffer = await gerarXlsxGenerico("Auditoria", COLUNAS, [
+      { candidato: "MARIA DA SILVA", status: "Análise Finalizada", docsPendentes: "0" },
+      { candidato: "JOÃO SOUZA", status: "Entrega Pendente", docsPendentes: "3" },
+    ]);
+    const { ws, linhas } = await lerXlsx(buffer);
+    expect(linhas[0]).toEqual(["Candidato", "Status", "Documentos Pendentes"]);
+    expect(linhas[1]).toEqual(["MARIA DA SILVA", "Análise Finalizada", "0"]);
+    expect(linhas[2]).toEqual(["JOÃO SOUZA", "Entrega Pendente", "3"]);
+    expect(ws.name).toBe("Auditoria");
+    // Filtro automático na faixa das 3 colunas (relido como range A1, como o relatório do Gerenciador).
+    expect(ws.autoFilter).toBe("A1:C1");
+  });
+
+  it("chave ausente ou nula vira célula vazia (o filtro do Excel separa vazio de preenchido)", async () => {
+    const buffer = await gerarXlsxGenerico("Exames", COLUNAS, [
+      { candidato: "ANA", status: null }, // docsPendentes ausente
+    ]);
+    const { ws } = await lerXlsx(buffer);
+    // getCell numa coluna sem valor devolve célula vazia (null), não o texto "null".
+    expect(ws.getRow(2).getCell(2).value).toBeNull();
+    expect(ws.getRow(2).getCell(3).value).toBeNull();
+  });
+
+  it("número continua número e ganha máscara somável; texto fica texto", async () => {
+    const buffer = await gerarXlsxGenerico(
+      "Teste",
+      [
+        { chave: "valor", rotulo: "Valor" },
+        { chave: "codigo", rotulo: "Código" },
+      ],
+      [{ valor: 2500.5, codigo: "000123" }],
+    );
+    const { ws } = await lerXlsx(buffer);
+    const cValor = ws.getRow(2).getCell(1);
+    const cCodigo = ws.getRow(2).getCell(2);
+    expect(cValor.value).toBe(2500.5);
+    expect(cValor.numFmt).toBe("#,##0.00");
+    // O que chega como string fica string (preserva o zero à esquerda), sem máscara numérica.
+    expect(cCodigo.value).toBe("000123");
   });
 });

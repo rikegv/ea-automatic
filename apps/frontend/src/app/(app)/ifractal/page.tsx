@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
+import { ExportarExcelButton } from "@/components/ui/ExportarExcelButton";
 
 /**
  * MENU GERENCIAL DO IFRACTAL: uma tabela só, no padrão do sistema.
@@ -164,6 +165,33 @@ export default function IfractalPage() {
   );
   const ord = useOrdenacao(colunas, filtrados);
 
+  // Exportação Excel (OST das ondas, Onda 2): leva o que está na tela (ord.itens, já filtrado e
+  // ordenado). Colunas = as que a tela mostra, mais razão social e operação para o relatório.
+  const exportIfractal = useMemo(() => {
+    const colunasXlsx = [
+      { chave: "codigo", rotulo: "Código", largura: 14 },
+      { chave: "cliente", rotulo: "Cliente", largura: 28 },
+      { chave: "razaoSocial", rotulo: "Razão Social", largura: 30 },
+      { chave: "operacao", rotulo: "Operação", largura: 22 },
+      { chave: "marcacao", rotulo: "Tipo de Marcação", largura: 20 },
+      { chave: "ativo", rotulo: "Situação", largura: 12 },
+      { chave: "admissoes", rotulo: "Admissões na Frente", largura: 18 },
+    ];
+    const linhas = ord.itens.map((i) => ({
+      codigo: i.codCliente,
+      cliente: i.cliente ?? "",
+      razaoSocial: i.razaoSocial ?? "",
+      operacao: i.nomeOperacao ?? "",
+      marcacao: TIPO_MARCACAO_LABEL[i.tipoMarcacao] ?? i.tipoMarcacao,
+      ativo: i.ativo ? "Ativo" : "Inativo",
+      admissoes: String(i.admissoesNaFrente),
+    }));
+    const h = new Date();
+    const d2 = (n: number) => String(n).padStart(2, "0");
+    const dia = `${h.getFullYear()}-${d2(h.getMonth() + 1)}-${d2(h.getDate())}`;
+    return { colunas: colunasXlsx, linhas, nomeArquivo: `ifractal-${dia}.xlsx` };
+  }, [ord.itens]);
+
   // §A.12/§A.20: larguras que cabem o conteúdo mais longo ("Reconhecimento Facial") e o cabeçalho
   // com a seta de ordenação, sem sobrar vazio de um lado e espremer do outro.
   const GRID = "120px minmax(260px,1.6fr) minmax(240px,1fr) 120px 130px 96px";
@@ -235,6 +263,13 @@ export default function IfractalPage() {
         <Button variant="secondary" className="h-9 px-3" onClick={() => void carregar()}>
           <Icon name="refresh" className="h-4 w-4" />
         </Button>
+        <ExportarExcelButton
+          aba="IFractal"
+          colunas={exportIfractal.colunas}
+          linhas={exportIfractal.linhas}
+          nomeArquivo={exportIfractal.nomeArquivo}
+          className="btn-secondary inline-flex h-9 items-center gap-1.5 px-3 text-[13px] disabled:opacity-40"
+        />
       </div>
 
       <div className="ea-scroll overflow-x-auto">

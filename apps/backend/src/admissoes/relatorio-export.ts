@@ -121,3 +121,54 @@ export async function gerarXlsxRelatorio(
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
+
+/** Uma coluna do relatório genérico: a chave na linha, o rótulo no cabeçalho, a largura (opcional). */
+export interface ColunaXlsx {
+  chave: string;
+  rotulo: string;
+  largura?: number;
+}
+
+/**
+ * Gera um xlsx a partir de colunas e linhas ARBITRÁRIAS (OST das ondas, Onda 2). É o motor de
+ * exportação reusado pelas telas que replicam o Excel do Gerenciador (Auditoria, Exame, Cadastro,
+ * Integração, IFractal e Gerenciador do Portal).
+ *
+ * SEPARADO de `gerarXlsxRelatorio` DE PROPÓSITO (§A.26): aquele é o relatório de admissões já
+ * validado, amarrado ao catálogo `COLUNAS_RELATORIO`. Este recebe as colunas da tela que chama, sem
+ * catálogo fechado, e não pode regredir o outro. O miolo (cabeçalho em negrito congelado, filtro
+ * automático) é o mesmo, e a duplicação é pequena de propósito para manter o validado intocado.
+ *
+ * Os valores chegam PRONTOS da tela (strings de exibição: datas dd/mm/aaaa, rótulos de status). O
+ * número, quando vier, é escrito como número e ganha máscara somável; o resto fica texto, o que
+ * preserva zero à esquerda (matrícula) e deixa o vazio vazio para o filtro do Excel.
+ */
+export async function gerarXlsxGenerico(
+  aba: string,
+  colunas: readonly ColunaXlsx[],
+  linhas: readonly LinhaRelatorio[],
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(aba || "Dados");
+
+  ws.columns = colunas.map((c) => ({ header: c.rotulo, key: c.chave, width: c.largura ?? 24 }));
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const linha of linhas) {
+    const row = ws.addRow(
+      Object.fromEntries(colunas.map((c) => [c.chave, linha[c.chave] ?? null])) as LinhaRelatorio,
+    );
+    for (const c of colunas) {
+      const cell = row.getCell(c.chave);
+      // Número continua somável na planilha; o que vem como texto fica texto (zero à esquerda).
+      if (typeof cell.value === "number") cell.numFmt = "#,##0.00";
+    }
+  }
+  if (colunas.length > 0) {
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colunas.length } };
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}

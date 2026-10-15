@@ -39,6 +39,8 @@ import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { AgendamentoIntegracaoModal } from "@/components/esteira/AgendamentoIntegracaoModal";
 import { ApresentacaoIntegracaoModal } from "@/components/esteira/ApresentacaoIntegracaoModal";
 import { AgendamentoIntegracaoLoteModal } from "@/components/esteira/AgendamentoIntegracaoLoteModal";
+import { ExportarExcelButton } from "@/components/ui/ExportarExcelButton";
+import { montarExportEsteira } from "@/lib/esteira-export";
 
 // ── Contrato de API (F8/F7) ─────────────────────────────────────────────────
 const ABAS = [
@@ -1181,6 +1183,17 @@ export default function EsteiraPage() {
   const ord = useOrdenacao(colunasOrdenaveis, itemsFiltrados);
   const itemsVisiveis = ord.itens;
 
+  // Exportação Excel (OST das ondas, Onda 2): leva EXATAMENTE o que está na tela (itemsVisiveis, já
+  // na ordem e no filtro vigentes). Só as quatro abas operacionais; a aba IFractal tem a sua tela
+  // própria (/ifractal). O tradutor de status usa o catálogo carregado (catMap).
+  const exportEsteira = useMemo(
+    () =>
+      ["auditoria", "exame", "cadastro", "integracao"].includes(rota)
+        ? montarExportEsteira(rota, itemsVisiveis, (c) => catMap.get(c)?.rotulo ?? c)
+        : null,
+    [rota, itemsVisiveis, catMap],
+  );
+
   // KPIs (item 5/6): "Total na fila" + um card por status EM ANDAMENTO (exclui o de conclusão, que
   // sai da fila). Cada card de status filtra a lista ao clicar (toggle).
   //
@@ -1583,6 +1596,22 @@ export default function EsteiraPage() {
                 >
                   {gerandoRelatorio ? <Spinner /> : <ExcelLogo className="h-[20px] w-[20px]" />}
                 </button>
+                <div
+                  aria-hidden="true"
+                  className="h-6 w-px flex-none bg-[color-mix(in_srgb,var(--border-strong)_70%,transparent)]"
+                />
+              </>
+            )}
+            {/* Exportar Excel (OST das ondas, Onda 2): nas quatro abas operacionais, leva o que está
+                na tela (com ou sem filtro). A aba IFractal exporta pela sua tela própria. */}
+            {exportEsteira && (
+              <>
+                <ExportarExcelButton
+                  aba={exportEsteira.aba}
+                  colunas={exportEsteira.colunas}
+                  linhas={exportEsteira.linhas}
+                  nomeArquivo={exportEsteira.nomeArquivo}
+                />
                 <div
                   aria-hidden="true"
                   className="h-6 w-px flex-none bg-[color-mix(in_srgb,var(--border-strong)_70%,transparent)]"
