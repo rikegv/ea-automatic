@@ -39,6 +39,7 @@ import { PortalTrilhaService } from "./portal-trilha.service";
 import { PortalVtController } from "./portal-vt.controller";
 import { ReguaModule } from "../regua/regua.module";
 import { VtLinkModule } from "../vt-coleta/vt-link.module";
+import { AuditoriaModule } from "../auditoria/auditoria.module";
 
 /**
  * Portal do Candidato, caminho do arquivo.
@@ -79,7 +80,18 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
   // admissão que nasceu com marcador PROV, reusando `AdmissoesService.corrigirCpf` (ator SISTEMA).
   // `forwardRef` porque `AdmissoesModule` já importa este módulo (a liberação entrega o link): o
   // ciclo é real e declarado, não acidental. §A.38: rota pública sobre CPF, re-auditoria obrigatória.
-  imports: [ConfigModule, ReguaModule, VtLinkModule, forwardRef(() => AdmissoesModule)],
+  // `AuditoriaModule` entra pelo AVANÇO DA AUDITORIA (frente Auditoria -> Avanço): o auto-audit do
+  // Portal, ao marcar ENTREGUE, passa a chamar `AuditoriaService.aplicarPosVeredito` para a frente
+  // sair de ANALISE_PENDENTE quando a régua fecha. Alcance = UM provider exportado
+  // (`AuditoriaService`). SEM `forwardRef`: a árvore do `AuditoriaModule` (Regua/Staging/
+  // PandapeArquivos/Gi) NÃO importa o `PortalModule` nem o `AdmissoesModule`, então não há ciclo.
+  imports: [
+    ConfigModule,
+    ReguaModule,
+    VtLinkModule,
+    forwardRef(() => AdmissoesModule),
+    AuditoriaModule,
+  ],
   // DUAS CONTROLLERS, DOIS PÚBLICOS. `PortalController` é do CANDIDATO (`@Public()` + guard de
   // sessão, na allowlist da barreira); `PortalPendenciasController` é do TIME (autenticado, sob
   // `esteira/`, jamais alcançável de fora). Ver o cabeçalho de cada uma.

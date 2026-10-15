@@ -129,8 +129,13 @@ export interface ContextoEnvioAutomaticoGi {
   farolGlobal?: string | null;
   /** `admissoes.pausada_em`. Preenchido = admissão pausada = não envia. */
   pausadaEm?: Date | string | null;
-  /** O autor do pós-veredito que fechou a frente (trilha do GI, quando a tela da peça 3 existir). */
-  autorId: string;
+  /**
+   * O autor do pós-veredito que fechou a frente (trilha do GI, quando a tela da peça 3 existir).
+   * NULO quando quem fechou foi uma ação de SISTEMA (auto-audit do Portal, reconciliação, backfill):
+   * não há usuário logado, e o valor não é persistido hoje (o `_autorId` de `enviarComGuardas` é
+   * intencionalmente não usado). `string | null` explícito, sem buraco de tipo (§A.38).
+   */
+  autorId: string | null;
 }
 
 /**
@@ -374,7 +379,7 @@ export class EnviarParaGiService {
    */
   private async enviarComGuardas(
     admissaoId: string,
-    _autorId: string,
+    _autorId: string | null,
     ignorarJaEnviado = false,
   ): Promise<GiEnvioResultado> {
     if (!this.configurado()) {

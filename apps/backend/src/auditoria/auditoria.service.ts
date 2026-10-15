@@ -66,6 +66,24 @@ import {
 } from "../domain/drive-arquivamento";
 
 /**
+ * O EXECUTOR do pós-veredito: ou um usuário humano (JWT, `AuthUser`), ou uma AÇÃO DE SISTEMA sem
+ * usuário logado (o auto-audit do Portal, a reconciliação agendada, o backfill). Na ação de sistema
+ * o `id` vai NULO, e é o valor CORRETO, não um remendo: `frente_status_eventos.autor_id` é FK
+ * NULLABLE para `usuarios.id` (o `exame-scheduler` já grava `autorId: null`), então inventar um id
+ * falso violaria a FK, e um uuid-zero exigiria uma linha de usuário fantasma. O caminho do envio ao
+ * G.I (`autorId`) NÃO persiste esse valor hoje (§A.6), então um rótulo de sistema o cobre lá.
+ */
+export type ExecutorPosVeredito = Omit<AuthUser, "id"> & { id: AuthUser["id"] | null };
+
+/** Ator SISTEMA reutilizável para o pós-veredito automático (id NULO na trilha, §A.6). */
+export const ATOR_SISTEMA_POS_VEREDITO: ExecutorPosVeredito = {
+  id: null,
+  email: "sistema@ea.local",
+  papel: "SUPER_ADMIN",
+  senhaTemporaria: false,
+};
+
+/**
  * Precisa (re)arquivar no Drive? Sim quando ainda não há link (null) OU quando o link salvo é um
  * placeholder de MOCK (gerado com DRIVE_MOCK=on): esse link aponta para uma pasta inexistente e
  * resolve 404. Tratá-lo como "não arquivado" faz o próximo evento de documento regravar o link REAL
@@ -655,7 +673,7 @@ export class AuditoriaService {
    * Idempotente nos dois efeitos: `autoConcluirAuditoria` não reescreve frente já concluída, e
    * `precisaArquivarDrive` não re-arquiva quando já existe link real.
    */
-  async aplicarPosVeredito(admissaoId: string, user: AuthUser): Promise<PosVeredito> {
+  async aplicarPosVeredito(admissaoId: string, user: ExecutorPosVeredito): Promise<PosVeredito> {
     const adm = await this.carregarAdmissao(admissaoId);
 
     // Sinalizador da admissão (INCONFORMIDADE domina; senão o cálculo do wizard).
@@ -726,6 +744,9 @@ export class AuditoriaService {
           await this.enviarParaGi.enviar(admissaoId, {
             farolGlobal: alvo?.farolGlobal,
             pausadaEm: alvo?.pausadaEm,
+            // `user.id` é `string | null`: NULO quando o executor é SISTEMA (auto-audit/reconciliação).
+            // O `autorId` do envio ao G.I aceita null explicitamente (não é persistido hoje), sem cast
+            // nem rótulo falso (§A.38).
             autorId: user.id,
           });
         } catch {
@@ -777,7 +798,10 @@ export class AuditoriaService {
    *
    * §A.6: opera por ids, status e datas. Nada de CPF, nome ou URL no log.
    */
-  private async recuarAuditoria(admissaoId: string, user: AuthUser): Promise<RecuoDaAuditoria> {
+  private async recuarAuditoria(
+    admissaoId: string,
+    user: ExecutorPosVeredito,
+  ): Promise<RecuoDaAuditoria> {
     const nada: RecuoDaAuditoria = {
       frenteRecuou: false,
       cadastroDerrubado: false,
@@ -1085,7 +1109,7 @@ export class AuditoriaService {
    */
   private async autoConcluirAuditoria(
     admissaoId: string,
-    user: AuthUser,
+    user: ExecutorPosVeredito,
   ): Promise<{ status: string; gateAberto: boolean; transicionou: boolean }> {
     const frentes = await this.db
       .select({

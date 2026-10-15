@@ -66,6 +66,7 @@ import {
   separarRegrasPorCategoria,
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
+import { AuditoriaService, ATOR_SISTEMA_POS_VEREDITO } from "../auditoria/auditoria.service";
 import { PortalArmazenamentoService } from "./portal-armazenamento.service";
 import { PortalArquivamentoService } from "./portal-arquivamento.service";
 import { MOTIVO_POR_RECUSA, PortalLeitorService } from "./portal-leitor.service";
@@ -134,6 +135,19 @@ export class PortalCredencialService {
      * chamador guarda com `?.`.
      */
     @Optional() private readonly arquivamento?: PortalArquivamentoService,
+    /**
+     * O AVANÇO DA AUDITORIA, o fio que faltava no caminho da IA do Portal. A auditoria AUTOMÁTICA
+     * gravava ENTREGUE e arquivava, mas NÃO chamava o pós-veredito, então a frente AUDITORIA ficava
+     * presa em `ANALISE_PENDENTE` mesmo com a régua obrigatória completa (STATUS "Análise Finalizada"
+     * amarelo + AVANÇO "Análise Pendente"). O caminho da validação HUMANA já chama `aplicarPosVeredito`
+     * logo após gravar ENTREGUE; aqui o caminho da IA passa a fazer o MESMO.
+     *
+     * `@Optional()` pelo MESMO motivo do `arquivamento` (§A.14/§A.49): em produção o Nest injeta (o
+     * `AuditoriaModule` é importado e exporta o serviço), mas os specs que constroem este serviço à
+     * mão não passam a dependência, e a dependência nova NÃO pode obrigar a tocar as specs de outra
+     * sessão. O chamador guarda com `?.` e best-effort.
+     */
+    @Optional() private readonly auditoria?: AuditoriaService,
   ) {}
 
   /**
@@ -1315,6 +1329,24 @@ export class PortalCredencialService {
                 credencial.admissaoId,
                 credencial.tipoDocumentoId,
               );
+              // ── O AVANÇO DA AUDITORIA, O FIO QUE FALTAVA (frente Auditoria -> Avanço). ──
+              // Só aqui, no ramo ENTREGUE: o SUSPEITO fica em AGUARDANDO_AUDITORIA (conferência
+              // humana) e o INCONFORME/PENDENTE (ramo `else`) não disparam. `aplicarPosVeredito`
+              // re-mede a régua por dentro (só conclui se COMPLETA), é idempotente e, na transição,
+              // dispara o envio ao G.I (apiSinc=false, §A.48). O ator é SISTEMA com id NULO (sem
+              // usuário logado), FK nula na trilha. BEST-EFFORT: envolto em try/catch como o
+              // arquivamento, NUNCA derruba o caminho do candidato (§A.6: só o nome da classe).
+              try {
+                await this.auditoria?.aplicarPosVeredito(
+                  credencial.admissaoId,
+                  ATOR_SISTEMA_POS_VEREDITO,
+                );
+              } catch (e) {
+                this.log.error(
+                  `pos-veredito do auto-audit do Portal falhou (${e instanceof Error ? e.name : "erro"}); ` +
+                    `o documento segue ENTREGUE e a rede agendada recupera.`,
+                );
+              }
             }
           } else {
             // INCONFORME/PENDENTE: o estado NÃO muda (comportamento de sempre do Portal), só o motivo.

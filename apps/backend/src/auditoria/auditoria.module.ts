@@ -5,6 +5,7 @@ import { ReguaModule } from "../regua/regua.module";
 import { StagingModule } from "../staging/staging.module";
 import { AuditoriaController } from "./auditoria.controller";
 import { AuditoriaService } from "./auditoria.service";
+import { ReconciliacaoAuditoriaScheduler } from "./reconciliacao-auditoria.scheduler";
 
 /**
  * Auditoria documental (F2). AiClientService vem do AiModule global.
@@ -18,7 +19,11 @@ import { AuditoriaService } from "./auditoria.service";
   // chama `EnviarParaGiService.enviar` (no-op sem GI configurado). O módulo exporta só esse serviço.
   imports: [ReguaModule, StagingModule, PandapeArquivosModule, GiModule],
   controllers: [AuditoriaController],
-  providers: [AuditoriaService],
+  // `ReconciliacaoAuditoriaScheduler` é a rede de segurança no processo (padrão da casa): reusa
+  // `AuditoriaService` (choke-point do avanço) e `ReguaCompletudeService` (que vem do `ReguaModule`
+  // já importado). Kill-switch `AUDITORIA_RECONCILIACAO=off`. NÃO exportado: nada externo o consome
+  // (o backfill o alcança por `app.get` no contexto standalone).
+  providers: [AuditoriaService, ReconciliacaoAuditoriaScheduler],
   // Exporta o service para o pull de docs do Pandapé (Fase 5) reusar a F2 incremental.
   exports: [AuditoriaService],
 })
