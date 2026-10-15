@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
+  codigoFuncionarioSinteticoGi,
   montarFuncionarioSelecao,
   origemAutorizadaParaGi,
   recusaDaContratacaoGi,
@@ -468,6 +469,11 @@ export class EnviarParaGiService {
     // leitura correta da §A.48, confirmada por 3 nomes na tela do diretor, não mais por inferência.
     const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined, {
       apiSincAdmissaoDigital: false,
+      // A CHAVE DE DIFERENCIAÇÃO (decisão do suporte do G.I, 15/10/2026): Empresa-Filial-CodigoFuncionario
+      // precisa ser único. Com `0` em todos, os registros colidem e o sincronizador do G.I perde o resto.
+      // A matrícula real é cadastrada depois pela equipe; aqui vai um código SINTÉTICO único e estável
+      // por admissão, só para diferenciar. Estável por admissão => reenviar não cria chave nova.
+      codigoFuncionario: codigoFuncionarioSinteticoGi(admissaoId),
     });
 
     if (!this.disparoArmado()) {

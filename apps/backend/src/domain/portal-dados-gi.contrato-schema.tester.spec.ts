@@ -273,6 +273,14 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "string"
       ]
     },
+    "codigoFuncionario": {
+      "format": "int32",
+      "pattern": "^-?(?:0|[1-9]\\d*)$",
+      "type": [
+        "integer",
+        "string"
+      ]
+    },
     "contaCorrente": {
       "default": "",
       "maxLength": 20,
@@ -1492,13 +1500,15 @@ describe("ponto 9: tipoContrato (D/I) e o PRAZO, acoplado ao vinculo, e nao o no
     // `codMunicipioNascto`, 40 ⇒ 44) e UM de CONTRATAÇÃO (`codigoCliente`, 9 ⇒ 10). Campo que entre sem
     // passar por esta linha cresce calado, e foi para isso que o número existe.
     //
-    // DE 54 PARA 55 em 06/10/2026, e o 55o é nomeável: `apiSincAdmissaoDigital`, que decide se a
-    // pré-admissão fica ESPERANDO no fornecedor ou é consumida por ele em menos de 10 minutos (medido
-    // em produção do GI: com `false` o registro some, com `true` permanece). A chave sai SEMPRE, nunca
-    // omitida, porque default do outro lado é contrato que muda sem aviso. O valor vem da env
-    // `GI_API_SINC_ADMISSAO_DIGITAL`, com default `false`, que é o comportamento de hoje.
-    expect(Object.keys(montarCheio())).toHaveLength(55);
-    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(55);
+    // DE 54 PARA 55 em 06/10/2026, e o 55o é nomeável: `apiSincAdmissaoDigital`, que decide para qual
+    // lado o G.I roteia a pré-admissão (hoje `false`, ver §A.48).
+    //
+    // DE 55 PARA 56 em 15/10/2026, e o 56o é nomeável: `codigoFuncionario`, a CHAVE de diferenciação
+    // que o suporte do G.I pediu (Empresa-Filial-CodigoFuncionario). Com `0` em todos, os registros
+    // colidem na mesma chave e o sincronizador do G.I perde o resto; o EA passa a mandar um código
+    // SINTÉTICO único por admissão (`codigoFuncionarioSinteticoGi`). A chave sai SEMPRE, nunca omitida.
+    expect(Object.keys(montarCheio())).toHaveLength(56);
+    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(56);
   });
 
   it("nenhum campo de SITUACAO trabalhista ou DESCONTO e emitido", () => {

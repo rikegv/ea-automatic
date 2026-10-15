@@ -1171,6 +1171,16 @@ export interface FuncionarioSelecao {
   codigoEmpresa: number | null;
   codigoFilial: number | null;
   /**
+   * `codigoFuncionario`: a CHAVE que DIFERENCIA o registro na pré-admissão do G.I, junto de
+   * `codigoEmpresa`/`codigoFilial` (combinação Empresa-Filial-CodigoFuncionario, decisão do suporte do
+   * G.I, 15/10/2026). ⚠️ Com `0` igual em TODOS, os registros colidem na mesma chave e o sincronizador
+   * do G.I só mantém um, perdendo o resto (medido: toda a fila `empresa1-filial4-0` sumia menos um). A
+   * matrícula REAL só é cadastrada DEPOIS, na tela de pré-cadastro do time, então aqui vai um código
+   * SINTÉTICO único e estável por admissão (`codigoFuncionarioSinteticoGi`), só para diferenciar, numa
+   * faixa alta (acima dos códigos reais). `int32`, default `0`.
+   */
+  codigoFuncionario: number;
+  /**
    * CLIENTE FINAL (`int32`, **default `0`**). ⚠️ NÃO é a empresa do grupo (`codigoEmpresa`/`codigoFilial`):
    * é o TOMADOR, e sai de `admissoes.cod_cliente` por de/para DIRETO (99% de casamento medido em
    * 02/10/2026, `docs/MAPA-GI-CLIENTE-E-CIDADES.md`).
@@ -1218,12 +1228,54 @@ export interface FuncionarioSelecao {
 export interface OpcoesDeEnvioGi {
   /** Ver `FuncionarioSelecao.apiSincAdmissaoDigital`. Default `false`, o default do fornecedor. */
   apiSincAdmissaoDigital: boolean;
+  /**
+   * Ver `FuncionarioSelecao.codigoFuncionario`. A CHAVE de diferenciação. Default `0` (o do fornecedor):
+   * quem decide o valor é o chamador (`EnviarParaGiService` passa `codigoFuncionarioSinteticoGi(id)`),
+   * porque é ele que tem o id da admissão. `0` quando não informado, e `0` colide (ver o campo).
+   */
+  codigoFuncionario?: number;
 }
 
 /** O padrão: o default DO FORNECEDOR. Sem decisão explícita, o EA não muda o comportamento do G.I. */
 export const OPCOES_DE_ENVIO_GI_PADRAO: OpcoesDeEnvioGi = {
   apiSincAdmissaoDigital: false,
+  codigoFuncionario: 0,
 };
+
+/** Base da faixa SINTÉTICA do `codigoFuncionario`: bem acima dos códigos reais do G.I (matrículas de
+ * 5 a 6 dígitos medidas), e com teto dentro de `int32` (o campo aceita, medido ao vivo em 15/10/2026
+ * com 1.87e9/1.93e9). A faixa `[1e9, 2e9)` dá ~1 bilhão de valores, então a colisão entre admissões é
+ * desprezível, e o número nunca se confunde com um funcionário real já cadastrado. */
+const COD_FUNC_SINT_BASE = 1_000_000_000;
+const COD_FUNC_SINT_SPAN = 1_000_000_000;
+
+/**
+ * O `codigoFuncionario` SINTÉTICO de uma admissão: estável (mesma admissão, mesmo número, então reenviar
+ * NÃO cria chave nova), único na prática (hash de 32 bits do id) e numa faixa alta que não colide com
+ * funcionário real. É só um CRACHÁ para diferenciar os registros na pré-admissão do G.I; a matrícula
+ * REAL é cadastrada depois, na tela de pré-cadastro do time. FNV-1a sobre o uuid da admissão.
+ */
+export function codigoFuncionarioSinteticoGi(admissaoId: string): number {
+  let h = 2166136261 >>> 0; // offset basis FNV-1a 32 bits
+  for (let i = 0; i < admissaoId.length; i++) {
+    h ^= admissaoId.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0; // prime FNV, mantém 32 bits sem sinal
+  }
+  return COD_FUNC_SINT_BASE + (h % COD_FUNC_SINT_SPAN);
+}
+
+/**
+ * A REDE DE RUNTIME do `codigoFuncionario` na fronteira do payload: só inteiro POSITIVO passa; `0`,
+ * negativo, não-finito, string ou ausente caem em `0` (o default do fornecedor). `0` colide com outros
+ * `0`, mas é o fail-safe honesto quando o chamador não informou, e nunca inventa um código.
+ */
+function codigoFuncionarioGiValido(v: unknown): number {
+  // TETO `int32` na própria rede (não só no produtor): o campo é `int32` no contrato, então um chamador
+  // futuro que passasse um inteiro acima de 2^31-1 gravaria valor inválido em silêncio. A rede é a
+  // fronteira, como o `TETO_FISICO` da jornada: aqui fica a garantia, não na disciplina do chamador.
+  const MAX_INT32 = 2_147_483_647;
+  return typeof v === "number" && Number.isInteger(v) && v > 0 && v <= MAX_INT32 ? v : 0;
+}
 
 /**
  * O DE/PARA de código do GI, INJETADO. Traduz o que o EA guarda como TEXTO (nome da cidade) no CÓDIGO
@@ -1507,6 +1559,10 @@ export function montarFuncionarioSelecao(
     tipoContrato: prazoGiValido(c.tipoContrato),
     codigoEmpresa: c.codigoEmpresa,
     codigoFilial: c.codigoFilial,
+    // A CHAVE DE DIFERENCIAÇÃO, pela mesma porta `opcoes` do apiSinc (quem decide é o serviço, que tem o
+    // id da admissão). Rede de runtime: só inteiro positivo passa; qualquer outra coisa cai em `0` (que
+    // colide, mas é o default do fornecedor e o fail-safe honesto). Ver o campo em `FuncionarioSelecao`.
+    codigoFuncionario: codigoFuncionarioGiValido(o.codigoFuncionario),
     // O CLIENTE FINAL passa pela MESMA rede de runtime das outras quatro, e pelo mesmo motivo: esta é a
     // fronteira do payload, e `0`/string/decimal vindos de uma `ContratacaoGi` montada por fora viram
     // NULO aqui, para a guarda do `POST` recusar em vez de o fornecedor gravar cliente inexistente.
