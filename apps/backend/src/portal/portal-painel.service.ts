@@ -44,6 +44,7 @@ import {
   estadoDoLinkNoPainel,
   naAba,
   noCard,
+  PAGINA_MAXIMA_PAINEL,
   pontaPedida,
   recorteDaPagina,
   recorteDoCard,
@@ -677,6 +678,28 @@ export class PortalPainelService {
       pagina: paginaPedida(deslocamento, limite),
       tamanho: limite,
     };
+  }
+
+  /**
+   * TODAS as linhas que o filtro atual alcança, para a exportação em Excel do Gerenciador do Portal
+   * (OST das ondas, Onda 2b). PAGINA sobre o `listar` já validado, de propósito: não há SQL nova a
+   * auditar e o recorte, os filtros e o estado do link saem exatamente da mesma consulta da tela.
+   *
+   * O TETO existe para um recorte largo não virar um arquivo gigante nem um laço sem fim; é folga
+   * sobre o painel real. Entre páginas a base pode mudar um pouco (link emitido no meio), e isso é
+   * aceitável para um retrato de relatório.
+   */
+  async todasAsLinhasParaRelatorio(
+    entrada: FiltrosDaListaDoPainel = {},
+  ): Promise<LinhaDoPainelPortal[]> {
+    const TETO = 5000;
+    const linhas: LinhaDoPainelPortal[] = [];
+    for (let pagina = 1; ; pagina++) {
+      const p = await this.listar({ ...entrada, pagina, tamanho: PAGINA_MAXIMA_PAINEL });
+      linhas.push(...p.itens);
+      if (p.itens.length === 0 || linhas.length >= p.total || linhas.length >= TETO) break;
+    }
+    return linhas.slice(0, TETO);
   }
 
   /**

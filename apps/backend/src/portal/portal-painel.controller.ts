@@ -1,11 +1,28 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Res } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Res,
+  StreamableFile,
+} from "@nestjs/common";
 import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
+import { gerarXlsxGenerico, type LinhaRelatorio } from "../admissoes/relatorio-export";
 import { DestravarAcessoDto } from "./portal-acesso-email.dto";
 import { PortalAcessoEmailService } from "./portal-acesso-email.service";
+import { PortalIdentidadeService } from "./portal-identidade.service";
 import { PortalPainelService } from "./portal-painel.service";
+import {
+  COLUNAS_RELATORIO_PORTAL,
+  montarLinhaRelatorioPortal,
+  precisaResolverLink,
+} from "./portal-relatorio";
 
 /**
  * PARÂMETRO REPETIDO CHEGA COMO ARRAY, e o tipo declarado não impede isso em tempo de execução.
@@ -65,6 +82,12 @@ export class PortalPainelController {
      * está reescrevendo agora. Pendurando aqui, a cobertura já existe e nada precisa ser tocado lá.
      */
     private readonly acesso: PortalAcessoEmailService,
+    /**
+     * A EMISSÃO DO LINK (ação de COPIAR), reusada pela exportação em Excel (OST das ondas, Onda 2b):
+     * o relatório resolve, por candidato VIVO, o MESMO link que o botão de copiar devolve, sem cunhar
+     * link novo nem revogar nada. Mesmo serviço, mesma régua do diretor ("sempre o link vivo").
+     */
+    private readonly identidade: PortalIdentidadeService,
   ) {}
 
   /**
@@ -158,6 +181,89 @@ export class PortalPainelController {
       dataAdmissaoDe: umSo(dataAdmissaoDe),
       dataAdmissaoAte: umSo(dataAdmissaoAte),
     });
+  }
+
+  /**
+   * EXPORTAÇÃO EM EXCEL do Gerenciador do Portal (OST das ondas, Onda 2b). Mesmos filtros da lista
+   * (sem paginação: leva TODO o recorte), com uma coluna a mais que as outras telas não têm: o LINK
+   * VIVO de acesso de cada candidato, para envio em massa por WhatsApp.
+   *
+   * A REGRA PERMANENTE DO DIRETOR (link sempre vivo, NUNCA gerar link novo à toa) é cumprida aqui
+   * assim: só as linhas cujo estado é VIVO têm o link resolvido, e para elas `emitirLinkParaCopiar`
+   * REAPROVEITA o link existente (não cunha, não revoga, não grava trilha, é um não-evento). Linhas
+   * sem link vivo recebem uma nota na célula e nenhum link é criado.
+   *
+   * §A.6: o arquivo carrega credencial (as URLs vivas), então vai pelo mesmo caminho de download
+   * autenticado do botão de copiar, com `Cache-Control: no-store, private`; nada é logado nem
+   * persistido aqui. Governada pelo menu `portal-links` (coringa `PortalPainelController.*`), como as
+   * demais operações desta classe.
+   */
+  @Get("candidatos/relatorio")
+  async candidatosRelatorio(
+    @Res({ passthrough: true }) res: Response,
+    @CurrentUser() user: AuthUser,
+    @Query("aba") aba?: string | string[],
+    @Query("nome") nome?: string | string[],
+    @Query("clientes") clientes?: string | string[],
+    @Query("cargos") cargos?: string | string[],
+    @Query("documentos") documentos?: string | string[],
+    @Query("situacoes") situacoes?: string | string[],
+    @Query("estadosLink") estadosLink?: string | string[],
+    @Query("origens") origens?: string | string[],
+    @Query("recorte") recorte?: string | string[],
+    @Query("ultimoAcessoDe") ultimoAcessoDe?: string | string[],
+    @Query("ultimoAcessoAte") ultimoAcessoAte?: string | string[],
+    @Query("dataAdmissaoDe") dataAdmissaoDe?: string | string[],
+    @Query("dataAdmissaoAte") dataAdmissaoAte?: string | string[],
+  ): Promise<StreamableFile> {
+    const linhas = await this.painel.todasAsLinhasParaRelatorio({
+      aba: umSo(aba),
+      nome: umSo(nome),
+      clientes: parseMulti(umSo(clientes)),
+      cargos: parseMulti(umSo(cargos)),
+      documentos: parseMulti(umSo(documentos)),
+      situacoes: parseMulti(umSo(situacoes)),
+      estadosLink: parseMulti(umSo(estadosLink)),
+      origens: parseMulti(umSo(origens)),
+      recorte: umSo(recorte),
+      ultimoAcessoDe: umSo(ultimoAcessoDe),
+      ultimoAcessoAte: umSo(ultimoAcessoAte),
+      dataAdmissaoDe: umSo(dataAdmissaoDe),
+      dataAdmissaoAte: umSo(dataAdmissaoAte),
+    });
+
+    // LINK POR CANDIDATO: só para quem está VIVO, reaproveitando o link existente (não cunha nada).
+    // Falha de emissão de uma linha não derruba o relatório: aquela célula fica sem link.
+    const linhasXlsx: LinhaRelatorio[] = [];
+    for (const l of linhas) {
+      let url: string | null = null;
+      if (precisaResolverLink(l)) {
+        try {
+          const emissao = await this.identidade.emitirLinkParaCopiar(l.admissaoId, user.id);
+          // `reutilizado: true` = o link já existia e foi devolvido sem cunhar nem revogar. Só esse
+          // caso vira URL no arquivo; qualquer outro (nada a reaproveitar) deixa a célula sem link.
+          if (emissao.emitido?.reutilizado) url = emissao.emitido.link;
+        } catch {
+          // deixa a célula sem link; o consultor gera na tela pelo botão de copiar.
+        }
+      }
+      linhasXlsx.push(montarLinhaRelatorioPortal(l, url));
+    }
+
+    const buffer = await gerarXlsxGenerico(
+      "Gerenciador do Portal",
+      COLUNAS_RELATORIO_PORTAL,
+      linhasXlsx,
+    );
+    const a = new Date();
+    const d2 = (n: number) => String(n).padStart(2, "0");
+    const nomeArquivo = `gerenciador-portal-${a.getFullYear()}-${d2(a.getMonth() + 1)}-${d2(a.getDate())}.xlsx`;
+    res.set({
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename="${nomeArquivo}"`,
+      "Cache-Control": "no-store, private",
+    });
+    return new StreamableFile(buffer);
   }
 
   // ══ A FILA DE TRAVAS DA PORTA DE E-MAIL (contrato v2, seção 6) ══════════════════════════════

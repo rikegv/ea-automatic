@@ -12,8 +12,9 @@ import type {
   PedidoDeAjudaDoPortal,
   TravaDeAcessoItem,
 } from "@ea/shared-types";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, apiDownload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { ExcelLogo } from "@/components/ui/ExcelLogo";
 import { cn } from "@/lib/cn";
 import { caixaAlta } from "@/lib/nome";
 import { PageHead } from "@/components/ui/PageHead";
@@ -173,6 +174,7 @@ export default function PortalLinksPage() {
   const [recorte, setRecorte] = useState<Recorte>("");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [exportando, setExportando] = useState(false);
 
   // ── Filtros, TODOS múltiplos (§A.28) ─────────────────────────────────────────────────────────
   const [busca, setBusca] = useState("");
@@ -235,6 +237,27 @@ export default function PortalLinksPage() {
   );
 
   const filtrosAtivos = useMemo(() => contarFiltros(filtros), [filtros]);
+
+  // Exportar Excel (OST das ondas, Onda 2b): leva TODO o recorte dos filtros atuais (sem paginação),
+  // com o link vivo por candidato. É um GET autenticado porque o backend resolve o link por linha;
+  // o arquivo carrega credencial, então segue o mesmo download do botão de copiar (§A.6).
+  async function exportarExcel() {
+    if (exportando) return;
+    setExportando(true);
+    try {
+      const q = queryDoPainel(filtros);
+      const hoje = new Date().toISOString().slice(0, 10);
+      await apiDownload(
+        `${ROTA_CANDIDATOS}/relatorio?${q}`,
+        `gerenciador-portal-${hoje}.xlsx`,
+        token,
+      );
+    } catch {
+      // O browser já mostra a falha de rede; não deixa estado sujo.
+    } finally {
+      setExportando(false);
+    }
+  }
 
   function limparFiltros() {
     setBusca("");
@@ -958,6 +981,19 @@ export default function PortalLinksPage() {
           <Button variant="secondary" onClick={() => void carregar()} className="px-3 py-2">
             <Icon name="refresh" className={cn("h-4 w-4", carregando && "animate-spin")} />
             Atualizar
+          </Button>
+
+          {/* Exportar Excel (OST das ondas, Onda 2b): o recorte atual, com o link vivo de cada
+              candidato para envio em massa por WhatsApp. O link é SEMPRE o vivo, nunca gerado à toa. */}
+          <Button
+            variant="secondary"
+            onClick={() => void exportarExcel()}
+            disabled={exportando}
+            className="px-3 py-2"
+            title="Exportar a lista atual em Excel, com o link de acesso vivo de cada candidato"
+          >
+            <ExcelLogo className="h-4 w-4" />
+            {exportando ? "Exportando..." : "Exportar Excel"}
           </Button>
         </div>
         )}

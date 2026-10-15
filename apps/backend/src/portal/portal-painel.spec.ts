@@ -76,7 +76,7 @@ describe("CONDIÇÃO 1: a controller nova é REIVINDICADA por menu", () => {
     (n) => n !== "constructor",
   );
 
-  it("a controller tem os seis handlers esperados", () => {
+  it("a controller tem os sete handlers esperados", () => {
     // `filtros` é o catálogo das opções (§A.37), que nasceu na segunda rodada. Ele lista cliente,
     // cargo e documento do recorte inteiro: se ficasse fora do menu, qualquer sessão autenticada
     // leria o catálogo de clientes e cargos com link emitido, que é meia lista nominal.
@@ -94,8 +94,13 @@ describe("CONDIÇÃO 1: a controller nova é REIVINDICADA por menu", () => {
     // pela mesma régua: catálogo aberto diz quais motivos de trava existem na casa.
     // `destravarAcesso` é o que mais precisa do menu dos três: ele DESFAZ uma proteção, e num caso
     // (`CPF_DE_OUTRO_CANDIDATO`) o que ele desfaz é a trava de DUAS pessoas disputando o mesmo CPF.
+    // `candidatosRelatorio` é a exportação em Excel (OST das ondas, Onda 2b): leva a lista nominal E
+    // o link vivo de acesso de cada candidato. É a operação que MAIS precisa do menu desta classe,
+    // porque o arquivo carrega credencial; o coringa `PortalPainelController.*` já a reivindica, e o
+    // `it.each(HANDLERS)` abaixo prova que ela não fica aberta.
     expect(HANDLERS.sort()).toEqual([
       "candidatos",
+      "candidatosRelatorio",
       "contadores",
       "destravarAcesso",
       "filtros",
@@ -207,17 +212,21 @@ describe("CONDIÇÃO 3: o teto da página é do servidor", () => {
   });
 
   /**
-   * AS CINCO ROTAS DE LEITURA, e só elas: o `destravarAcesso` é POST e não entra na conta, porque
+   * AS SEIS ROTAS DE LEITURA, e só elas: o `destravarAcesso` é POST e não entra na conta, porque
    * resposta de POST não é cacheada pelo proxy nem pelo disco do navegador.
    *
    * A FILA DE TRAVAS É A QUE MAIS PRECISA DISSO, e o motivo é o mesmo que criou a regra na lista de
    * candidatos: ela carrega NOME DE CANDIDATO, e a resposta atravessa o proxy same-origin do Next.
    * Sem `no-store, private`, o retrato de quem está em disputa de identidade fica no cache
    * intermediário e no disco de quem abriu a tela.
+   *
+   * A SEXTA É A EXPORTAÇÃO EM EXCEL (OST das ondas, Onda 2b), e ela é a que mais pede o cabeçalho de
+   * todas: o arquivo carrega NOME e o LINK VIVO (credencial) de cada candidato; o blob não pode
+   * ficar no cache do proxy nem no disco. Ver `candidatosRelatorio`.
    */
-  it("as CINCO rotas de leitura mandam `no-store, private`, como a rota do candidato", () => {
+  it("as SEIS rotas de leitura mandam `no-store, private`, como a rota do candidato", () => {
     const cabecalhos = ARQUIVO_CONTROLLER.match(/"Cache-Control": "no-store, private"/g) ?? [];
-    expect(cabecalhos).toHaveLength(5);
+    expect(cabecalhos).toHaveLength(6);
   });
 
   /**
