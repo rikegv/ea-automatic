@@ -647,6 +647,23 @@ export default function PortalDoCandidatoPage() {
   );
 
   /**
+   * ENTRADA DIRETA PELO AUTOATENDIMENTO (porta de e-mail). Quando o candidato prova a caixa e grava
+   * CPF+data, o servidor devolve a sessão (desfecho `ACESSO_ABERTO`) e ele ENTRA por aqui, SEM novo
+   * link. É o MESMO pouso do `identificar`: guarda a sessão e abre a trilha, e a tela sai da entrada e
+   * cai no termo. §A.6: a sessão não carrega dado pessoal (veto V5), e o sessionStorage morre ao
+   * fechar a aba.
+   */
+  const entrarComSessao = useCallback(
+    async (novaSessao: string): Promise<void> => {
+      setAvisoSessao(null);
+      setSessao(novaSessao);
+      guardar(CHAVE_SESSAO, novaSessao);
+      await carregarTrilha(novaSessao);
+    },
+    [carregarTrilha],
+  );
+
+  /**
    * A VÁLVULA DE RECUPERAÇÃO, e ela não é enfeite: o candidato cuja data de nascimento está errada
    * na NOSSA base ficaria trancado para sempre, e não há RH atrás do balcão. Ela nunca confirma nem
    * nega que o link existe, então falha de rede também termina na mesma frase.
@@ -1017,6 +1034,7 @@ export default function PortalDoCandidatoPage() {
     return (
       <Casca centralizado>
         <EntradaSemLink
+          aoAbrirSessao={entrarComSessao}
           instrucaoDoLink={
             <div className="flex flex-col items-center text-center">
               <IconeLink cor={AZUL} tamanho={38} />
@@ -1066,6 +1084,7 @@ export default function PortalDoCandidatoPage() {
       return (
         <Casca centralizado>
           <EntradaSemLink
+            aoAbrirSessao={entrarComSessao}
             instrucaoDoLink={
               <div className="flex flex-col items-center text-center">
                 <IconeLink cor={AZUL} tamanho={38} />

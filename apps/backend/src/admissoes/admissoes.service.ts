@@ -3848,18 +3848,37 @@ export class AdmissoesService {
      * funil e a FICHA da admissão (`candidatos`) segue NULL, e é isso que faz a porta de link
      * (`identificar`) falhar o `casouData` para sempre, além de deixar a ficha que a esteira, a folha
      * e o G.I leem sem a data. PREENCHE SÓ QUANDO ESTÁ VAZIA, por CPF técnico: nunca sobrescreve uma
-     * data real já existente ("o que está validado não se altera"), nunca reabre nada. §A.6: sem nome,
-     * sem log do valor.
+     * data real já existente ("o que está validado não se altera"), nunca reabre nada. Quando de fato
+     * preenche, deixa TRILHA em `candidato_alteracoes_log` (P3). §A.6: a data entra nessa trilha
+     * permanente (exceção consciente do schema, que guarda valor antes/depois e proíbe só CPF), nunca
+     * no log da aplicação; opera por CPF técnico, sem nome.
      */
     if (dataNascimento) {
       const atual = await this.db.query.admissoes.findFirst({
         where: eq(admissoes.id, admissaoId),
       });
       if (atual?.candidatoCpf) {
-        await this.db
+        const preenchidas = await this.db
           .update(candidatos)
           .set({ dataNascimento })
-          .where(and(eq(candidatos.cpf, atual.candidatoCpf), isNull(candidatos.dataNascimento)));
+          .where(and(eq(candidatos.cpf, atual.candidatoCpf), isNull(candidatos.dataNascimento)))
+          .returning({ cpf: candidatos.cpf });
+        /*
+         * TRILHA DA PONTE: quando a data ENTRA na ficha por aqui, deixa rastro em
+         * `candidato_alteracoes_log`, o MESMO lugar da correção de CPF, para a ficha não ganhar a data
+         * por escrita de sistema SILENCIOSA (quando/por qual admissão). `valorAnterior` é nulo (a ficha
+         * estava sem data), ator SISTEMA (`autorId` nulo, como a ponte do CPF). SÓ quando de fato
+         * preencheu (returning não vazio): nunca registra um no-op do `isNull`.
+         */
+        if (preenchidas.length > 0) {
+          await this.db.insert(candidatoAlteracoesLog).values({
+            admissaoId,
+            campo: "dataNascimentoPortal",
+            valorAnterior: null,
+            valorNovo: dataNascimento,
+            autorId: null,
+          });
+        }
       }
     }
   }

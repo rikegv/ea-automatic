@@ -447,6 +447,64 @@ export class PortalIdentidadeService {
     return this.emitirComTrava(admissaoId, autorId, false, "ENTREGA_A_MAO", false, true);
   }
 
+  /**
+   * ABRE A SESSÃO DO AUTOATENDIMENTO (porta de e-mail), SEM enviar link.
+   *
+   * A porta de e-mail prova a posse da caixa (código de uso único) e grava CPF+data; a partir daqui
+   * o candidato ENTRA, em vez de receber um link e reiniciar o acesso. Reusa a MESMA máquina da porta
+   * de link, e é por isso que a cunhagem mora AQUI e não na porta de e-mail: um link vivo ANCORA a
+   * sessão (o `jti` é a linha de `portal_links` que `PortalLinkVivoService.exigirVivo` confere, e
+   * `minutosDaSessao` amarra o prazo da sessão ao do link). `emitirComTrava` apenas cria/reaproveita a
+   * linha, NÃO envia e-mail (o envio é de quem chama `enviarParaAdmissao`, e aqui ninguém chama);
+   * `devolverExistenteSeVivo` reaproveita o link vivo que o candidato já tenha, sem revogar nem
+   * derrubar uma sessão em uso.
+   *
+   * Devolve `null` quando a porta de sessão está desligada (sem `PORTAL_SESSION_PRIVATE_KEY`) ou a
+   * admissão está fora do recorte de farol (declínio/rescisão/não liberada): o chamador cai no
+   * desfecho neutro (`DADOS_RECEBIDOS`), sem entrar.
+   *
+   * ┌─ AS DEFESAS DA PORTA DE LINK SÃO HERDADAS POR CONSTRUÇÃO ─────────────────────────────────────┐
+   * │ (1) BINDING a UMA admissão: o `admissaoId` vem do VÍNCULO (`as_candidaturas`), resolvido pelo │
+   * │     chamador, que já trava a ambiguidade (`EMAIL_AMBIGUO`); nunca de busca por CPF do corpo.  │
+   * │ (2) TETO anti-brute-force da data: mora ANTES, no `identidade` da porta de e-mail, onde a     │
+   * │     divergência de CPF/data TRAVA o candidato (mais forte que o 429 do link). Chegar aqui já  │
+   * │     é prova de identidade sem divergência.                                                    │
+   * │ (3) PRAZO <= janela do link: `minutosDaSessao` recorta no que resta da linha de `portal_links`.│
+   * │ (4) ANTI-ORÁCULO: este caminho só é alcançado DEPOIS do desfecho GRAVADO; a falha some no     │
+   * │     desfecho neutro, sem contar nada a quem tenta.                                            │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  async abrirSessaoNoAutoatendimento(
+    admissaoId: string,
+    autorId: string,
+    contexto: { ip: string | null; userAgent: string | null },
+  ): Promise<{ sessao: string; expiraEm: string } | null> {
+    const chaveSessao = this.chaveDaSessao();
+    if (!chaveSessao) return null;
+
+    const emissao = await this.emitirComTrava(admissaoId, autorId, false, "AUTOATENDIMENTO", false, true);
+    const vivo = emissao.emitido ?? emissao.jaAtivo;
+    if (!vivo) return null;
+
+    const agoraMs = Date.now();
+    const minutos = minutosDaSessao(agoraMs, vivo.expiraEm.getTime(), PORTAL_SESSAO_TTL_MINUTOS);
+    const sessao = cunharSessao({ admissaoId, jti: vivo.jti, agoraMs, ttlMinutos: minutos }, chaveSessao);
+    const expiraEm = new Date(agoraMs + minutos * 60_000);
+
+    await this.trilha.registrar(
+      "PORTAL_SESSAO_EMITIDA",
+      {
+        jtiLink: vivo.jti,
+        exp: Math.floor(expiraEm.getTime() / 1000),
+        ip: contexto.ip,
+        userAgent: contexto.userAgent,
+      },
+      contexto.ip,
+    );
+
+    return { sessao, expiraEm: expiraEm.toISOString() };
+  }
+
   private async emitirComTrava(
     admissaoId: string,
     autorId: string,

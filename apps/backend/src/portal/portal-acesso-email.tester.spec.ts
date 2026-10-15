@@ -942,44 +942,47 @@ describe("decisaoDaIdentidade: precedência item a item", () => {
   });
 });
 
-describe("o desfecho de sucesso é LINK ENVIADO, e nunca sessão (o veto da v1)", () => {
-  it("REQUISITO: `SITUACOES_DO_ACESSO_POR_EMAIL` tem exatamente LINK_ENVIADO e DADOS_RECEBIDOS", () => {
-    // A v1 morreu por emitir sessão do Portal a partir da posse da caixa. A chave de acesso continua
-    // sendo link + CPF + nascimento, e o sucesso desta porta é "olhe o seu e-mail", não "entre
-    // agora". O catálogo fechado é o que torna a regressão impossível de passar em silêncio.
-    expect([...SITUACOES_DO_ACESSO_POR_EMAIL].sort()).toEqual(["DADOS_RECEBIDOS", "LINK_ENVIADO"]);
-    expect(SITUACOES_DO_ACESSO_POR_EMAIL).toHaveLength(2);
+describe("o desfecho de sucesso é ENTRAR (ACESSO_ABERTO), e a sessão só vem por ele", () => {
+  it("REQUISITO: `SITUACOES_DO_ACESSO_POR_EMAIL` é LINK_ENVIADO, DADOS_RECEBIDOS e ACESSO_ABERTO", () => {
+    // DECISÃO DO DIRETOR (15/10/2026): o e-mail é o identificador de entrada; depois do código e do
+    // CPF+data o candidato ENTRA direto (ACESSO_ABERTO carrega a sessão), sem novo link. LINK_ENVIADO
+    // e DADOS_RECEBIDOS ficam como FALLBACK (porta de sessão desligada, ou admissão fora do recorte de
+    // farol). O catálogo fechado é o que torna uma QUARTA situação impossível de entrar em silêncio.
+    expect([...SITUACOES_DO_ACESSO_POR_EMAIL].sort()).toEqual([
+      "ACESSO_ABERTO",
+      "DADOS_RECEBIDOS",
+      "LINK_ENVIADO",
+    ]);
+    expect(SITUACOES_DO_ACESSO_POR_EMAIL).toHaveLength(3);
   });
 
-  it("REQUISITO: nenhuma situação do catálogo sugere entrega de sessão, token ou Portal aberto", () => {
-    // Trava o nome também, e não só a quantidade: uma variante chamada `PORTAL_ABERTO` ou
-    // `SESSAO_EMITIDA` seria a v1 voltando com outro rótulo.
+  it("REQUISITO: a sessão é entregue SÓ por ACESSO_ABERTO, nunca por uma segunda situação paralela", () => {
+    // A ÚNICA situação que entrega sessão é ACESSO_ABERTO. Uma variante paralela (`PORTAL_ABERTO`,
+    // `SESSAO_EMITIDA`) seria uma segunda porta de sessão, provavelmente SEM as defesas herdadas da
+    // porta de link, que é o que a trava de `portal-acesso-email.travas` impede dentro do serviço.
+    expect(SITUACOES_DO_ACESSO_POR_EMAIL.filter((s) => s === "ACESSO_ABERTO")).toHaveLength(1);
     for (const situacao of SITUACOES_DO_ACESSO_POR_EMAIL) {
-      expect(situacao, situacao).not.toMatch(/SESS|TOKEN|BILHETE|ABERT|ENTRAR|LOGIN|ACESSO_LIBERADO/i);
+      if (situacao === "ACESSO_ABERTO") continue;
+      expect(situacao, situacao).not.toMatch(/SESS|TOKEN|BILHETE|ABERT|ENTRAR|LOGIN|LIBERAD/i);
     }
   });
 
-  it("REQUISITO: a resposta do passo de identidade não declara campo de sessão nem de minutos de sessão", () => {
-    // Leitura estrutural do vocabulário compartilhado: a v1 devolvia `{ situacao, sessao, minutos }`.
-    // Se um campo desses reaparecer na interface, o veto foi desfeito no tipo antes de ser desfeito
-    // no código, e é aqui que isso é pego.
+  it("REQUISITO: a resposta declara situacao + a sessão (sessao/expiraEm), e NADA de pessoa", () => {
+    // O ACESSO_ABERTO carrega a sessão (bearer) e o seu prazo, como `SessaoDoCandidato`. `sessao` e
+    // `expiraEm` passam a ser PERMITIDOS; o que NÃO pode voltar é o `emailMascarado` da v1 (que a
+    // auditoria tirou, condição 1), nem nome, CPF, link cru, bilhete ou token.
     const campos = camposDaInterface("IdentidadeDoAcessoResposta");
     expect(campos).toContain("situacao");
-    for (const proibido of ["sessao", "sessão", "token", "minutos", "url", "link", "bilhete"]) {
+    for (const proibido of ["email", "nome", "cpf", "token", "url", "link", "bilhete", "minutos", "mascar"]) {
       expect(campos.map((c) => c.toLowerCase()), proibido).not.toContain(proibido);
     }
   });
 
-  it("REQUISITO: o desfecho declara SÓ a situação, sem e-mail mascarado e sem nome", () => {
-    // O `emailMascarado` EXISTIU nesta interface e a auditoria o tirou (condição 1): ele entregava o
-    // DOMÍNIO de um endereço cuja posse o chamador não provou, e "para a pessoa saber onde procurar"
-    // é exatamente a frase com que ele volta. Quem precisa saber para onde o link foi é quem tem a
-    // caixa, e essa pessoa já recebeu a mensagem.
-    //
-    // A ausência do campo É a defesa, e uma lista EXATA é a única asserção que a tranca: proibir
-    // nomes um a um não pega o campo que ninguém pensou em proibir.
-    expect(camposDaInterface("IdentidadeDoAcessoResposta")).toEqual(["situacao"]);
-    type ChaveExtra = Exclude<keyof IdentidadeDoAcessoResposta, "situacao">;
+  it("REQUISITO: a interface declara SÓ situacao, sessao e expiraEm (nada além dos três)", () => {
+    // A lista EXATA é a tranca: proibir nomes um a um não pega o campo que ninguém pensou em proibir.
+    // Os três e nada mais, e `sessao`/`expiraEm` são opcionais (só existem no desfecho ACESSO_ABERTO).
+    expect(camposDaInterface("IdentidadeDoAcessoResposta")).toEqual(["situacao", "sessao", "expiraEm"]);
+    type ChaveExtra = Exclude<keyof IdentidadeDoAcessoResposta, "situacao" | "sessao" | "expiraEm">;
     const semChaveExtra: ChaveExtra extends never ? true : false = true;
     expect(semChaveExtra).toBe(true);
   });

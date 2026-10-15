@@ -411,12 +411,28 @@ describe("trava 1: a admissão vem do VÍNCULO, e o CPF do corpo NUNCA acha pess
     }
   });
 
-  it("a porta nova não emite sessão do Portal (o que a v1 fazia e a auditoria vetou)", () => {
-    // A chave de acesso continua sendo link + CPF + nascimento em `POST portal/identificar`. Nenhuma
-    // função de cunhagem de sessão pode ser alcançável daqui.
+  it("a porta ABRE a sessão só por DELEGAÇÃO, nunca cunhando por conta própria", () => {
+    // DECISÃO DO DIRETOR (15/10/2026): a porta de e-mail passa a ENTRAR direto (desfecho
+    // `ACESSO_ABERTO`), em vez de mandar um novo link e reiniciar o acesso. A v1 que a auditoria vetou
+    // CUNHAVA a sessão aqui dentro; isso continua PROIBIDO. A cunhagem mora em
+    // `PortalIdentidadeService.abrirSessaoNoAutoatendimento`, o ÚNICO lugar que toca a chave de
+    // assinatura, `portal_links` e a função de cunhagem, e que herda as defesas da porta de link
+    // (binding a uma admissão pelo vínculo, prazo <= janela do link, ancoragem em `portal_links`).
+    // Esta trava virou de "não há sessão" para "a sessão é PEDIDA, não assinada aqui".
     const fonte = fonteDe(SERVICO);
-    for (const padrao of ["cunharSessao", "minutosDaSessao", "PortalSessao", "sessao:"]) {
-      expect(fonte, `caminho de sessão encontrado: ${padrao}`).not.toContain(padrao);
+    // (a) DELEGAÇÃO OBRIGATÓRIA: a abertura da sessão vem do serviço de identidade, com as defesas.
+    expect(fonte, "a abertura de sessão precisa ser delegada ao serviço de identidade").toMatch(
+      /this\.portalIdentidade\.abrirSessaoNoAutoatendimento\(/,
+    );
+    // (b) NADA de cunhagem/assinatura/chave de sessão NESTE arquivo: a sessão não nasce aqui.
+    for (const padrao of [
+      "cunharSessao(",
+      "minutosDaSessao(",
+      "chaveDaSessao",
+      "PORTAL_SESSION_PRIVATE_KEY",
+      "PortalSessaoPayload",
+    ]) {
+      expect(fonte, `cunhagem direta de sessão encontrada: ${padrao}`).not.toContain(padrao);
     }
   });
 });

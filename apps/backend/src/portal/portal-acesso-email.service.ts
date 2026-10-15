@@ -54,6 +54,7 @@ import { AdmissoesService } from "../admissoes/admissoes.service";
 import { FAROIS_FORA_DO_PAINEL } from "./portal-painel.service";
 import { PortalCorreioService } from "./portal-correio.service";
 import { PortalEnvioService } from "./portal-envio.service";
+import { PortalIdentidadeService } from "./portal-identidade.service";
 import { PortalTrilhaService } from "./portal-trilha.service";
 
 /**
@@ -216,6 +217,16 @@ export class PortalAcessoEmailService {
      * que é a que protege o candidato que já está do lado de dentro.
      */
     private readonly envio: PortalEnvioService,
+    /**
+     * A CUNHAGEM DA SESSÃO É DELEGADA, E NÃO REESCRITA. Depois de provar a caixa de e-mail e gravar
+     * CPF+data, o candidato ENTRA direto (vai ao termo, sem novo link). A sessão nasce em
+     * `PortalIdentidadeService.abrirSessaoNoAutoatendimento`, o ÚNICO lugar que toca `portal_links`, a
+     * chave de assinatura e `cunharSessao`: este serviço público NÃO cunha, não assina e não escreve
+     * credencial, só pede. É o mesmo molde da emissão (reusada via `envio`), e é o que a trava de
+     * `portal-acesso-email.travas` passou a EXIGIR (herança das defesas da porta de link). §A.38: rota
+     * pública que agora abre acesso, re-auditoria do `seguranca` obrigatória antes do deploy.
+     */
+    private readonly portalIdentidade: PortalIdentidadeService,
     @Inject(ThrottlerStorage) private readonly throttle: ThrottlerStorage,
     /*
      * A PONTE DO CPF PENDENTE. Quando o candidato entra por e-mail e grava o CPF REAL, a admissão que
@@ -1054,7 +1065,7 @@ export class PortalAcessoEmailService {
      */
     await this.reconciliarCpfProvisorioDaEsteira(desfecho.candidatoId, cpf, dataNascimento);
 
-    return this.despacharLink(desfecho.candidatoId, contexto);
+    return this.entrarNoAutoatendimento(desfecho.candidatoId, contexto);
   }
 
   /**
@@ -1217,7 +1228,60 @@ export class PortalAcessoEmailService {
     }
   }
 
-  // ══ A SAÍDA: O LINK, PELO CAMINHO QUE JÁ EXISTE ═════════════════════════════════════════════
+  // ══ A SAÍDA: O CANDIDATO ENTRA (sessão), E SÓ CAI NO LINK COMO FALLBACK ═════════════════════
+
+  /**
+   * O DESFECHO DE SUCESSO DA PORTA DE E-MAIL: o candidato ENTRA agora, sem receber novo link.
+   *
+   * O e-mail é o identificador de entrada; CPF e data são dados a completar, não uma segunda
+   * validação de acesso (decisão do diretor, 15/10/2026). Provada a caixa (código) e gravado o
+   * CPF+data (desfecho GRAVADO), este método ABRE a sessão e a tela avança ao termo, eliminando a
+   * ida-e-volta pelo link ("enviamos um novo link, reinicie") que existia antes.
+   *
+   * A CUNHAGEM É DELEGADA a `PortalIdentidadeService.abrirSessaoNoAutoatendimento` (o único lugar que
+   * toca `portal_links`, a chave e `cunharSessao`), que herda as defesas da porta de link: binding a
+   * UMA admissão pelo vínculo, prazo <= janela do link, ancoragem em `portal_links`. Este serviço
+   * público NÃO cunha, não assina e não escreve credencial: só pede, como já faz com a emissão.
+   *
+   * FALLBACK: se a porta de sessão está desligada (sem chave) ou a admissão está fora do recorte de
+   * farol, `abrirSessaoNoAutoatendimento` devolve `null` e caímos no caminho antigo (`despacharLink`),
+   * para o candidato nunca ficar sem entrada. É o único ramo que ainda pode enviar link, e ele passa
+   * pela MESMA emissão delegada de sempre (`PortalEnvioService.enviarParaAdmissao`).
+   */
+  private async entrarNoAutoatendimento(
+    candidatoId: string,
+    contexto: { ip: string | null; userAgent: string | null },
+  ): Promise<IdentidadeDoAcessoResposta> {
+    const admissaoId = await this.admissaoVivaDoCandidato(candidatoId);
+    if (!admissaoId) return { situacao: "DADOS_RECEBIDOS" };
+
+    const autorId = await this.autorDoLink(candidatoId, admissaoId);
+    if (!autorId) {
+      await this.registrar("PORTAL_ACESSO_EMAIL_RECUSADO", contexto, {
+        motivoCodigo: "SEM_AUTOR_PARA_O_LINK",
+      });
+      return { situacao: "DADOS_RECEBIDOS" };
+    }
+
+    try {
+      const aberto = await this.portalIdentidade.abrirSessaoNoAutoatendimento(
+        admissaoId,
+        autorId,
+        contexto,
+      );
+      if (aberto) {
+        // ENTROU: a trilha da sessão (PORTAL_SESSAO_EMITIDA) já foi gravada na cunhagem. Nenhum link
+        // é enviado por este caminho; a sessão no corpo é a credencial que a tela usa para seguir.
+        return { situacao: "ACESSO_ABERTO", sessao: aberto.sessao, expiraEm: aberto.expiraEm };
+      }
+    } catch (erro) {
+      // §A.6: só o nome da classe. Falhar aqui NÃO derruba o fluxo: o CPF+data já estão gravados.
+      this.log.error(`excecao ao abrir a sessao do autoatendimento: ${(erro as Error).name}`);
+    }
+
+    // Porta de sessão desligada ou admissão fora do recorte: o caminho antigo, o link por e-mail.
+    return this.despacharLink(candidatoId, contexto);
+  }
 
   /**
    * HAVENDO ADMISSÃO VIVA LIGADA AO CANDIDATO PELO VÍNCULO, pede o envio do link. Não havendo, o

@@ -210,7 +210,14 @@ function Titulo({ titulo, apoio }: { titulo: string; apoio: string }) {
 const MSG_EMAIL_NAO_IDENTIFICADO =
   "E-mail não identificado. Confira o e-mail digitado ou fale com o RH.";
 
-export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) {
+export function AcessoPorEmail({
+  aoIrParaLink,
+  aoAbrirSessao,
+}: {
+  aoIrParaLink?: () => void;
+  /** ACESSO_ABERTO: o servidor devolveu a sessão e o candidato entra direto (sem novo link). */
+  aoAbrirSessao?: (sessao: string) => void;
+}) {
   const [passo, setPasso] = useState<PassoDoAcessoPorEmail>("EMAIL");
 
   const [email, setEmail] = useState("");
@@ -399,6 +406,20 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
         });
         // §A.6: CPF e data saem do estado no mesmo instante em que o desfecho chega.
         limparDadosPessoais();
+        // ACESSO_ABERTO: o e-mail é o identificador de entrada. Provado o código e gravado CPF+data, o
+        // candidato ENTRA agora, sem receber novo link: a sessão (bearer) sobe para a página, que abre
+        // a trilha e leva ao termo.
+        if (r?.situacao === "ACESSO_ABERTO") {
+          if (r.sessao && aoAbrirSessao) {
+            aoAbrirSessao(r.sessao);
+            return;
+          }
+          // ENTROU mas não há como seguir aqui (sessão vazia ou sem o gancho da página): NÃO mentir
+          // "enviamos o seu link", porque nenhum link foi enviado. Desfecho NEUTRO: os dados foram
+          // recebidos e o RH segue. É o mesmo texto honesto de quando não há admissão viva.
+          setPasso("DADOS_RECEBIDOS");
+          return;
+        }
         setPasso(r?.situacao === "DADOS_RECEBIDOS" ? "DADOS_RECEBIDOS" : "LINK_ENVIADO");
       } catch (err) {
         const desfecho = err instanceof ApiError ? desfechoDaRecusa(err.status) : "FALHA";
@@ -419,7 +440,7 @@ export function AcessoPorEmail({ aoIrParaLink }: { aoIrParaLink?: () => void }) 
         setEnviando(false);
       }
     },
-    [bilhete, cpf, enviando, identidadePronta, isoNascimento, limparDadosPessoais],
+    [aoAbrirSessao, bilhete, cpf, enviando, identidadePronta, isoNascimento, limparDadosPessoais],
   );
 
   // ── EMAIL ─────────────────────────────────────────────────────────────────────────────────────

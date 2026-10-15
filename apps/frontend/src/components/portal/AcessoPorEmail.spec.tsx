@@ -73,6 +73,51 @@ function preencherIdentidade() {
   fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 }
 
+/** Como `irAIdentidade`, mas montando o componente COM as props (ex.: o gancho `aoAbrirSessao`). */
+async function irAIdentidadeCom(props: { aoAbrirSessao?: (sessao: string) => void }) {
+  apiFetch.mockResolvedValueOnce({ identificado: true, expiraEmMinutos: 10 });
+  render(<AcessoPorEmail {...props} />);
+  fireEvent.change(campo("portal-acesso-email"), { target: { value: EMAIL } });
+  fireEvent.click(screen.getByRole("button", { name: "Enviar código" }));
+  await waitFor(() => expect(campo("portal-acesso-codigo")).toBeTruthy());
+  apiFetch.mockResolvedValueOnce({ bilhete: "bilhete-curto", expiraEmMinutos: 5 });
+  fireEvent.change(campo("portal-acesso-codigo"), { target: { value: "123456" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirmar código" }));
+  await waitFor(() => expect(campo("portal-acesso-cpf")).toBeTruthy());
+}
+
+describe("P2: ACESSO_ABERTO faz o candidato ENTRAR direto, e nunca mente 'link enviado'", () => {
+  it("com sessão e gancho: dispara aoAbrirSessao com a sessão e NÃO mostra a tela de link", async () => {
+    const aoAbrirSessao = vi.fn();
+    await irAIdentidadeCom({ aoAbrirSessao });
+    apiFetch.mockResolvedValueOnce({
+      situacao: "ACESSO_ABERTO",
+      sessao: "SESS-TOKEN",
+      expiraEm: "2026-10-15T15:00:00.000Z",
+    });
+    preencherIdentidade();
+    await waitFor(() => expect(aoAbrirSessao).toHaveBeenCalledWith("SESS-TOKEN"));
+    // A entrada é da PÁGINA (troca de tela); este componente não exibe "Enviamos O Seu Link".
+    expect(document.body.textContent ?? "").not.toContain("Enviamos O Seu Link");
+  });
+
+  it("ACESSO_ABERTO SEM o gancho: desfecho NEUTRO (Recebemos), nunca 'Enviamos O Seu Link'", async () => {
+    // Defesa contra a tela mentirosa: se o servidor abrir o acesso mas a página não tiver passado o
+    // gancho (ou a sessão vier vazia), a tela NÃO pode dizer que enviou um link que nunca saiu.
+    await irAIdentidadeCom({});
+    apiFetch.mockResolvedValueOnce({
+      situacao: "ACESSO_ABERTO",
+      sessao: "SESS-TOKEN",
+      expiraEm: "2026-10-15T15:00:00.000Z",
+    });
+    preencherIdentidade();
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("Recebemos Os Seus Dados"));
+    expect(document.body.textContent ?? "").not.toContain("Enviamos O Seu Link");
+    // §A.6: o CPF saiu do estado no desfecho (limparDadosPessoais roda antes de decidir a tela).
+    expect(document.querySelector("#portal-acesso-cpf")).toBeNull();
+  });
+});
+
 describe("1. porta de e-mail: identifica abre o código, nao identifica mostra a mensagem (decisao do diretor 14/10)", () => {
   // DECISÃO DO DIRETOR (14/10/2026): a usabilidade pesou mais que o anti-enumeração. A tela PODE
   // dizer "e-mail não identificado" e NÃO abre o campo do código nesse caso. O custo (revelar se o

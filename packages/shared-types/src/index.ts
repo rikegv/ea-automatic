@@ -5206,14 +5206,21 @@ export const MOTIVO_DA_TRAVA_LABEL: Record<MotivoDaTravaDeAcesso, string> = {
 /**
  * O DESFECHO do passo de identidade, como a tela do candidato o recebe.
  *
- * Note o que NÃO existe aqui: nenhuma variante que entregue sessão. `LINK_ENVIADO` é o sucesso, e
- * ele significa "olhe o seu e-mail", não "entre agora".
+ * DECISÃO DO DIRETOR (15/10/2026): o e-mail é o identificador de entrada, e CPF+data são dados a
+ * completar, não uma segunda validação de acesso. Depois do código validado e do CPF+data gravados,
+ * o candidato ENTRA direto (desfecho `ACESSO_ABERTO`, que carrega a sessão), sem receber novo link
+ * nem refazer o acesso. `LINK_ENVIADO`/`DADOS_RECEBIDOS` permanecem como desfechos de fallback
+ * (porta de sessão desligada ou admissão fora do recorte). A sessão nasce com as MESMAS defesas da
+ * porta de link (binding a uma admissão pelo vínculo, prazo <= janela do link, ancoragem em
+ * `portal_links`): ver `PortalIdentidadeService.abrirSessaoNoAutoatendimento`.
  */
 export const SITUACOES_DO_ACESSO_POR_EMAIL = [
-  /** Havia admissão viva pelo vínculo: o link foi emitido e enviado para o e-mail já verificado. */
+  /** Fallback: admissão viva mas porta de sessão desligada; o link foi emitido e enviado ao e-mail. */
   "LINK_ENVIADO",
-  /** Não havia admissão ainda: o CPF e a data foram gravados e o time segue. */
+  /** Fallback: não havia admissão viva no recorte; o CPF e a data foram gravados e o time segue. */
   "DADOS_RECEBIDOS",
+  /** Sucesso: o candidato ENTRA agora. O corpo carrega a sessão; a tela avança ao termo, sem link. */
+  "ACESSO_ABERTO",
 ] as const;
 export type SituacaoDoAcessoPorEmail = (typeof SITUACOES_DO_ACESSO_POR_EMAIL)[number];
 
@@ -5262,6 +5269,15 @@ export interface ConfirmacaoDeCodigoResposta {
  */
 export interface IdentidadeDoAcessoResposta {
   situacao: SituacaoDoAcessoPorEmail;
+  /**
+   * Presente SÓ quando `situacao === "ACESSO_ABERTO"`: a sessão do Portal (bearer, mesmo formato de
+   * `SessaoDoCandidato`), para a tela avançar DIRETO ao termo sem novo link. É a MESMA credencial que
+   * `POST portal/identificar` emite, para a posse de quem acabou de provar a caixa + CPF + data.
+   * Ausente nos desfechos de fallback (`LINK_ENVIADO`/`DADOS_RECEBIDOS`): ali nenhuma credencial sai.
+   */
+  sessao?: string;
+  /** Presente SÓ quando `situacao === "ACESSO_ABERTO"`: o vencimento ISO da sessão. */
+  expiraEm?: string;
 }
 
 /** Uma linha da fila de travas, na tela do time. §A.6: sem CPF, sem e-mail, sem valor divergente. */

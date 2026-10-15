@@ -37,6 +37,7 @@ function servico(ehSemCpf: boolean) {
     explode as any, // trilha
     explode as any, // correio
     explode as any, // envio
+    explode as any, // identidade
     explode as any, // throttle
     admissoes as any,
   );
@@ -68,7 +69,7 @@ describe("AJUSTE 3: linkDirecionadoSemCpf (a URL nua do PROV)", () => {
     const config = { get: () => undefined };
     const admissoes = { ehAdmissaoSemCpf: vi.fn(async () => true) };
     const svc = new PortalAcessoEmailService(
-      null as any, config as any, null as any, null as any, null as any, null as any, admissoes as any,
+      null as any, config as any, null as any, null as any, null as any, null as any, null as any, admissoes as any,
     );
     const r = await svc.linkDirecionadoSemCpf("adm-prov");
     expect(r!.link).toBe("/portal");
@@ -78,7 +79,7 @@ describe("AJUSTE 3: linkDirecionadoSemCpf (a URL nua do PROV)", () => {
     const config = { get: (c: string) => (c === "PORTAL_LINK_BASE_URL" ? `${BASE}/` : undefined) };
     const admissoes = { ehAdmissaoSemCpf: vi.fn(async () => true) };
     const svc = new PortalAcessoEmailService(
-      null as any, config as any, null as any, null as any, null as any, null as any, admissoes as any,
+      null as any, config as any, null as any, null as any, null as any, null as any, null as any, admissoes as any,
     );
     const r = await svc.linkDirecionadoSemCpf("adm-prov");
     expect(r!.link).toBe(BASE);

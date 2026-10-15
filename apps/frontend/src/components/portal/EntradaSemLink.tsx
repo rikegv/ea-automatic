@@ -28,7 +28,14 @@ import { AcessoPorEmail } from "@/components/portal/AcessoPorEmail";
 
 type Caminho = "EMAIL" | "LINK";
 
-export function EntradaSemLink({ instrucaoDoLink }: { instrucaoDoLink: ReactNode }) {
+export function EntradaSemLink({
+  instrucaoDoLink,
+  aoAbrirSessao,
+}: {
+  instrucaoDoLink: ReactNode;
+  /** Chamado quando a porta de e-mail ABRE a sessão (ACESSO_ABERTO): o candidato entra direto. */
+  aoAbrirSessao?: (sessao: string) => void;
+}) {
   const [caminho, setCaminho] = useState<Caminho>("EMAIL");
 
   if (caminho === "LINK") {
@@ -46,5 +53,5 @@ export function EntradaSemLink({ instrucaoDoLink }: { instrucaoDoLink: ReactNode
     );
   }
 
-  return <AcessoPorEmail aoIrParaLink={() => setCaminho("LINK")} />;
+  return <AcessoPorEmail aoIrParaLink={() => setCaminho("LINK")} aoAbrirSessao={aoAbrirSessao} />;
 }
