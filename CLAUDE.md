@@ -1411,9 +1411,12 @@ coordenador mediu, o diretor deu a regra.)*
 
 ## A.48: A ADMISSÃO VAI AO GI COM apiSinc = FALSE, e o true DESVIA (regra permanente)
 
-**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = FALSE`.** É o default do fornecedor e
-o default do código, e produção **não** sobrepõe: a env `GI_API_SINC_ADMISSAO_DIGITAL` fica **ausente**
-(ausente = false). Ninguém liga o `true`, nem "só para o registro não sumir".
+**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = FALSE`, FIXO no código.** Desde
+15/10/2026 o valor NÃO vem mais de ambiente: o método que lia `GI_API_SINC_ADMISSAO_DIGITAL` e o 4º
+parâmetro que o botão manual usava para forçar `true` FORAM REMOVIDOS. Os TRÊS caminhos (botão manual,
+gatilho automático, reconciliação) montam o payload com `false`, travado por teste
+(`gi-apisinc-sempre-false.tester.spec.ts`: mesmo com a env `true`, o envio sai `false`). Ninguém liga o
+`true`, nem "só para o registro não sumir": não há mais caminho que o ligue.
 
 **O FUNDAMENTO, validado pelo diretor NA TELA do GI (06/10/2026):**
 - **`false` "Sincroniza com GI"**: roteia para o fluxo normal, a tela de **Cadastro de Funcionários**
@@ -1437,8 +1440,21 @@ mãe, endereço e salário parados no fornecedor **sem prazo e sem DELETE ao nos
 entrega ao fluxo que consome e não cria esse limbo. O veto do `seguranca` ao `true` permanente fica
 resolvido pelo próprio valor escolhido.
 
-*(Decisão do diretor, 06/10/2026, após validar na tela que o registro com `false` aparece onde ele
-cadastra. Registro detalhado no DIARIO.)*
+**15/10/2026, REFORÇO E LIBERAÇÃO DO VETO.** Kauã, Edson e Fabricio "sumiram" de novo porque o **botão
+manual forçava `true`** (resíduo de uma leitura antiga), prendendo-os no limbo "Admissão Digital",
+invisível na tela de Cadastro. O conserto de ORIGEM: `false` FIXO em todos os caminhos (acima) + uma
+**reconciliação no processo** (`ReconciliacaoGiScheduler`, kill-switch `GI_RECONCILIACAO=off`,
+idempotente por `jaEnviado`) que reenvia quem foi auditado e NUNCA chegou ao G.I, fechando o
+edge-trigger do fechamento da auditoria (que dispara uma vez, sem retry). **SUCESSO é o candidato
+CHEGAR à tela de Cadastro (sair da fila `FuncionarioSelecao`); "permanecer na fila" é o SINTOMA do bug,
+não prova de sucesso.** O diretor LIBEROU explicitamente o veto de retenção LGPD que antes barrava o
+`true` (todo o sistema já é pautado em LGPD, o G.I administra essas fontes de dado e a plataforma
+também), **risco assumido por ele**: o veto deixou de ser um bloqueio. Como o envio usa `false`, a
+retenção no limbo nem chega a existir, mas o registro fica: se um dia o `true` for necessário, é decisão
+do diretor, não da fábrica.
+
+*(Decisão do diretor, 06/10/2026, validada na tela; reescrita e veto de retenção LIBERADO em
+15/10/2026, após Kauã/Edson/Fabricio voltarem a sumir pelo `true` do botão. Detalhe no DIARIO.)*
 
 ## A.49: PRODUCAO SOBE DO origin/main POR WORKTREE LIMPO, NUNCA DO TREE DE SESSAO (regra permanente)
 

@@ -63,6 +63,14 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
   autenticação por token estático (o painel monta o `Authorization: Bearer`). **Confirmado ao vivo:**
   duas admissões reais chegaram e caíram na Liberação Admissional. O corte temporal do go-live está
   feito e o sistema recebe fluxo vivo. **Não re-litigar** (entrada de 21/07).
+- **G.I: `apiSinc=FALSE` é o CORRETO, e o `true` NUNCA deve ser usado (DEFINITIVO, 15/10/2026).**
+  `false` PROMOVE o registro à tela de **Cadastro de Funcionários**, onde o time trabalha (por isso ele
+  sai da fila `FuncionarioSelecao`). `apiSinc=TRUE` prende no limbo **Admissão Digital**, que o time
+  **NÃO acessa**, e foi o que fez Kauã/Edson/Fabricio sumirem da vista. **Sucesso = o candidato chega à
+  tela de Cadastro, NÃO "permanece na fila"** (permanecer na fila é o SINTOMA do bug). O valor é `false`
+  FIXO no código (sem knob de ambiente), nos três caminhos (botão, automático, reconciliação). Decisão
+  do Rike, **risco de LGPD assumido por ele** (veto de retenção da §A.48 liberado). **Não re-litigar,
+  não reinverter.**
 
 ---
 
@@ -22154,3 +22162,64 @@ NÃO estendido). DEPOIS: único link vivo segue `3f8338ca` (mesmo jti, não revo
 `envio_origem`→MANUAL mudaram (o carimbo do envio). População que o pop-up travava = as admissões com
 link vivo+acessado. Resíduo: o tooltip do botão no frontend ("o anterior deixa de valer") segue
 defasado (`page.tsx`, território da outra sessão do 081e9db), fora do meu recorte backend.
+
+## 2026-10-15 — G.I: CORREÇÃO DE ORIGEM do sumiço (apiSinc=FALSE fixo + reconciliação) [COMMIT c3e1d5a, no ar]
+
+**O PEDIDO (Rike).** Kauã sumiu de novo da pré-admissão do G.I. Corrigir DE ORIGEM (não só reimportar,
+já falhou 2x) para Kauã/Edson/Fabricio e qualquer outro pararem de sumir. Decidir caminho técnico em
+looping, retorno único.
+
+**INVESTIGAÇÃO (só leitura), e a premissa estava INVERTIDA.** Medido ao vivo no `FuncionarioSelecao/
+GetAll`: a fila tinha **8 registros, 100% `apiSinc=true`**, e o Kauã (`7f45b8d1`, `idRegistroWeb=40`,
+`statusPreCadastro=2`) estava LÁ, intocado desde 14/10 20:14 (nosso `gi_enviado_em`/`atualizado_em`
+batem). Ele **não sumiu**: ficou PRESO no limbo "Admissão Digital" (a fila da API só tem `true`),
+invisível na tela de Cadastro onde o Rike olha. Os `false` (ex. Daniel `96851004`) é que SAEM da fila,
+porque são PROMOVIDOS ao Cadastro (§A.48). A causa do "sumiço" era o **`apiSinc=true` que o botão
+manual forçava** (frente c61f723, 15/10 de madrugada) e que as operações urgentes forçaram. Premissa
+"permanecer na fila = sucesso" estava de cabeça para baixo: permanecer na fila é o SINTOMA.
+
+**DECISÃO DO RIKE (confirmada as 3 + liberação LGPD).** (1) Alvo = tela de Cadastro (`false`). (2)
+`apiSinc=false` FIXO em TODOS os caminhos (botão/automático/reconciliação), tirar o `true` forçado. (3)
+Resgatar os presos reenviando com `false`. LGPD: veto de retenção da §A.48 LIBERADO pelo diretor, risco
+dele. PERMANENTE: `false` fixo, não knob manual.
+
+**O QUE ENTROU (commit `c3e1d5a`, branch `frente-gi-apisinc-false` off `39753aa`, ff limpo p/ origin/main).**
+- `enviar-para-gi.service.ts`: removido o método que lia `GI_API_SINC_ADMISSAO_DIGITAL` e o 4º param
+  `apiSincManualForcado`; payload sempre `{ apiSincAdmissaoDigital: false }`. `enviarManual` não força
+  mais `true` (mantém `ignorarJaEnviado=true`, que é outra decisão, o "sucesso falso").
+- `reconciliacao-gi.scheduler.ts` (NOVO): agendador no processo, padrão do `ReconciliacaoReguaScheduler`
+  (kill-switch `GI_RECONCILIACAO=off`, primeira passada 2min, intervalo 10min, `unref`, trava `rodando`,
+  catch-no-crash). `reconciliar()` varre MANUAL + vivo + não pausada + AUDITORIA `concluida=true` +
+  NUNCA enviado, e reenvia reusando `enviar()` (sem segunda cópia de guarda). Loga só contagem.
+- `gi.module.ts`: scheduler nos providers (não exportado). `portal-dados-gi.ts`: comentário do campo.
+- Specs: `gi-apisinc-sempre-false.tester.spec.ts` (substitui `gi-apisinc-vem-do-ambiente`; prova que
+  mesmo com env `true` o envio sai `false` nos dois gatilhos = knob morto), `reconciliacao-gi.spec.ts`
+  (miolo: vazio, desfechos mistos, JA_ENVIADO não duplica), bloco apiSinc do service spec reescrito.
+
+**GATE.** typecheck 0, lint 0, suíte **9759 passed / 2 failed** (as 2 PRÉ-EXISTENTES: `as/vagas/
+vagas.liberar-vaga-completa` e `domain/portal-recorte-e-janela`, não tocam meus arquivos) = **0
+regressão**. §A.38: `seguranca` **APROVADO** (1 follow-up LOW: TOCTOU entre o gatilho automático e a
+reconciliação, propôs unique parcial em `admissao_dados_gi(admissao_id) where gi_enviado_em is not null`
+ou advisory lock); `tester` **cobertura suficiente** (gap MÉDIO: o WHERE do alvo não tem teste unitário,
+mesmo limite do `reconciliacao-regua.spec`, provado AO VIVO em vez disso).
+
+**DEPLOY.** `publicar-producao.sh`: prod serve `c3e1d5a`, health 3011/3010 = 200/200, backup
+`*.bak-20261015-135810`. `GI_RECONCILIACAO` ausente = scheduler LIGADO.
+
+**PROVA VIVA (dist deployado, apiSinc env = undefined).**
+- RESGATE: os 4 presos com admissão no EA reenviados pela `enviarManual` deployada = todos `GI_ENVIADO`,
+  cada um agora com um registro novo `apiSinc=false` ao lado do órfão `true`: `2853bfc6` (Edson,
+  idReg47), `5eeb96cc` (Fabricio, idReg48), `7f45b8d1` (Kauã, idReg49), `2bc2735b` (idReg50).
+- RECONCILIAÇÃO (1 passada): `{candidatos:3, enviados:2, recusados:1, falhas:0}`. `ddd57fd5` enviado
+  `false` (idReg52, SEM órfão = prova limpa do caminho sem clique); `12d971ef` RECUSADO
+  (`GI_SALARIO_INVALIDO`, Interno) = legítimo, NÃO forçado.
+- `96851004` (Daniel): fora da fila, intocado (já promovido com `false` em 14/10) = respeitado "segue manual".
+- 3 órfãos sem admissão no EA (idReg 31/33/44) = sends de teste antigos, time deleta.
+- PERMANÊNCIA (re-check 14:13, ~13min depois): fila=**8, false=0** = os 6 registros `false` recém-criados
+  SAÍRAM da fila = **PROMOVIDOS à tela de Cadastro** (§A.48). Kauã: o `false` idReg49 PROMOVIDO (sobra só
+  o órfão idReg40:true); `ddd57fd5` FORA da fila (promovido, sem órfão = prova limpa). Restam os 8 órfãos
+  `true` (o time deleta). **Prova = o candidato CHEGOU ao Cadastro, não "permaneceu na fila".**
+
+**§A.49.** Branch pristino off `39753aa`; b7 e 84 confirmaram disjunto (src/gi/* é meu). 84 avisou que
+vai preencher `candidatos.data_nascimento` (ajuda meu dossiê, sem colisão). Zero arquivo de peer tocado.
+**DÉBITO §A.38 follow-up:** unique parcial/advisory lock para o TOCTOU (LOW, não bloqueou).
