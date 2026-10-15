@@ -22616,3 +22616,42 @@ candidate `app/portal/page.tsx`), DISJUNTA dos meus arquivos (`portal-painel`/`p
 **DEPLOY:** commit `22bd314` (push ff origin/main), `publicar-producao.sh` serve `22bd314`, health
 200/200, backup `*.bak-20261015-194215`. Sanidade: `/candidatos/relatorio` sem token = 401 (rota
 registrada e guardada). §A.13 na tela do diretor. PRÓXIMO: Onda 3 (agendar exame em massa).
+
+---
+
+## 2026-10-15 (tarde 6) — OST das ondas, Onda 3: agendar exame EM MASSA EM PRODUÇÃO (`27564a5`). FRENTE ENCERRADA.
+
+**Última onda.** Investigação: a aba Exames JÁ TEM a seleção múltipla (Set `selecionados`, checkboxes,
+select-all, compartilhados com a Integração), e a própria página já faz "Agendar em massa" na aba
+Integração (`AgendamentoIntegracaoLoteModal` + `agendarIntegracaoEmLote`). Então a Onda 3 é espelhar
+esse padrão para o exame, não inventar nada.
+
+**Conserto:** (1) backend `POST /esteira/exame/agendamento-lote` (`AgendamentoExameLoteDto` herda os
+campos do `AgendamentoExameDto` + `admissaoIds` com `ArrayMinSize(2)`) -> `agendarExameEmLote`, que
+aplica cada selecionado pelo caminho JÁ VALIDADO `salvarAgendamento` (registro certo + evento de
+status por candidato), devolvendo `{total, agendados, falhas}`. Por candidato (não transação única),
+porque cada agendamento de exame apaga-e-regrava endereços e mexe no status: uma falha isolada não
+derruba o lote. SEM trava de sobreposição, de propósito (o lote da Integração barra horário repetido,
+o do exame NÃO: decisão do diretor, clientes diferentes podem compartilhar horário). (2) frontend
+`AgendamentoExameLoteModal` (espelha o formulário individual, §A.26: data, endereços com clínica/
+local/horário, valor, previsão do ASO) + botão "Agendar em massa" na barra de seleção da aba Exames,
+que SÓ aparece com `selecionados.size > 1` (mais de um); ao salvar, limpa a seleção e recarrega.
+
+**§A.27:** agendar move a frente EXAME de A_AGENDAR para AGENDADO (pula APTO/CANCELADO/LIBERADO_SEM_ASO,
+idempotente), mantém o candidato na aba Exames (vira "Agendado"), não toca farol nem contagem. O lote
+herda essa segurança do individual, candidato a candidato. Vale para QUALQUER selecionado (não
+restringe a "apto"; apto é quem já fez o exame).
+
+**GATE:** typecheck backend+frontend limpo; `agendamento-exame-lote.dto.tester` 4/4 (exige mais de um,
+ids UUID, campos obrigatórios); suíte backend 9828 passed, SÓ as 3 falhas pré-existentes
+(`vagas.liberar-vaga-completa` + `portal-acesso-email.tester` x2), 0 regressão. **DEPLOY:** commit
+`27564a5` (push ff origin/main), `publicar-producao.sh` serve `27564a5`, health 200/200, backup
+`*.bak-20261015-195419`. Sanidade: `/esteira/exame/agendamento-lote` sem token = 401. §A.13 na tela
+do diretor (aba Exames: selecionar mais de um -> "Agendar em massa").
+
+**FRENTE DAS ONDAS ENCERRADA.** Resumo do que subiu, por onda: Onda 1 (`01dece2` + migration 0160) =
+banco fora de TODAS as frentes + status "Exame Solicitado"; Onda 2a (`133ff22`) = Excel em Auditoria/
+Exame/Cadastro/Integração/IFractal; Onda 2b (`22bd314`) = Excel do Gerenciador do Portal com link
+vivo; Onda 3 (`27564a5`) = agendar exame em massa. Regra permanente do link gravada em DECISÕES
+FECHADAS. §A.49: conviveu com a frente de dossiê GI do henrique-84 (`06894be`, rebase limpo, disjunta)
+e com b3 (`src/gi/*`). Validação final na tela é do diretor.
