@@ -48,6 +48,18 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
   existiu (§A.3, regra 2/complemento); o que faltava era o DISPARO nesse caminho. Em produção desde
   15/10 (commit `43483b7`). NÃO reabrir: ligar o Portal ao avanço é decisão fechada.
 
+- **LINK DO PORTAL: SEMPRE O VIVO, NUNCA GERAR UM NOVO À TOA (regra permanente do diretor, 15/10/2026).**
+  Toda ação que entrega o link de acesso do candidato (copiar, reenviar por e-mail, e agora a
+  exportação em massa do Gerenciador do Portal) DEVOLVE o MESMO link vivo que já existe, sem cunhar
+  outro e sem revogar o vigente. Um link novo só nasce quando o do candidato EXPIROU (não há o que
+  reaproveitar); nunca se gera link novo "à toa" sobre um acesso ainda vivo. **Consequência de código,
+  cravada:** o caminho único é `PortalIdentidadeService.emitirLinkParaCopiar` →
+  `emitirComTrava(..., devolverExistenteSeVivo=true)`, que no ramo `existente` devolve o link vivo
+  (re-cunha o MESMO `jti`/janela) sem escrever nada e sem trilha (é um não-evento). A exportação em
+  Excel do Portal resolve o link SÓ das linhas cujo estado é `VIVO` e só escreve no arquivo a URL
+  `reutilizado:true`; estado não vivo leva nota e nenhum link é criado. NÃO reabrir: reemitir/derrubar
+  o acesso vigente numa ação de copiar/exportar é o furo que esta regra fecha.
+
 - **De/para vaga→cliente é MANUAL POR DESIGN.** A API do Pandapé **não expõe** o vínculo vaga→cliente
   (confirmado no swagger oficial e ao vivo em 17/07: `VacancyModel` não tem campo de cliente,
   `/v2/requests` também não; existe base de clientes com CNPJ, mas nenhuma aresta até a vaga). O
@@ -22561,3 +22573,46 @@ passed, SÓ as 3 falhas pré-existentes (0 regressão). **DEPLOY:** commit `133f
 Sanidade: `POST /api/relatorio/xlsx` sem token = 401 (rota registrada e guardada). §A.13 na tela do
 diretor (botão "Exportar Excel" nas 5 telas). PRÓXIMO: Onda 2b (Portal, link vivo) com revisão do
 `seguranca` antes de subir; depois Onda 3 (agendar exame em massa).
+
+---
+
+## 2026-10-15 (tarde 5) — OST das ondas, Onda 2b: Excel do Gerenciador do Portal com link vivo EM PRODUÇÃO (`22bd314`)
+
+**A 6ª tela da Onda 2, e a única sensível (link = credencial).** O Gerenciador do Portal filtra no
+SERVIDOR e o link NÃO vem na lista, então tem rota própria, diferente do mecanismo das outras cinco.
+
+**Conserto:** `GET /esteira/portal-painel/candidatos/relatorio` (PortalPainelController) +
+`PortalPainelService.todasAsLinhasParaRelatorio` (pagina sobre o `listar` validado, teto 5000, sem SQL
+nova) + helper puro `portal-relatorio.ts` (colunas, montagem da linha, célula do link). Resolve o link
+POR candidato e monta o xlsx com `gerarXlsxGenerico`. Frontend: botão "Exportar Excel" no
+`/admin/portal-links` (GET `apiDownload` com os filtros atuais via `queryDoPainel`).
+
+**REGRA PERMANENTE cravada em DECISÕES FECHADAS (link sempre vivo, nunca gerar à toa):** só as linhas
+`VIVO` têm o link resolvido, e para elas `emitirLinkParaCopiar` reaproveita o link existente (ramo
+`existente` do `emitirComTrava`: devolve o MESMO jti re-cunhado, SEM insert, SEM revogação, SEM
+trilha, um não-evento). Só a URL `reutilizado:true` entra no arquivo; linha sem link vivo leva nota
+("Link vencido/revogado/..."), nenhum link é criado. Governado pelo menu `portal-links` (coringa
+`PortalPainelController.*`), resposta `no-store, private`, download autenticado (§A.6: nada logado ou
+persistido).
+
+**SEGURANÇA (§A.38): `seguranca` APROVADO COM RESSALVAS** (reauditoria adversarial do diff real):
+confirmou A) sem mint/revogação no caminho VIVO; B) só link reutilizado no arquivo (minted é
+descartado); C) rota reivindicada por menu, sob `esteira/` autenticado, não aberta; D) sem vazamento,
+`no-store`, download autenticado. **Ressalvas NÃO bloqueantes (registradas como débito):** (1) TOCTOU
+silent-mint: se um link VIVO morrer no microintervalo entre a lista e o emit da linha, o caminho de
+mint dispara e revoga+cunha um link já MORTO (não derruba acesso vivo, e a URL é descartada por B);
+benigno, janela quase impossível. Endurecimento opcional: flag "só leitura, nunca cunha" no
+`emitirComTrava` (não feito, para não mexer no caminho auditado por um caso que o próprio seguranca
+chamou de benigno). (2) carga por export (~até 5000 assinaturas/tx, limitada pelo teto e pelo menu).
+NÃO toquei o `emitirComTrava` (risco de regressão no caminho de credencial > o ganho num caso quase
+impossível).
+
+**GATE:** typecheck backend+frontend limpo; `portal-relatorio.tester` 5/5; invariantes do
+`portal-painel.spec` atualizadas (7 handlers, 6 rotas `no-store`) = 253 specs de portal verdes; suíte
+backend 9817 passed, SÓ as 3 falhas pré-existentes, 0 regressão. **REBASE §A.49:** origin/main avançou
+no meio (`06894be`, a frente de dossiê GI do henrique-84: `portal-dados-gi`/`portal-gi-gravacao`/
+candidate `app/portal/page.tsx`), DISJUNTA dos meus arquivos (`portal-painel`/`portal-relatorio`/
+`admin/portal-links`); rebase limpo, typecheck+portal specs reconferidos no tree combinado.
+**DEPLOY:** commit `22bd314` (push ff origin/main), `publicar-producao.sh` serve `22bd314`, health
+200/200, backup `*.bak-20261015-194215`. Sanidade: `/candidatos/relatorio` sem token = 401 (rota
+registrada e guardada). §A.13 na tela do diretor. PRÓXIMO: Onda 3 (agendar exame em massa).
