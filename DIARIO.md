@@ -22477,3 +22477,51 @@ os 3 nomes da tela). A guarda de salário (nulo/zero passa, só negativo recusa)
 Samuel apareceu com ela). specs `gi-apisinc-sempre-true` -> `gi-apisinc-sempre-false`. LIÇÃO: apiSinc é
 comportamento do G.I que a fábrica NÃO consegue medir (403); a autoridade é a tela do diretor. Recomendo
 tornar o valor configurável por env no futuro, para nunca mais precisar de commit para ajustar.
+
+---
+
+## 2026-10-15 (tarde 3) — OST DAS ONDAS (status/Excel/agendamento). Onda 1 EM PRODUÇÃO (`01dece2`)
+
+**Nova OST do diretor (3 ondas, looping sem parar a cada etapa).** Onda 1 (bugs/status, rápidos
+primeiro): (1.1) banco sai de todas as frentes; (1.2) status novo "Exame Solicitado". Onda 2: exportar
+Excel em 6 telas. Onda 3: agendar exame em massa. Branch `frente-ondas-status-excel-agenda` off
+origin/main `8a5ca37`. §A.49: coordenei com henrique-84 (frente de gravação do dossiê GI, backend/domain
+`portal-gi-gravacao`/`portal-dados-gi`/`dados-gi-campos`, disjunto da minha camada de tela/export) e b3
+(re-send `src/gi/*`, disjunto). Sem colisão.
+
+**Nota de coordenação §A.48:** durante a frente anterior a §A.48 oscilou FALSE->TRUE->FALSE; o vigente
+voltou a `apiSinc=FALSE` em `8a5ca37` (confirmado na tela de Cadastro). Ortogonal a estas ondas. Corrigi
+a memória do coordenador (que dizia TRUE) para FALSE.
+
+**Onda 1.1 (BANCO_AGUARDAR fora de TODAS as frentes).** Investigação: a regra NUNCA foi implementada
+assim; o código fazia o OPOSTO de propósito (banco saía SÓ da Integração; Auditoria/Exame/Cadastro
+mantinham a tag "Banco, Aguardar" da correção de 13/08/2026), travado por teste. A decisão do diretor
+(15/10) SUPERA a de 13/08. Conserto: um único predicado em `esteira.service.ts` (antes condicional a
+`tipo==="INTEGRACAO"`) passa a excluir `BANCO_AGUARDAR` incondicionalmente. Como `itensWhere` e
+`kpiWhere` nascem do mesmo `clientePeriodo`, a exclusão vale para a lista E os KPIs de cada aba. O banco
+segue visível no filtro de banco de candidatos (Gerenciador, query própria, intocada). Spec
+`esteira.farol-integracao` invertida (12/12). §A.27: o único efeito é os cards de Auditoria/Exame/
+Cadastro deixarem de contar o banco (efeito pedido). PROVA PROD: hoje há 1 admissão em BANCO_AGUARDAR,
+com frente viva em Auditoria e Exame; sai das duas abas agora, aparece no banco de candidatos.
+
+**Onda 1.2 (status "Exame Solicitado").** Investigação: nunca foi construído (git -S = 0 commits). Status
+MANUAL, marcado à mão na frente de Exames (exame já solicitado, sem agendamento confirmado). Conserto:
+enum `STATUS_EXAME` (shared-types) ganha `EXAME_SOLICITADO` entre A_AGENDAR e AGENDADO (posição no array
+= régua de reversão `ORDEM_STATUS`); migration `0160_exame_solicitado.sql` insere o rótulo "Exame
+Solicitado" no catálogo com `conclui=false`, ordem 5 (vizinhos descem uma casa), molde das 0048/0087.
+Status PASSIVO: não conclui a frente, não abre o gate do Cadastro, não entra em `STATUS_GOVERNADOS`
+(scheduler não sobrescreve). Sem edição de frontend (o seletor renderiza o catálogo). A frente é
+backend-only: o dropdown mostra o rótulo e o backend valida pelo enum.
+
+**GATE:** typecheck limpo; `esteira.farol-integracao` 12/12; specs de `STATUS_EXAME`/`ORDEM_STATUS`
+verdes; suíte backend com SÓ as 3 falhas pré-existentes (`vagas.liberar-vaga-completa` 1 +
+`portal-acesso-email.tester` 2), PROVADAS no baseline limpo `8a5ca37` (WIP temporário, checkout do base,
+rodei as 2 specs, mesmas 3 falhas sem o meu diff). 0 regressão.
+
+**DEPLOY (VALIDOU, SOBE, COMMITA):** commit `01dece2` (push ff p/ origin/main; branch publicado).
+`publicar-producao.sh` serve `01dece2`, health 200/200, backup `*.bak-20261015-185930`. Migration 0160
+aplicada à mão: backup DB `ea-backup-producao-20261015-1902-antes-0160.dump` (30M), `pnpm db:migrate`
+do tree ea-build (01dece2), só a 0160 subiu (`when` 1792001276612 > último aplicado 1792000276612 da
+0159). Verificado: catálogo EXAME com "Exame Solicitado" ordem 5, conclui=false, vizinhos nas ordens
+6..11. Ordem de deploy: CÓDIGO (enum) ANTES da migration (rótulo), para o salvamento nunca aceitar um
+status que o enum ainda não conhece. §A.13: validação final na tela é do diretor (Esteira -> abas).
