@@ -22223,3 +22223,63 @@ mesmo limite do `reconciliacao-regua.spec`, provado AO VIVO em vez disso).
 **§A.49.** Branch pristino off `39753aa`; b7 e 84 confirmaram disjunto (src/gi/* é meu). 84 avisou que
 vai preencher `candidatos.data_nascimento` (ajuda meu dossiê, sem colisão). Zero arquivo de peer tocado.
 **DÉBITO §A.38 follow-up:** unique parcial/advisory lock para o TOCTOU (LOW, não bloqueou).
+
+---
+
+## 2026-10-15 — Portal: acesso por e-mail GRAVA a data na ficha (P1) e ENTRA direto no termo (P2) + trilha (P3)
+
+**O QUE.** Fluxo de acesso do candidato sem CPF (vinculado por e-mail). Três partes, aprovadas pelo
+diretor (1 e 2 sim, 3 junto).
+
+**P1, a data de nascimento NÃO gravava [COMMIT `3155db3`, no ar em `558ab8b`].** O front mandava a data
+(ISO), o backend gravava CPF+data no FUNIL (`as_candidatos`), mas a ponte `reconciliarCpfProvisorio`
+só levava o CPF para a FICHA (`candidatos`); a data ficava presa no funil e `candidatos.data_nascimento`
+seguia NULL, o que fazia a porta de link falhar o `casouData` para sempre (loop) e deixava a ficha que
+esteira/folha/G.I leem sem a data. Mesmo molde do bug do dossiê G.I (escrito numa tabela, lido de outra).
+**Conserto:** a ponte propaga a data à ficha, fill-if-null (nunca sobrescreve data real), DELEGADA em
+`admissoes.service` (o portal não toca `candidatos`, trava 1 intacta; `corrigirCpf` inalterado). **Medido
+em prod:** 4 admissões vivas com a data presa (funil tem, ficha NULL), todas com link emitido = exatamente
+as presas no loop. **Backfill DB-only** (fill-if-null): 3 fichas preenchidas (conjunto vivo/rotativo),
+RESTAM 0. id8 do backfill: `4f4e7f60`, `83814bd1`, `b83548f7`.
+
+**P2, mandava link novo em vez de ir ao termo [COMMIT `47b8d50`, no ar].** A porta de e-mail era desenhada
+para, no sucesso, SEMPRE despachar um link (`despacharLink`) e nunca cunhar sessão — o candidato recebia
+"enviamos um novo link, reinicie". Decisão do diretor: o e-mail é o identificador de entrada; CPF+data são
+dados a completar, não 2ª validação. Agora, provado o código e gravado CPF+data (desfecho GRAVADO), o
+candidato ENTRA direto (desfecho novo `ACESSO_ABERTO`, sessão no corpo) e a tela avança ao termo, sem novo
+link. **A cunhagem é DELEGADA** a `PortalIdentidadeService.abrirSessaoNoAutoatendimento` (único lugar que
+toca `portal_links`, a chave e `cunharSessao`), herdando as defesas da porta de link: binding a UMA admissão
+pelo vínculo, prazo ≤ janela do link (`minutosDaSessao`), ancoragem em `portal_links`. A porta de e-mail só
+PEDE; a trava de `portal-acesso-email.travas` foi reescrita para EXIGIR a delegação (condição 6 do
+seguranca). Fallback para o link quando a porta de sessão está desligada ou a admissão está fora do recorte;
+desfecho NEUTRO (nunca "link enviado" falso) quando não dá para seguir. Front: `AcessoPorEmail`/
+`EntradaSemLink`/`page.tsx` levam a sessão à página e abrem a trilha, reusando o pouso do `identificar`.
+
+**P3 [no `47b8d50`].** A ponte passa a registrar `candidato_alteracoes_log` quando preenche a data (em vez
+de escrita de sistema silenciosa). §A.6: trilha permanente (exceção consciente do schema, proíbe só CPF).
+
+**DEPLOY.** Backend + frontend do operador via `publicar-producao.sh` (serve `47b8d50`, health 3011/3010 =
+200/200, backup `*.bak-20261015-145921`). Portal público do candidato (`apps/portal-app`, :3021, systemd
+`ea-portal-app.service`, fora do publicar-producao): build do worktree LIMPO + swap do `.next-prod` +
+restart (backup `.next-prod.bak-20261015-150754`); 3021/portal=200, bundle servido contém o handler
+`ACESSO_ABERTO`.
+
+**PROVA (dist deployado, §A.6 por id8).** P1: backfill 3→0 (acima). P2: `abrirSessaoNoAutoatendimento`
+servido, chamado numa admissão viva (id8 `83814bd1`) = sessão emitida, `sub`=admissão (binding), `typ=portal`,
+`jti` ANCORADO no link vivo, prazo 30min ≤ janela do link, nenhum e-mail enviado (sessão descartada, trilha
+stubada). Divergência de CPF/data continua barrando: `ACESSO_ABERTO` só no ramo GRAVADO, depois de
+`decisaoDaIdentidade` (inalterada) — divergência → TRAVAR → recusa (401), nunca entra.
+
+**GATE.** typecheck 0; suíte backend 9769 verdes (2 falhas PRÉ-EXISTENTES: `vagas.liberar-vaga-completa`,
+`domain/portal-recorte-e-janela`), frontend 2007 verdes (5 falhas PRÉ-EXISTENTES: ajuda/arquivo-de-preparo,
+MoverCandidaturaModal, AcessoPorEmail "Confirme Seus Dados", portal-painel) — nenhuma no meu diff nem
+importa meus símbolos = 0 regressão. **seguranca re-auditou: APROVADO** (6 condições + 2 extras). **tester
+independente:** gaps G1 (prazo da sessão ≤ link, `minutosDaSessao`/`abrirSessaoNoAutoatendimento`) e G2
+(ramo `ACESSO_ABERTO` do front + defesa contra tela mentirosa) FECHADOS.
+
+**§A.49.** b7 (frente de reenvio, encerrada) e b3 (GI, só lê `candidatos`) disjuntos e avisados. Reusei a
+cunhagem/emissão do `PortalIdentidadeService` sem reescrever (b7 pré-autorizou editar o arquivo). **DÉBITO
+infra (follow-up):** `publicar-producao.sh` não poda backups > 48h (acumulou 153, ~20GB, encheram o disco e
+derrubaram o 1º deploy por ENOSPC; podados, 22G livres). Portal público (`apps/portal-app`) está FORA do
+`publicar-producao` e fora do pnpm-workspace (node_modules hand-bootstrapped) — candidato a entrar no
+mecanismo padrão.
