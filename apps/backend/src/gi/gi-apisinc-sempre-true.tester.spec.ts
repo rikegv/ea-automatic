@@ -12,24 +12,31 @@ import {
 import { PAR_CONHECIDO, PESSOA, contratacaoDeFolhaCompleta } from "./gi-automatico.arnes";
 
 /**
- * INVARIANTE 3 (reescrita 15/10/2026): o `apiSincAdmissaoDigital` do envio é SEMPRE `false`, FIXO, e
- * o knob de ambiente `GI_API_SINC_ADMISSAO_DIGITAL` está MORTO.
+ * INVARIANTE 3 (reescrita 15/10/2026): o `apiSincAdmissaoDigital` do ENVIO e SEMPRE `true`, FIXO, e
+ * o knob de ambiente `GI_API_SINC_ADMISSAO_DIGITAL` continua MORTO.
  *
- * ┌─ A DECISAO PERMANENTE DO DIRETOR, validada na tela do G.I ─────────────────────────────────────┐
- * │ `false` "Sincroniza com GI": PROMOVE o registro para a tela de Cadastro de Funcionarios, onde o  │
- * │ time trabalha. Por isso ele SAI da fila `FuncionarioSelecao/GetAll` (nao se perdeu: foi para o   │
- * │ lugar certo). `true` "Sincroniza com Admissao Digital": PRENDE o registro num modulo que o time  │
- * │ NAO acessa (limbo). Foi o `true` que fez Kaua/Edson/Fabricio "sumirem" da tela de Cadastro. logo │
- * │ SUCESSO = chegar ao Cadastro (sair da fila), NUNCA "permanecer na fila". O `true` nao deve mais  │
- * │ ser usado por caminho nenhum (manual, automatico, reconciliacao).                                │
+ * ┌─ A DECISAO PERMANENTE DO DIRETOR, com PROVA NA TELA do G.I (15/10/2026) ─────────────────────────┐
+ * │ `true` "Sincroniza com Admissao Digital" e o valor que FUNCIONA: o registro PERSISTE na           │
+ * │ pre-admissao (`FuncionarioSelecao`) e o SINCRONIZADOR do G.I o PROMOVE para a tela de Cadastro de  │
+ * │ Funcionarios, como o diretor VALIDOU com Edson e Fabricio aparecendo na tela dele. `false` CONSOME │
+ * │ o registro: ele SAI da fila `FuncionarioSelecao/GetAll` mas NAO chega ao Cadastro (foi o falso     │
+ * │ sucesso, "saiu da fila" lido como promocao, era sumico). O veto de retencao LGPD foi LIBERADO pelo │
+ * │ diretor (risco dele). Logo o ENVIO sai `true` por caminho nenhum menos: manual, automatico e       │
+ * │ reconciliacao, todos `true`.                                                                       │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A POLITICA (true) MORA NO SERVICO; O MONTADOR E FUNCAO PURA ───────────────────────────────────┐
+ * │ `montarFuncionarioSelecao(PESSOA)` SEM opcoes continua com default `false`: o default do DOMINIO   │
+ * │ nao mudou. Quem decide `true` e o `EnviarParaGiService`, que passa a opcao `apiSincAdmissaoDigital: │
+ * │ true` FIXA ao montar, em todos os caminhos. Por isso os testes do MONTADOR puro (default = false;  │
+ * │ coercao de nao-booleano = false) ficam COMO ESTAVAM, e os testes do SERVICO sao `true`.            │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ POR QUE ESTE TESTE E A TRAVA CONTRA REINVERTER ──────────────────────────────────────────────┐
- * │ Antes o valor vinha de `.env` (`GI_API_SINC_ADMISSAO_DIGITAL`), para ser reversivel numa linha. │
- * │ O diretor decidiu o OPOSTO: FIXO em `false`, para ninguem reabrir o `true` sem querer. A leitura │
- * │ de ambiente foi REMOVIDA do servico. Este arquivo prova que, mesmo com a variavel `true` no      │
- * │ `.env`, o envio sai `false` nos DOIS gatilhos. Se algum dia o envio sair `true`, este teste      │
- * │ reprova, e a reprovacao e o pedido de revisao.                                                   │
+ * │ A leitura de ambiente (`GI_API_SINC_ADMISSAO_DIGITAL`) foi REMOVIDA do servico: o knob esta       │
+ * │ MORTO. Este arquivo prova que, mesmo com a variavel `false` (ou qualquer valor) no `.env`, o envio │
+ * │ sai `true` nos DOIS gatilhos. Se algum dia o envio sair `false`, este teste reprova, e a reprovacao │
+ * │ e o pedido de revisao (seria o retorno do limbo "Admissao Digital" invertido).                    │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * O QUE SE MEDE E O PAYLOAD QUE CHEGA AO CLIENTE DO GI, capturado no espiao de
@@ -83,12 +90,12 @@ async function payloadDoEnvio(
   return criar.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
 }
 
-describe("INVARIANTE 3: o envio sai SEMPRE false, nos dois gatilhos, qualquer que seja o ambiente", () => {
+describe("INVARIANTE 3: o envio sai SEMPRE true, nos dois gatilhos, qualquer que seja o ambiente", () => {
   for (const gatilho of ["manual", "automatico"] as const) {
-    it(`${gatilho}: sem a variavel, o campo SAI e vale false`, async () => {
+    it(`${gatilho}: sem a variavel, o campo SAI e vale true`, async () => {
       const payload = await payloadDoEnvio({}, gatilho);
       expect(CHAVE in payload, "o campo nao saiu: a allowlist fechada o descartou").toBe(true);
-      expect(payload[CHAVE]).toBe(false);
+      expect(payload[CHAVE]).toBe(true);
     });
 
     it(`${gatilho}: o campo e BOOLEANO, nunca a string do .env`, async () => {
@@ -97,9 +104,9 @@ describe("INVARIANTE 3: o envio sai SEMPRE false, nos dois gatilhos, qualquer qu
     });
 
     for (const valor of ["true", "TRUE", " true ", "True", "1", "sim", "false", ""]) {
-      it(`${gatilho}: GI_API_SINC_ADMISSAO_DIGITAL=${JSON.stringify(valor)} NAO liga (knob morto)`, async () => {
+      it(`${gatilho}: GI_API_SINC_ADMISSAO_DIGITAL=${JSON.stringify(valor)} NAO desliga (knob morto, sai true)`, async () => {
         const payload = await payloadDoEnvio({ GI_API_SINC_ADMISSAO_DIGITAL: valor }, gatilho);
-        expect(payload[CHAVE], "o knob de ambiente reviveu e ligou o true: reabriu o limbo").toBe(false);
+        expect(payload[CHAVE], "o knob de ambiente reviveu e desligou o true: voltou ao limbo").toBe(true);
       });
     }
   }

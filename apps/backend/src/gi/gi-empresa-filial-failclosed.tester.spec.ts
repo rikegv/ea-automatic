@@ -571,8 +571,11 @@ describe("O PAR, nao os campos: numericamente valido e INEXISTENTE no GI tem de 
     expect(recusaDaContratacaoGi(payloadCom(null, null), PAR_CONHECIDO)).toBe("GI_SEM_EMPRESA_FILIAL");
   });
 
-  it("par conhecido mas SALARIO invalido ainda recusa (as guardas nao se anulam)", () => {
-    expect(recusaDaContratacaoGi(payloadCom(1, 0, 0), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
+  it("par conhecido mas SALARIO NEGATIVO ainda recusa; zero NAO trava mais (as guardas nao se anulam)", () => {
+    // Regra nova do diretor (15/10/2026): salario zero/nulo deixou de travar (a Folha cobra depois); so o
+    // NEGATIVO recusa, como dado corrompido. `payloadCom` monta o payload DIRETO, entao o -100 cru chega
+    // negativo a guarda (pelo montarContratacaoGi o negativo ja teria virado null e passaria).
+    expect(recusaDaContratacaoGi(payloadCom(1, 0, 0), PAR_CONHECIDO)).toBeNull();
     expect(recusaDaContratacaoGi(payloadCom(1, 0, -100), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
   });
 

@@ -368,24 +368,30 @@ describe("EnviarParaGiService: empresa+filial nao resolvidas RECUSAM o envio", (
   });
 });
 
-describe("EnviarParaGiService: salario ausente, zero ou negativo RECUSA o envio", () => {
-  it("ausente: GI_SALARIO_INVALIDO", async () => {
+describe("EnviarParaGiService: salario ausente ou zero PASSA; so NEGATIVO recusa", () => {
+  // ⚠️ REGRA NOVA DO DIRETOR (15/10/2026, permanente): salario NULO/AUSENTE/ZERO deixou de travar o
+  // envio. Se o time nao preencheu o salario, ele e preenchido DEPOIS na Folha (a Folha nao deixa seguir
+  // sem salario), entao o envio ao G.I vai com o que houver e o fornecedor aplica o default. Na pratica o
+  // montador ja converte zero/negativo/texto para NULL, entao so sobra o caso nulo, que PASSA. Em
+  // `recusaDaContratacaoGi` so sobra a recusa do salario NEGATIVO explicito (dado corrompido). Vale para
+  // os DOIS gatilhos.
+  it("ausente (null): NAO trava mais, ENVIA", async () => {
     const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: null } });
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
-    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_INVALIDO" });
-    expect(f.criar).not.toHaveBeenCalled();
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
   });
 
-  it("ZERO recusa: o campo tem default 0 no GI, e zero em folha e salario ERRADO", async () => {
+  it("ZERO: NAO trava mais, ENVIA (o salario e cadastrado depois na Folha)", async () => {
     const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: 0 } });
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
-    expect(r.motivo).toBe("GI_SALARIO_INVALIDO");
-    expect(f.criar).not.toHaveBeenCalled();
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
   });
 
-  it("NEGATIVO recusa: o pattern do GI aceita o sinal, entao a recusa e nossa", async () => {
+  it("NEGATIVO recusa: dado CORROMPIDO (nao existe folha negativa), a recusa que FICOU", async () => {
     const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: -10 } });
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
@@ -393,19 +399,20 @@ describe("EnviarParaGiService: salario ausente, zero ou negativo RECUSA o envio"
     expect(f.criar).not.toHaveBeenCalled();
   });
 
-  it("o motivo e codigo FECHADO e nao carrega o valor do salario (§A.6)", async () => {
-    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: 1234.56 } });
-    // Salário válido: envia. O que se prova aqui é que NENHUM motivo carrega numero de salario.
+  it("o motivo da recusa que FICOU e codigo FECHADO e nao carrega o valor do salario (§A.6)", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: -1234.56 } });
+    // Salário negativo: recusa. O que se prova aqui é que o motivo é código fechado e NÃO carrega o valor.
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SALARIO_INVALIDO");
     expect(r.motivo).toMatch(/^GI_[A-Z0-9_]+$/);
     expect(r.motivo).not.toContain("1234");
   });
 
-  it("empresa/filial faltando VENCE o salario invalido: a recusa mais grave e reportada primeiro", async () => {
+  it("empresa/filial faltando VENCE o salario negativo: a recusa mais grave e reportada primeiro", async () => {
     const f = fakes({
       configurado: true,
-      contratacao: { ...CONTRATACAO_OK, salario: 0, codigoEmpresa: null, codigoFilial: null },
+      contratacao: { ...CONTRATACAO_OK, salario: -10, codigoEmpresa: null, codigoFilial: null },
     });
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual(ADMISSAO, "autor-1");
@@ -659,10 +666,10 @@ describe("EnviarParaGiService: admissao ENCERRADA nao sai por caminho nenhum", (
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// O `apiSincAdmissaoDigital` (item 3): SEMPRE `false`, FIXO, nos DOIS gatilhos (§A.48 reescrita 15/10)
+// O `apiSincAdmissaoDigital` (item 3): SEMPRE `true`, FIXO, nos DOIS gatilhos (§A.48 reescrita 15/10)
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE false, manual e automatico", () => {
+describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE true, manual e automatico", () => {
   const ARMADO = { GI_DISPARO_ARMADO: "true" };
 
   // O AUTOMATICO (fechamento da auditoria). Passa pela trava de origem (o fixture atende com origem
@@ -682,32 +689,32 @@ describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE false, manual e a
     return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
   }
 
-  // ⚠️ A DECISAO PERMANENTE (diretor, 15/10/2026): apiSinc=`false` PROMOVE o registro para a tela de
-  // Cadastro de Funcionarios (onde o time trabalha); `true` prendia no limbo "Admissao Digital" que o
-  // time nao acessa, e NUNCA deve ser usado. Nao ha mais leitura de ambiente: estes testes provam que
-  // mesmo com `GI_API_SINC_ADMISSAO_DIGITAL=true` no `.env` o envio sai `false` (o knob esta morto),
-  // que e a trava contra REINVERTER o valor por `.env`.
-  it("AUTOMATICO sem a variavel: o campo SAI e vale false", async () => {
-    expect((await payloadAutomatico({})).apiSincAdmissaoDigital).toBe(false);
+  // ⚠️ A DECISAO PERMANENTE (diretor, 15/10/2026, PROVA NA TELA): apiSinc=`true` PERSISTE o registro na
+  // pre-admissao e o SINCRONIZADOR do G.I o PROMOVE para a tela de Cadastro de Funcionarios (validado com
+  // Edson e Fabricio); `false` CONSOME o registro e ele SOME sem chegar ao Cadastro (foi o falso sucesso).
+  // Nao ha mais leitura de ambiente: estes testes provam que mesmo com `GI_API_SINC_ADMISSAO_DIGITAL=false`
+  // no `.env` o envio sai `true` (o knob esta morto), que e a trava contra REINVERTER o valor por `.env`.
+  it("AUTOMATICO sem a variavel: o campo SAI e vale true", async () => {
+    expect((await payloadAutomatico({})).apiSincAdmissaoDigital).toBe(true);
   });
 
-  it("MANUAL sem a variavel: o campo SAI e vale false (nao force mais true)", async () => {
-    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(false);
+  it("MANUAL sem a variavel: o campo SAI e vale true", async () => {
+    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(true);
   });
 
   it.each([["true"], [" TRUE "], ["True"], ["1"], ["sim"], ["false"], [""]])(
-    "AUTOMATICO ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai false",
+    "AUTOMATICO ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai true",
     async (valor) => {
       const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
-      expect(payload.apiSincAdmissaoDigital).toBe(false);
+      expect(payload.apiSincAdmissaoDigital).toBe(true);
     },
   );
 
   it.each([["true"], [" TRUE "], ["1"], ["false"]])(
-    "MANUAL ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai false",
+    "MANUAL ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai true",
     async (valor) => {
       const payload = await payloadManual({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
-      expect(payload.apiSincAdmissaoDigital).toBe(false);
+      expect(payload.apiSincAdmissaoDigital).toBe(true);
     },
   );
 

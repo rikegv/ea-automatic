@@ -54,10 +54,18 @@ afterEach(() => vi.restoreAllMocks());
  */
 const RECUSA_REMOVIDA: GiRecusaContratacao = "GI_SALARIO_SEM_UNIDADE";
 
-/** Cada linha e uma das que MORDEM: o nome da recusa e o patch MINIMO da contratacao que a provoca. */
+/**
+ * Cada linha e uma das que MORDEM: o nome da recusa e o patch MINIMO da contratacao que a provoca.
+ *
+ * `contratacao` (opcional) monta a `ContratacaoGi` DIRETO, pulando `contratacaoDeFolhaCompleta`: e so para
+ * o `GI_SALARIO_INVALIDO`, porque o montador NULA zero/negativo/texto (`salarioGi` so mantem `> 0`), entao
+ * nenhum `salario` em `patch` chega NEGATIVO ao `recusaDaContratacaoGi`. Como so o salario negativo ainda
+ * recusa (regra nova do diretor), e preciso injeta-lo direto para a guarda morder (defesa em profundidade).
+ */
 const AS_QUE_MORDEM: Array<{
   recusa: GiRecusaContratacao;
   patch: Partial<Parameters<typeof contratacaoDeFolhaCompleta>[0]>;
+  contratacao?: ReturnType<typeof contratacaoDeFolhaCompleta>;
   dano: string;
 }> = [
   {
@@ -73,8 +81,11 @@ const AS_QUE_MORDEM: Array<{
   },
   {
     recusa: "GI_SALARIO_INVALIDO",
-    patch: { salario: "0" },
-    dano: "salario zero em folha e salario ERRADO, nao campo vazio",
+    // Salario zero/ausente NAO trava mais (regra do diretor, 15/10/2026): so o NEGATIVO recusa, como dado
+    // CORROMPIDO. O montador nula zero/negativo, entao a `ContratacaoGi` vai DIRETO com salario -100.
+    patch: {},
+    contratacao: { ...contratacaoDeFolhaCompleta(), salario: -100 },
+    dano: "salario NEGATIVO e dado corrompido (nao existe folha negativa) e nunca vai para a folha",
   },
   {
     recusa: "GI_SALARIO_HORISTA_SEM_JORNADA",
@@ -94,10 +105,10 @@ const AS_QUE_MORDEM: Array<{
 ];
 
 describe("INVARIANTE 4: no caminho AUTOMATICO, cada guarda de folha continua recusando", () => {
-  for (const { recusa, patch, dano } of AS_QUE_MORDEM) {
+  for (const { recusa, patch, contratacao, dano } of AS_QUE_MORDEM) {
     it(`${recusa}: ZERO chamada ao cliente do GI e ZERO carimbo`, async () => {
       const ctx = montarArnesAutomatico(
-        transicaoArmada({ contratacao: contratacaoDeFolhaCompleta(patch) }),
+        transicaoArmada({ contratacao: contratacao ?? contratacaoDeFolhaCompleta(patch) }),
       );
 
       await ctx.svc.aplicarPosVeredito(ADM_SELECT.id, USER);

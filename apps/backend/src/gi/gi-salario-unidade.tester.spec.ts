@@ -308,15 +308,16 @@ describe("o campo ATRAVESSA o payload: unidade nula passa, horista sem jornada b
 // A ORDEM DAS RECUSAS DO SALÁRIO, que o produto fixou e que a trilha lê
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("a ORDEM: salario invalido primeiro; unidade nula PASSA; horista sem jornada barra", () => {
+describe("a ORDEM: so salario negativo recusa; nulo/zero e unidade nula PASSAM; horista sem jornada barra", () => {
   /**
    * A ORDEM É INFORMAÇÃO, não detalhe de implementação: cada motivo manda o time a uma ação diferente, e
    * trocar a ordem faz um caso ser reportado como outro.
    *
    * O FUNDAMENTO de cada degrau:
-   *  1. `GI_SALARIO_INVALIDO` vem primeiro porque o problema é do próprio número, e declarar a unidade de
-   *     um número que não serve não conserta nada.
-   *  2. UNIDADE nula NÃO é mais degrau (regra do diretor, 14/10/2026): ela PASSA, o envio segue com
+   *  1. `GI_SALARIO_INVALIDO` vem primeiro, mas AGORA só quando o salário é NEGATIVO (regra do diretor,
+   *     15/10/2026): salário nulo/ausente/zero deixou de travar, é preenchido DEPOIS na Folha. Só o
+   *     NEGATIVO recusa, porque é dado CORROMPIDO (não existe folha negativa), não pendência preenchível.
+   *  2. UNIDADE nula NÃO é degrau (regra do diretor, 14/10/2026): ela PASSA, o envio segue com
    *     `tipoSalario` null e o G.I aplica o default. A recusa `GI_SALARIO_SEM_UNIDADE` foi removida.
    *  3. `GI_SALARIO_HORISTA_SEM_JORNADA` segue valendo quando a unidade DECLARADA é `H` e falta a
    *     jornada, e é o único que o time NÃO resolve sozinho.
@@ -328,8 +329,9 @@ describe("a ORDEM: salario invalido primeiro; unidade nula PASSA; horista sem jo
     return { codigoEmpresa: 1, codigoFilial: 4, codigoCliente: 12345, salario, tipoSalario } as never;
   }
 
-  it("salario ZERO com unidade FALTANDO reporta o SALARIO, nao a unidade", () => {
-    expect(recusaDaContratacaoGi(payload(0, null), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
+  it("salario ZERO com unidade FALTANDO NAO recusa mais: zero e unidade nula PASSAM", () => {
+    // Regra nova do diretor (15/10/2026): zero nao trava (so negativo). Unidade nula tambem passa.
+    expect(recusaDaContratacaoGi(payload(0, null), PAR_CONHECIDO)).toBeNull();
   });
 
   it("salario NEGATIVO com unidade HORA reporta o SALARIO, nao o horista", () => {
@@ -352,9 +354,9 @@ describe("a ORDEM: salario invalido primeiro; unidade nula PASSA; horista sem jo
 
   it("a sequencia COMPLETA, na ordem, com o mesmo cenario evoluindo", () => {
     // Lido de cima para baixo, é o caminho que uma admissão percorre à medida que o time a conserta.
-    // Salário inválido recusa; conserta o valor e a unidade nula JÁ PASSA (envio liberado); se o time
-    // declarar HORA sem jornada, volta a recusar até informar a jornada; MENSAL libera.
-    expect(recusaDaContratacaoGi(payload(0, null), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
+    // Salário NEGATIVO (corrompido) recusa; conserta o valor e a unidade nula JÁ PASSA (envio liberado);
+    // se o time declarar HORA sem jornada, volta a recusar até informar a jornada; MENSAL libera.
+    expect(recusaDaContratacaoGi(payload(-100, null), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
     expect(recusaDaContratacaoGi(payload(9.34, null), PAR_CONHECIDO)).toBeNull();
     expect(recusaDaContratacaoGi(payload(9.34, "H"), PAR_CONHECIDO)).toBe(
       "GI_SALARIO_HORISTA_SEM_JORNADA",

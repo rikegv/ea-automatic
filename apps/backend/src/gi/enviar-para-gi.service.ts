@@ -60,8 +60,11 @@ export type GiEnvioMotivo =
    */
   | "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO"
   /**
-   * RECUSA DURA: salário ausente, ZERO ou NEGATIVO. O campo tem `default 0` no GI, e salário zero em
-   * folha é salário ERRADO, não campo vazio. §A.6: o motivo é código fechado e **não carrega o valor**.
+   * RECUSA DURA, hoje DEFESA EM PROFUNDIDADE: só salário NEGATIVO cru recusa (decisão do diretor,
+   * 15/10/2026: salário nulo/ausente/zero NÃO trava mais, igual à unidade, a Folha exige salário
+   * depois). ⚠️ No caminho REAL de produção esta recusa NÃO dispara: `montarContratacaoGi`/`salarioGi`
+   * já NULA zero e negativo antes de montar, então chega `salario: null` e o envio PASSA. O ramo `< 0`
+   * só pega uma `ContratacaoGi` montada por fora, crua. §A.6: o motivo não carrega o valor.
    */
   | "GI_SALARIO_INVALIDO"
   /**
@@ -139,7 +142,7 @@ const MOTIVO_RECUSA_CONTRATACAO: Record<GiRecusaContratacao, string> = {
     "GI: empresa/filial do vinculo do cliente nao resolvidas (cliente_vinculos): envio RECUSADO.",
   GI_PAR_EMPRESA_FILIAL_DESCONHECIDO:
     "GI: o par empresa/filial nao consta da lista autoritativa do GI (GI_PARES_EMPRESA_FILIAL): envio RECUSADO.",
-  GI_SALARIO_INVALIDO: "GI: salario ausente ou fora de faixa para a folha: envio RECUSADO.",
+  GI_SALARIO_INVALIDO: "GI: salario NEGATIVO (dado corrompido): envio RECUSADO. Nulo/zero NAO travam mais.",
   GI_SALARIO_SEM_UNIDADE:
     "GI: unidade do salario nao declarada pelo time (hora ou mensal): envio RECUSADO.",
   // A FRASE DIZ O QUE FALTA, nao so que recusou: e a diferenca entre pendencia preenchivel e admissao
@@ -220,19 +223,18 @@ export class EnviarParaGiService {
   }
 
   /**
-   * `apiSincAdmissaoDigital` do payload: SEMPRE `false`, FIXO, em TODOS os caminhos (manual, automático
-   * e reconciliação). NÃO é mais lido de ambiente, e NÃO existe caminho que o ligue.
+   * `apiSincAdmissaoDigital` do payload: SEMPRE `true`, FIXO, em TODOS os caminhos (manual, automático
+   * e reconciliação). NÃO é lido de ambiente.
    *
-   * POR QUE FIXO, E NÃO MAIS UMA LINHA DE `.env` (decisão do diretor, 15/10/2026, §A.48 reescrita):
-   * medido na produção do fornecedor, `false` PROMOVE o registro para a tela de Cadastro de
-   * Funcionários (onde o time trabalha) e por isso ele SAI da fila `FuncionarioSelecao/GetAll`; `true`
-   * PRENDE o registro no módulo "Admissão Digital", um limbo que o time NÃO acessa. Foi o `true` que fez
-   * Kauã/Edson/Fabricio "sumirem": não sumiram, ficaram presos no limbo, invisíveis na tela de Cadastro.
-   * SUCESSO é o candidato CHEGAR ao Cadastro, nunca "permanecer na fila". O `true` não deve mais ser
-   * usado, então deixou de ser um knob de ambiente que alguém reabre: é `false` fixo, travado por teste
-   * (`gi-apisinc-sempre-false.tester.spec.ts`). O veto de retenção LGPD da §A.48 foi LIBERADO pelo
-   * diretor (risco assumido por ele). Antes havia `apiSincAdmissaoDigital()` lendo
-   * `GI_API_SINC_ADMISSAO_DIGITAL`; a leitura foi removida para o valor não poder reverter por `.env`.
+   * A VERDADE, COM PROVA NA TELA (decisão do diretor, 15/10/2026, §A.48 reescrita após o falso sucesso):
+   * `true` é o valor que FUNCIONA. O registro enviado com `true` PERSISTE na pré-admissão
+   * (`FuncionarioSelecao`) e o SINCRONIZADOR do G.I o promove para a tela de Cadastro de Funcionários,
+   * como o diretor VALIDOU com Edson e Fabricio aparecendo na tela dele. `false` CONSOME o registro: ele
+   * SOME da `FuncionarioSelecao/GetAll` mas NÃO chega ao Cadastro (foi o falso sucesso: "saiu da fila"
+   * foi lido como promoção, era sumiço). A promoção pré-admissão -> Cadastro é do LADO do G.I, por isso
+   * a credencial leva 403 em `Funcionario/*` (esperado). O veto de retenção LGPD foi LIBERADO pelo
+   * diretor (risco dele). Antes havia `apiSincAdmissaoDigital()` lendo `GI_API_SINC_ADMISSAO_DIGITAL`;
+   * removido. Travado por teste (`gi-apisinc-sempre-true.tester.spec.ts`).
    */
 
   /**
@@ -341,11 +343,11 @@ export class EnviarParaGiService {
     // gatilho AUTOMÁTICO continua passando `false` (respeita a idempotência, não re-dispara por estado).
     // As demais guardas (encerramento, empresa/filial, salário, cliente) seguem valendo para os dois.
     //
-    // ⚠️ apiSinc É SEMPRE `false` AGORA (decisão do diretor, 15/10/2026, §A.48 reescrita): o `false`
-    // PROMOVE o registro para a tela de Cadastro de Funcionários (onde o time trabalha); o `true`
-    // prendia no limbo "Admissão Digital" que o time não acessa, e era o que fazia a pessoa "sumir". O
-    // botão não força mais `true` (não há mais o 4º argumento). Sucesso = chegar ao Cadastro, não ficar
-    // na fila. O `ignorarJaEnviado=true` do manual segue valendo, por outro motivo: o "sucesso falso".
+    // ⚠️ apiSinc É SEMPRE `true` AGORA (decisão do diretor, 15/10/2026, com PROVA NA TELA): `true`
+    // PERSISTE na pré-admissão e o SINCRONIZADOR do G.I o promove à tela de Cadastro de Funcionários,
+    // como o diretor validou com Edson e Fabricio; `false` CONSOME e o registro SOME sem chegar (foi o
+    // falso sucesso). O `ignorarJaEnviado=true` do manual segue valendo, por outro motivo: o "sucesso
+    // falso" do carimbo. O valor do apiSinc é decidido lá embaixo, no único ponto que monta o payload.
     return this.enviarComGuardas(admissaoId, autorId, true);
   }
 
@@ -453,12 +455,16 @@ export class EnviarParaGiService {
     // A OPÇÃO DE SINCRONISMO entra PELO MONTADOR, dentro da allowlist fechada, nunca injetada depois
     // dela: campo enfiado no payload por fora não passa pelas redes de runtime daquela fronteira.
     //
-    // O VALOR DO apiSinc É FIXO `false`, nos DOIS gatilhos e na reconciliação (decisão do diretor,
-    // 15/10/2026, §A.48 reescrita). `false` PROMOVE o registro à tela de Cadastro de Funcionários (onde
-    // o time trabalha) e por isso ele sai da fila `FuncionarioSelecao`; `true` prendia no limbo
-    // "Admissão Digital" invisível ao time. Não é mais lido de ambiente nem forçado por caminho nenhum.
+    // O VALOR DO apiSinc É FIXO `true`, nos DOIS gatilhos e na reconciliação (decisão do diretor,
+    // 15/10/2026, §A.48 reescrita de novo, com PROVA NA TELA). CORREÇÃO DE RUMO: medido com Edson e
+    // Fabricio, que o diretor VALIDOU aparecendo na tela de Cadastro de Funcionários, `true` é o valor
+    // que FUNCIONA: o registro PERSISTE na pré-admissão e o SINCRONIZADOR do G.I o promove para o
+    // Cadastro (a promoção é do lado do G.I; por isso a nossa credencial leva 403 em `Funcionario/*`,
+    // esperado, NÃO é bloqueio). `false` CONSOME e o registro SOME sem chegar ao Cadastro (foi o falso
+    // sucesso: "saiu da fila" não era promoção, era sumiço). O veto de retenção LGPD foi LIBERADO pelo
+    // diretor (risco dele). `GI_API_SINC_ADMISSAO_DIGITAL` continua sem efeito (não é mais lido).
     const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined, {
-      apiSincAdmissaoDigital: false,
+      apiSincAdmissaoDigital: true,
     });
 
     if (!this.disparoArmado()) {

@@ -308,8 +308,11 @@ describe("as recusas que EXISTEM nao foram afrouxadas junto", () => {
     expect(criar).not.toHaveBeenCalled();
   });
 
-  it("salario ZERO: recusa GI_SALARIO_INVALIDO e ZERO POST", async () => {
-    const { svc, criar } = envio(contratacaoDeFolhaCompleta({ salario: "0" }), { armado: true });
+  it("salario NEGATIVO: recusa GI_SALARIO_INVALIDO e ZERO POST (zero/nulo NAO travam mais)", async () => {
+    // Regra nova do diretor (15/10/2026): salario nulo/zero deixou de travar (a Folha cobra o salario
+    // depois); so o NEGATIVO recusa, como dado CORROMPIDO. O montador nula zero/negativo (`salarioGi` so
+    // mantem `> 0`), entao a `ContratacaoGi` vai DIRETO com salario -100 para a guarda poder morder.
+    const { svc, criar } = envio({ ...contratacaoDeFolhaCompleta(), salario: -100 }, { armado: true });
 
     const r = await svc.enviarManual(ADM, "autor-sintetico");
 

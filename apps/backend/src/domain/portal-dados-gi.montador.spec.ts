@@ -446,7 +446,10 @@ describe("salario: ausente, zero e negativo nao passam (o default do campo no GI
     expect(comSalario(1800).salario).toBe(1800);
   });
 
-  it("ausente, vazio, zero, negativo e texto viram NULO, que o chamador trata como RECUSA", () => {
+  it("ausente, vazio, zero, negativo e texto viram NULO (o montador so mantem salario > 0)", () => {
+    // O MONTADOR nao mudou: `salarioGi` continua nulando tudo que nao e numero positivo. O que mudou foi o
+    // CHAMADOR: desde 15/10/2026 salario nulo/zero NAO recusa mais (a Folha cobra depois), e so o salario
+    // NEGATIVO cru recusa. Como o montador ja nula o negativo, na pratica so sobra o caso nulo, que PASSA.
     for (const v of [null, undefined, "", "   ", "0", "0.00", 0, "-100.00", -1, "mil reais"]) {
       expect(comSalario(v as string | number | null).salario, `entrada ${JSON.stringify(v)}`).toBeNull();
     }
@@ -589,9 +592,13 @@ describe("recusaDaContratacaoGi: as guardas duras, e a ordem delas", () => {
     expect(recusa({ ...OK, codigoEmpresa: 0, codigoFilial: 0 })).toBe("GI_SEM_EMPRESA_FILIAL");
   });
 
-  it("salario ausente, zero ou negativo: GI_SALARIO_INVALIDO", () => {
-    expect(recusa({ ...OK, salario: null })).toBe("GI_SALARIO_INVALIDO");
-    expect(recusa({ ...OK, salario: 0 })).toBe("GI_SALARIO_INVALIDO");
+  it("salario ausente ou zero PASSA; so NEGATIVO recusa com GI_SALARIO_INVALIDO", () => {
+    // Regra nova do diretor (15/10/2026): salario nulo/ausente/zero deixou de travar (a Folha cobra o
+    // salario depois). So o NEGATIVO ainda recusa, porque e dado CORROMPIDO (nao existe folha negativa).
+    // Aqui a `ContratacaoGi` vai DIRETO ao montador, que repassa `salario` cru (nao re-valida), entao o
+    // -1 chega negativo a guarda; pelo montarContratacaoGi o negativo ja teria virado null (e passaria).
+    expect(recusa({ ...OK, salario: null })).toBeNull();
+    expect(recusa({ ...OK, salario: 0 })).toBeNull();
     expect(recusa({ ...OK, salario: -1 })).toBe("GI_SALARIO_INVALIDO");
   });
 
@@ -677,12 +684,13 @@ describe("recusaDaContratacaoGi: as guardas duras, e a ordem delas", () => {
     }
   });
 
-  it("a ORDEM: valor invalido vence a unidade, e a unidade declarada vence a falta de jornada", () => {
-    // Mandar o time declarar a unidade de um salário zero seria mandá-lo declarar antes de ter o que
-    // declarar; e distinguir "não declarou" de "declarou horista" é o que faz a tela dizer a coisa certa.
-    expect(recusa({ ...OK, salario: 0, tipoSalario: null })).toBe("GI_SALARIO_INVALIDO");
-    expect(recusa({ ...OK, salario: 0, tipoSalario: "H" })).toBe("GI_SALARIO_INVALIDO");
-    // E as duas recusas de empresa/filial continuam vencendo as três do salário.
+  it("a ORDEM: valor NEGATIVO vence a unidade, e a unidade declarada vence a falta de jornada", () => {
+    // Regra nova do diretor (15/10/2026): salario zero/nulo NAO trava mais (so o NEGATIVO, dado
+    // corrompido). O valor negativo vem ANTES da unidade: declarar a unidade de um numero corrompido nao
+    // conserta nada. `payload` monta DIRETO, entao o -1 cru chega negativo a guarda.
+    expect(recusa({ ...OK, salario: -1, tipoSalario: null })).toBe("GI_SALARIO_INVALIDO");
+    expect(recusa({ ...OK, salario: -1, tipoSalario: "H" })).toBe("GI_SALARIO_INVALIDO");
+    // E as duas recusas de empresa/filial continuam vencendo as do salário.
     expect(recusa({ ...OK, codigoEmpresa: null, tipoSalario: null })).toBe("GI_SEM_EMPRESA_FILIAL");
   });
 
@@ -1713,7 +1721,9 @@ describe("codigoCliente: o CLIENTE FINAL, de/para DIRETO, e `0` NUNCA sai", () =
     expect(recusa({ ...completo, codigoCliente: null, codigoEmpresa: null })).toBe(
       "GI_SEM_EMPRESA_FILIAL",
     );
-    expect(recusa({ ...completo, codigoCliente: null, salario: 0 })).toBe("GI_SALARIO_INVALIDO");
+    // Salário NEGATIVO (dado corrompido) ainda vence o cliente; zero/nulo NÃO travam mais (regra do
+    // diretor, 15/10/2026). O -1 vai direto ao montador, que repassa o salario cru (nao re-valida).
+    expect(recusa({ ...completo, codigoCliente: null, salario: -1 })).toBe("GI_SALARIO_INVALIDO");
     // ⚠️ Unidade nula NÃO é mais guarda (regra nova do diretor, 14/10/2026): com o cliente também nulo,
     // a recusa que SOBRA é a do CLIENTE, a próxima guarda aplicável, não mais GI_SALARIO_SEM_UNIDADE.
     expect(recusa({ ...completo, codigoCliente: null, tipoSalario: null })).toBe(

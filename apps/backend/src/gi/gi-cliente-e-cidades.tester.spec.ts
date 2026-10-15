@@ -165,9 +165,10 @@ describe("EMPRESA, FILIAL e CLIENTE sao TRES codigos diferentes, e nenhum sai no
       }),
     );
     expect(recusaDaContratacaoGi(parRuim, PAR_CONHECIDO)).toBe("GI_PAR_EMPRESA_FILIAL_DESCONHECIDO");
-    // E o salário, também. O cliente só aparece quando TODO o resto passou. Unidade nula já NÃO trava
-    // (regra do diretor, 14/10/2026), então quem demonstra a ordem aqui é o salário INVÁLIDO.
-    const salarioRuim = payloadDe(contratacao({ salario: "0", codCliente: null }));
+    // E o salário, também. O cliente só aparece quando TODO o resto passou. Unidade nula e salário
+    // zero/nulo já NÃO travam (regras do diretor, 14 e 15/10/2026), então quem demonstra a ordem aqui é o
+    // salário NEGATIVO (dado corrompido). Vai DIRETO ao payload porque o montador nularia o negativo.
+    const salarioRuim = payloadDe({ ...contratacao({ codCliente: null }), salario: -100 });
     expect(recusaDaContratacaoGi(salarioRuim, PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
   });
 });

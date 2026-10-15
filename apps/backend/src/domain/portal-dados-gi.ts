@@ -1615,7 +1615,12 @@ export function recusaDaContratacaoGi(
     return "GI_SEM_EMPRESA_FILIAL";
   }
   if (!parConhecido(empresa, filial)) return "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO";
-  if (!(typeof payload.salario === "number" && payload.salario > 0)) return "GI_SALARIO_INVALIDO";
+  // ⚠️ SALÁRIO NULO/AUSENTE/ZERO NÃO TRAVA MAIS (decisão do diretor, 15/10/2026, mesma regra da
+  // UNIDADE): se o time não preencheu o salário, ele é preenchido DEPOIS na Folha (a Folha não deixa
+  // seguir sem salário), então o envio ao G.I vai com o que houver e o fornecedor aplica o default. O
+  // caso concreto é o Samuel (Interno, salário ausente), que o diretor mandou enviar. Só o salário
+  // NEGATIVO ainda recusa: é dado CORROMPIDO (não existe folha negativa), não pendência preenchível.
+  if (typeof payload.salario === "number" && payload.salario < 0) return "GI_SALARIO_INVALIDO";
   // ⚠️ A UNIDADE NÃO DECLARADA (nula) NÃO TRAVA MAIS O ENVIO (decisão do diretor, regra PERMANENTE,
   // 14/10/2026). Antes, unidade nula recusava com `GI_SALARIO_SEM_UNIDADE` para não cair no default `M`
   // do fornecedor de forma calada; o diretor reverteu: se o time não cadastrou a unidade, ela é
