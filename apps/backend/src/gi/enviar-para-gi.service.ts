@@ -339,7 +339,20 @@ export class EnviarParaGiService {
    * pode ser legítimo, e autorizar ou proibir isso é decisão do diretor, que ele não tomou.
    */
   async enviarManual(admissaoId: string, autorId: string): Promise<GiEnvioResultado> {
-    return this.enviarComGuardas(admissaoId, autorId);
+    // ⚠️ O BOTÃO MANUAL SEMPRE REENVIA (decisão do diretor, 14/10/2026): passa `ignorarJaEnviado=true`,
+    // então a idempotência `jaEnviado` NÃO barra o reenvio. Pode haver "sucesso falso" (o EA carimbou o
+    // envio mas o registro não está no G.I), e o time precisa conseguir mandar de novo pela tela. O
+    // gatilho AUTOMÁTICO continua passando `false` (respeita a idempotência, não re-dispara por estado).
+    // As demais guardas (encerramento, empresa/filial, salário, cliente) seguem valendo para os dois.
+    //
+    // ⚠️ apiSinc=TRUE ESCOPADO NO CLIQUE (decisão do diretor, confirmada 14/10/2026): o 4º argumento
+    // força `apiSincAdmissaoDigital=true` SÓ neste disparo manual, no processo do envio. Medido na
+    // produção do fornecedor (05/10/2026): com `false` a pré-admissão SOME em menos de 10 min, com
+    // `true` PERMANECE. O envio manual tem de ficar na fila de verdade, então o botão força o `true`.
+    // Isto NÃO altera o default global (`GI_API_SINC_ADMISSAO_DIGITAL` segue ausente=false, §A.48): o
+    // gatilho AUTOMÁTICO continua lendo o env. O flip GLOBAL permanece vetado por retenção LGPD (§A.48);
+    // aqui é pontual, por clique, com a mitigação de o time importar e deletar pela tela do G.I.
+    return this.enviarComGuardas(admissaoId, autorId, true, true);
   }
 
   /**
@@ -366,6 +379,8 @@ export class EnviarParaGiService {
   private async enviarComGuardas(
     admissaoId: string,
     _autorId: string,
+    ignorarJaEnviado = false,
+    apiSincManualForcado = false,
   ): Promise<GiEnvioResultado> {
     if (!this.configurado()) {
       // A frase deixou de dizer "manual": a cadeia passou a ser a dos DOIS gatilhos.
@@ -373,7 +388,12 @@ export class EnviarParaGiService {
       return { enviado: false, motivo: "GI_NAO_CONFIGURADO" };
     }
 
-    if (await this.leitor.jaEnviado(admissaoId)) {
+    // IDEMPOTÊNCIA, pulável SÓ pelo manual (decisão do diretor, 14/10/2026). O automático passa
+    // `ignorarJaEnviado=false` e continua não re-disparando por estado; o botão do time passa `true`
+    // para poder REENVIAR quando houver "sucesso falso" (carimbado no EA, ausente no G.I). Reenviar
+    // re-carimba a idempotência (`marcarEnviado` é upsert), então o `gi_funcionario_selecao_id` passa
+    // a apontar o registro mais novo.
+    if (!ignorarJaEnviado && (await this.leitor.jaEnviado(admissaoId))) {
       this.log.log("GI: admissao ja enviada, idempotencia (no-op).");
       return { enviado: false, motivo: "GI_JA_ENVIADO" };
     }
@@ -438,10 +458,14 @@ export class EnviarParaGiService {
     // Monta o payload das DUAS allowlists FECHADAS (pessoa + os nove campos nomeados) com o de/para de
     // cidade. O objeto carrega PII E SALÁRIO: não é logado, não é retornado, morre no escopo do método.
     // A OPÇÃO DE SINCRONISMO entra PELO MONTADOR, dentro da allowlist fechada, nunca injetada depois
-    // dela: campo enfiado no payload por fora não passa pelas redes de runtime daquela fronteira. O
-    // valor é de ambiente (`GI_API_SINC_ADMISSAO_DIGITAL`), com default `false`, o do fornecedor.
+    // dela: campo enfiado no payload por fora não passa pelas redes de runtime daquela fronteira.
+    //
+    // O VALOR DO apiSinc: o gatilho AUTOMÁTICO usa o de ambiente (`GI_API_SINC_ADMISSAO_DIGITAL`, default
+    // `false`, o do fornecedor, §A.48). O BOTÃO MANUAL força `true` ESCOPADO neste disparo
+    // (`apiSincManualForcado`), para o registro PERMANECER na fila do G.I (com `false` some em menos de
+    // 10 min). O `true` não vaza para o default global: é só o payload deste envio manual.
     const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined, {
-      apiSincAdmissaoDigital: this.apiSincAdmissaoDigital(),
+      apiSincAdmissaoDigital: apiSincManualForcado ? true : this.apiSincAdmissaoDigital(),
     });
 
     if (!this.disparoArmado()) {

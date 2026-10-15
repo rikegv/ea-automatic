@@ -1615,19 +1615,19 @@ export function recusaDaContratacaoGi(
   }
   if (!parConhecido(empresa, filial)) return "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO";
   if (!(typeof payload.salario === "number" && payload.salario > 0)) return "GI_SALARIO_INVALIDO";
-  // A UNIDADE, e aqui a régua é PRESENÇA DA DECLARAÇÃO, igual à de empresa/filial: `M` é o default do
-  // fornecedor, então "não declarado" e "declarado como mensal" produziriam o MESMO envio querendo dizer
-  // coisas diferentes. Quem separa os dois é o nulo, e é por isso que ele não pode virar `M` aqui.
+  // ⚠️ A UNIDADE NÃO DECLARADA (nula) NÃO TRAVA MAIS O ENVIO (decisão do diretor, regra PERMANENTE,
+  // 14/10/2026). Antes, unidade nula recusava com `GI_SALARIO_SEM_UNIDADE` para não cair no default `M`
+  // do fornecedor de forma calada; o diretor reverteu: se o time não cadastrou a unidade, ela é
+  // cadastrada DEPOIS na Folha (a Folha não deixa seguir sem ela), então o envio ao G.I vai com a
+  // unidade NULA e o fornecedor aplica o default dele. Vale para os DOIS gatilhos (automático e manual).
+  // O motivo `GI_SALARIO_SEM_UNIDADE` continua no tipo por compatibilidade, mas não é mais retornado.
   //
-  // ⚠️ A LISTA É DERIVADA DO DE/PARA, não recopiada aqui, e a escolha é a mesma de `vinculoGiValido`: uma
-  // segunda lista literal (`H`/`M`/`D`/...) faria a unidade nova autorizada no `Record` ser recusada em
-  // silêncio por esquecimento deste ponto, que é a divergência calada que a frente existe para evitar.
-  if (!tipoSalarioGiValido(payload.tipoSalario)) return "GI_SALARIO_SEM_UNIDADE";
-  // DECLARADO HORISTA: o `H` sem `qtdeHorasMes`/`qtdeHorasSem` grava "valor por hora vezes 0 horas" na
-  // folha, pelo `default 0` dos dois campos. **AS DUAS são exigidas** (uma só grava contradição), e só
-  // para o `H` (as outras seis unidades fecham o período no próprio par valor+unidade). O `H` chegou até
-  // aqui de propósito: é ele que permite nomear ESTE motivo, que diz O QUE FALTA, em vez do motivo de
-  // "não declarou". Desde a 0140 isso é PENDÊNCIA PREENCHÍVEL, não recusa perpétua.
+  // DECLARADO HORISTA CONTINUA EXIGINDO JORNADA, e isto é caso DIFERENTE de "não declarou": quem declarou
+  // `H` (unidade informada) e não informou a jornada grava "valor por hora vezes 0 horas" na folha, pelo
+  // `default 0` de `qtdeHorasMes`/`qtdeHorasSem`. AS DUAS são exigidas (uma só grava contradição), e só
+  // para o `H` (as outras seis unidades fecham o período no próprio par valor+unidade). Unidade NULA pula
+  // esta checagem (`=== "H"` é falso) e segue, que é a regra nova do diretor. Desde a 0140 é PENDÊNCIA
+  // PREENCHÍVEL, não recusa perpétua.
   if (payload.tipoSalario === "H") {
     const mes = payload.qtdeHorasMes;
     const sem = payload.qtdeHorasSem;

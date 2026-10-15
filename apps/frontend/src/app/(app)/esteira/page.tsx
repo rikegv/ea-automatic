@@ -54,6 +54,38 @@ const ABAS = [
 ] as const;
 
 /**
+ * Traduz o código fechado de desfecho do envio ao G.I (sem PII, §A.6) para uma frase curta de toast.
+ * Sem travessão (§A.11). O caso de sucesso não passa por aqui (o toast já diz "enviado"); isto cobre
+ * só os motivos de recusa que o time precisa entender para destravar.
+ */
+function motivoGiEmTexto(motivo: string): string {
+  switch (motivo) {
+    case "GI_NAO_CONFIGURADO":
+      return "a integração com o G.I não está configurada.";
+    case "GI_ADMISSAO_NAO_OPERAVEL":
+      return "admissão encerrada (declinada ou rescindida).";
+    case "GI_SEM_DADOS_PESSOA":
+      return "faltam dados da pessoa.";
+    case "GI_MONTADO_NAO_DISPARADO":
+      return "o disparo para o G.I está desarmado.";
+    case "GI_SEM_EMPRESA_FILIAL":
+      return "empresa e filial do cliente não resolvidas.";
+    case "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO":
+      return "empresa e filial não constam no catálogo do G.I.";
+    case "GI_SALARIO_INVALIDO":
+      return "salário ausente ou inválido.";
+    case "GI_SALARIO_HORISTA_SEM_JORNADA":
+      return "salário por hora sem a jornada informada.";
+    case "GI_CLIENTE_NAO_RESOLVIDO":
+      return "cliente final não resolvido.";
+    case "GI_FALHA_ENVIO":
+      return "falha na comunicação com o G.I. Tente de novo.";
+    default:
+      return "motivo não identificado.";
+  }
+}
+
+/**
  * FAROL DE COR DA LINHA na aba INTEGRAÇÃO (decisão do diretor). Tom SUAVE, de fundo, para varrer a
  * fila com o olho sem competir com as pills de status:
  *  - vermelho claro: sem agendamento, ninguém marcou nada ainda;
@@ -487,6 +519,30 @@ export default function EsteiraPage() {
   const [actingId, setActingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ msg: string; tone: "ok" | "wn" } | null>(null);
+  // Botão "Enviar para o G.I" da aba Cadastro: qual admissão está em envio agora (trava o duplo-clique).
+  const [enviandoGiId, setEnviandoGiId] = useState<string | null>(null);
+  // Dispara o envio/reenvio manual da admissão ao G.I. O botão é visível para qualquer consultor e
+  // reenvia mesmo quem já foi enviado (o backend ignora a idempotência no manual: recupera "sucesso
+  // falso"). O desfecho vem como código fechado (sem PII, §A.6) e vira uma frase de toast.
+  const enviarParaGi = async (admissaoId: string, nome: string) => {
+    setEnviandoGiId(admissaoId);
+    setFlash(null);
+    try {
+      const r = await apiFetch<{ enviado: boolean; motivo: string }>(
+        `/gi/admissao/${admissaoId}/enviar`,
+        { method: "POST", token },
+      );
+      setFlash(
+        r.enviado
+          ? { msg: `${caixaAlta(nome)} enviado para o G.I.`, tone: "ok" }
+          : { msg: `${caixaAlta(nome)} não enviado ao G.I: ${motivoGiEmTexto(r.motivo)}`, tone: "wn" },
+      );
+    } catch {
+      setFlash({ msg: "Falha ao enviar para o G.I. Tente de novo.", tone: "wn" });
+    } finally {
+      setEnviandoGiId(null);
+    }
+  };
   // Modal de visualização rápida (item 4)
   const [viewId, setViewId] = useState<string | null>(null);
   // Modal de auditoria documental por IA (Fase 4 / F2), só na aba Auditoria.
@@ -2671,6 +2727,25 @@ export default function EsteiraPage() {
 
                         {/* O veredito do ASO pela I.A saiu da linha da fila, agora vive no modal de detalhe
                       do candidato (ícone de OLHO). A lista fica limpa. */}
+
+                        {/* Botão "Enviar para o G.I", só na aba Cadastro: visível para QUALQUER consultor e
+                      para QUALQUER admissão, inclusive quem já foi enviado (nesse caso REENVIA, para
+                      recuperar "sucesso falso"). Dispara o mesmo gatilho manual do backend. */}
+                        {isCadastro && (
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => enviarParaGi(item.admissaoId, item.candidatoNome)}
+                              disabled={enviandoGiId === item.admissaoId}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] font-semibold text-text transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+                              title="Enviar este candidato para o G.I (importação na folha). Reenvia se já foi enviado."
+                            >
+                              {enviandoGiId === item.admissaoId
+                                ? "Enviando ao G.I..."
+                                : "Enviar para o G.I"}
+                            </button>
+                          </div>
+                        )}
 
                         {/* Assinatura Clicksign (INT-4 / F9), só na aba Cadastro; SEM_ENVELOPE fica
                       oculto (discreto). Reenvio por correção é feito na ficha (modal de detalhe). */}

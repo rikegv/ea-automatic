@@ -277,13 +277,18 @@ describe("as recusas que EXISTEM nao foram afrouxadas junto", () => {
     expect(criar).not.toHaveBeenCalled();
   });
 
-  it("salario SEM UNIDADE declarada: recusa GI_SALARIO_SEM_UNIDADE e ZERO POST", async () => {
+  it("salario SEM UNIDADE declarada: NAO trava mais, ENVIA com tipoSalario null (regra nova do diretor)", async () => {
+    // Decisao do diretor (14/10/2026, permanente): unidade nula deixou de recusar. O G.I aplica o
+    // default dele, e a unidade e cadastrada depois na Folha. As DEMAIS recusas de salario seguem
+    // mordendo (ver os testes irmaos de HORISTA sem jornada e de salario ZERO, logo abaixo).
     const { svc, criar } = envio(contratacaoDeFolhaCompleta({ salarioUnidade: null }), { armado: true });
 
     const r = await svc.enviarManual(ADM, "autor-sintetico");
 
-    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_SEM_UNIDADE" });
-    expect(criar).not.toHaveBeenCalled();
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(criar).toHaveBeenCalledTimes(1);
+    // E o nulo atravessa como NULO, nunca vira `M` sozinho no caminho ate o payload.
+    expect(criar.mock.calls[0][0].tipoSalario, "unidade nula virou M em vez de null").toBeNull();
   });
 
   it("HORISTA sem JORNADA: recusa GI_SALARIO_HORISTA_SEM_JORNADA e ZERO POST", async () => {

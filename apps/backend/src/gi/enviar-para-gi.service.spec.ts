@@ -186,6 +186,18 @@ describe("EnviarParaGiService: gatilho AUTOMATICO (auditoria) e a operabilidade"
     expect(f.marcarEnviado).toHaveBeenCalledTimes(1);
   });
 
+  it("ja enviado: o AUTOMATICO MANTEM a idempotencia (GI_JA_ENVIADO, nao re-dispara por estado)", async () => {
+    // O automatico NAO herda o reenvio do manual: ele passa `ignorarJaEnviado=false` e para na marca.
+    // O fechamento da auditoria passa pelos chamadores do pos-veredito, e re-disparar por estado
+    // mandaria a mesma pessoa de novo a cada passagem.
+    const f = fakes({ configurado: true, jaEnviado: true });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviar("00000000-0000-0000-0000-000000000000", CONTEXTO_VIVO);
+    expect(r).toEqual({ enviado: false, motivo: "GI_JA_ENVIADO" });
+    expect(f.criar).not.toHaveBeenCalled();
+    expect(f.marcarEnviado).not.toHaveBeenCalled();
+  });
+
   it("admissao VIVA e disparo DESARMADO: monta e PARA, como o manual", async () => {
     const f = fakes({ configurado: true });
     const svc = build({}, f);
@@ -208,7 +220,7 @@ describe("EnviarParaGiService: gatilho AUTOMATICO (auditoria) e a operabilidade"
   });
 });
 
-describe("EnviarParaGiService: gatilho MANUAL, fail-closed e idempotencia", () => {
+describe("EnviarParaGiService: gatilho MANUAL, fail-closed e REENVIO (ignora jaEnviado)", () => {
   it("nao configurado: nao le pessoa, nao cria", async () => {
     const f = fakes({ configurado: false });
     const svc = build({}, f);
@@ -218,12 +230,16 @@ describe("EnviarParaGiService: gatilho MANUAL, fail-closed e idempotencia", () =
     expect(f.criar).not.toHaveBeenCalled();
   });
 
-  it("ja enviado: idempotencia, nao recria", async () => {
+  it("ja enviado: o MANUAL REENVIA (ignora a idempotencia jaEnviado)", async () => {
+    // Decisao do diretor (14/10/2026): o botao SEMPRE reenvia, inclusive admissao ja enviada, para
+    // recuperar "sucesso falso" (carimbado no EA, ausente no G.I). A idempotencia `jaEnviado` nao barra
+    // o manual (so o automatico a respeita, ver o bloco da idempotencia do automatico).
     const f = fakes({ configurado: true, jaEnviado: true });
     const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
     const r = await svc.enviarManual("00000000-0000-0000-0000-000000000000", "autor-1");
-    expect(r.motivo).toBe("GI_JA_ENVIADO");
-    expect(f.criar).not.toHaveBeenCalled();
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar, "o manual nao reenviou a admissao ja enviada").toHaveBeenCalledTimes(1);
+    expect(f.marcarEnviado).toHaveBeenCalledTimes(1);
   });
 
   it("sem dados de pessoa: nao envia vazio", async () => {
@@ -397,31 +413,37 @@ describe("EnviarParaGiService: salario ausente, zero ou negativo RECUSA o envio"
   });
 });
 
-describe("EnviarParaGiService: a UNIDADE do salario nao declarada RECUSA o envio", () => {
+describe("EnviarParaGiService: a UNIDADE do salario nao declarada PASSA (o G.I aplica o default)", () => {
   /**
-   * O BLOQUEIO, medido na produção em 01/10/2026: **7 admissões VIVAS com salário `9,34` e `10,90`**
-   * (horistas) e o `tipoSalario` do GI com **`default 'M'` (Mês)**. Sem a declaração do time, as 7 entram
-   * na folha como salário MENSAL de R$ 9,34, e **nada falha**: valor positivo, empresa e filial
-   * resolvidas, par conhecido, o fornecedor responde sucesso e o EA carimba o envio (§A.33).
+   * ⚠️ REGRA NOVA DO DIRETOR (14/10/2026, permanente): unidade NAO declarada deixou de travar o envio. A
+   * recusa `GI_SALARIO_SEM_UNIDADE` FOI REMOVIDA de `recusaDaContratacaoGi`. Se o time não cadastrou a
+   * unidade, ela é cadastrada DEPOIS na Folha (a Folha não deixa seguir sem ela), então o envio ao G.I
+   * vai com `tipoSalario: null` e o fornecedor aplica o default dele. Vale para os DOIS gatilhos.
    *
-   * Regra permanente do diretor: nenhum salário é gravado na folha sem auditoria do time, e DECLARAR a
-   * unidade é esse ato de auditoria.
+   * O QUE NAO MUDOU, e este bloco continua provando: declarar HORA sem jornada RECUSA
+   * (`GI_SALARIO_HORISTA_SEM_JORNADA`), e salário inválido RECUSA (`GI_SALARIO_INVALIDO`). A unidade
+   * nula pula a checagem do `H` (não é `=== "H"`) e segue.
    */
   const env = { GI_DISPARO_ARMADO: "true" };
 
-  it("unidade ausente: GI_SALARIO_SEM_UNIDADE, sem tocar o cliente do GI", async () => {
+  it("unidade ausente: NAO trava mais, ENVIA com tipoSalario null", async () => {
     const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: null } });
     const r = await build(env, f).enviarManual("adm-1", "user-1");
-    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_SEM_UNIDADE" });
-    expect(f.criar).not.toHaveBeenCalled();
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(f.criar).toHaveBeenCalledTimes(1);
+    // E o nulo atravessa como NULO, nunca vira `M` sozinho no caminho ate o payload.
+    expect((f.criar.mock.calls[0] as unknown[])[0]).toMatchObject({ tipoSalario: null });
   });
 
-  it("NAO cai no default `M` do fornecedor: nulo RECUSA, nunca vira mensal", async () => {
-    // Se a ausência virasse `M`, este teste passaria com `GI_ENVIADO` e o defeito estaria em produção.
+  it("NAO vira `M` sozinho: o nulo ATRAVESSA como null, o G.I e quem aplica o default", async () => {
+    // Antes a regra era "nulo RECUSA para nao cair no default". Agora o nulo PASSA, mas segue sendo nulo
+    // no payload: quem decide o default e o fornecedor, nao o EA deduzindo `M`.
     const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: null } });
     const r = await build(env, f).enviarManual("adm-1", "user-1");
-    expect(r.enviado).toBe(false);
-    expect(f.marcarEnviado).not.toHaveBeenCalled();
+    expect(r.enviado).toBe(true);
+    const payload = (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
+    expect(payload.tipoSalario).toBeNull();
+    expect(f.marcarEnviado).toHaveBeenCalledTimes(1);
   });
 
   it("declarada HORA sem jornada: GI_SALARIO_HORISTA_SEM_JORNADA, e o GI nao e tocado", async () => {
@@ -464,19 +486,24 @@ describe("EnviarParaGiService: a UNIDADE do salario nao declarada RECUSA o envio
     expect(f.criar).toHaveBeenCalledTimes(1);
   });
 
-  it("recusado por unidade, a idempotencia NAO e carimbada: segue enviavel quando o time declarar", async () => {
-    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: null } });
-    await build(env, f).enviarManual("adm-1", "user-1");
+  it("HORA sem jornada segue recusando, e a idempotencia NAO e carimbada: a recusa que FICOU", async () => {
+    // A remocao foi so da UNIDADE nula. Declarar HORA sem a jornada continua recusando, e recusa nao
+    // carimba: a admissao segue enviavel quando o time informar a jornada.
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, tipoSalario: "H" } });
+    const r = await build(env, f).enviarManual("adm-1", "user-1");
+    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_HORISTA_SEM_JORNADA" });
     expect(f.marcarEnviado).not.toHaveBeenCalled();
   });
 
-  it("o motivo e codigo FECHADO e nao carrega o valor do salario (§A.6)", async () => {
+  it("o motivo da recusa que FICOU e codigo FECHADO e nao carrega o valor do salario (§A.6)", async () => {
+    // A §A.6 se prova na recusa que sobrou (HORISTA sem jornada): o motivo e codigo fechado e NUNCA o
+    // salario `9.34`, que e um dos valores de HORA medidos na producao.
     const f = fakes({
       configurado: true,
-      contratacao: { ...CONTRATACAO_OK, salario: 9.34, tipoSalario: null },
+      contratacao: { ...CONTRATACAO_OK, salario: 9.34, tipoSalario: "H" },
     });
     const r = await build(env, f).enviarManual("adm-1", "user-1");
-    expect(r.motivo).toBe("GI_SALARIO_SEM_UNIDADE");
+    expect(r.motivo).toBe("GI_SALARIO_HORISTA_SEM_JORNADA");
     expect(JSON.stringify(r)).not.toContain("9.34");
   });
 });
@@ -609,12 +636,25 @@ describe("EnviarParaGiService: admissao ENCERRADA nao sai por caminho nenhum", (
     expect(f.criar).not.toHaveBeenCalled();
   });
 
-  it("a IDEMPOTENCIA responde ANTES do encerramento: ja enviada segue GI_JA_ENVIADO", async () => {
-    // A ordem e deliberada: "ja foi" e informacao mais util que "esta declinada", e e o que o time
-    // precisa ler quando clica de novo.
+  it("a IDEMPOTENCIA responde ANTES do encerramento NO AUTOMATICO: ja enviada segue GI_JA_ENVIADO", async () => {
+    // ⚠️ SO VALE PARA O AUTOMATICO desde 14/10/2026: o manual nao consulta mais `jaEnviado` (sempre
+    // reenvia), entao esta ordem e exclusiva do gatilho automatico. A ordem e deliberada: "ja foi" e
+    // informacao mais util que "esta declinada". O contexto VIVO passa a operabilidade; a cadeia unica
+    // ve a marca ANTES de ler o farol encerrado do banco.
+    const f = fakes({ configurado: true, jaEnviado: true, farolGlobal: "DECLINOU" });
+    const r = await build(ARMADO, f).enviar(ADMISSAO, VIVO);
+    expect(r.motivo).toBe("GI_JA_ENVIADO");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("no MANUAL, ja enviada E encerrada: o ENCERRAMENTO vence, porque o manual ignora jaEnviado", async () => {
+    // Como o manual pula a idempotencia (sempre reenvia), ele chega na guarda de encerramento, que
+    // recusa declinado/rescindido por caminho NENHUM. A marca de envio nao o salva de uma admissao
+    // encerrada: o farol e que manda.
     const f = fakes({ configurado: true, jaEnviado: true, farolGlobal: "DECLINOU" });
     const r = await build(ARMADO, f).enviarManual(ADMISSAO, "autor-1");
-    expect(r.motivo).toBe("GI_JA_ENVIADO");
+    expect(r).toEqual({ enviado: false, motivo: "GI_ADMISSAO_NAO_OPERAVEL" });
+    expect(f.criar).not.toHaveBeenCalled();
   });
 });
 
@@ -622,43 +662,65 @@ describe("EnviarParaGiService: admissao ENCERRADA nao sai por caminho nenhum", (
 // O `apiSincAdmissaoDigital` (item 3): MECANISMO de ambiente, com default `false`
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("EnviarParaGiService: apiSincAdmissaoDigital vem do ambiente, com default false", () => {
+describe("EnviarParaGiService: apiSincAdmissaoDigital, ambiente no AUTOMATICO e true forcado no MANUAL", () => {
   const ARMADO = { GI_DISPARO_ARMADO: "true" };
 
-  async function payloadCom(env: Record<string, string>) {
+  // O AUTOMATICO LE O AMBIENTE (default false, §A.48). Passa pela trava de origem (o fixture atende com
+  // origem MANUAL, autorizada) e cria com a contratacao OK.
+  async function payloadAutomatico(env: Record<string, string>) {
+    const f = fakes({ configurado: true });
+    await build({ ...ARMADO, ...env }, f).enviar(ADMISSAO, CONTEXTO_VIVO);
+    expect(f.criar).toHaveBeenCalledTimes(1);
+    return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
+  }
+
+  // O MANUAL (botao do time) FORCA apiSinc=true ESCOPADO no clique, qualquer que seja o ambiente.
+  async function payloadManual(env: Record<string, string>) {
     const f = fakes({ configurado: true });
     await build({ ...ARMADO, ...env }, f).enviarManual(ADMISSAO, "autor-1");
     expect(f.criar).toHaveBeenCalledTimes(1);
     return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
   }
 
-  it("sem a variavel: o campo SAI e vale false, o default do FORNECEDOR", async () => {
-    const payload = await payloadCom({});
-    expect(payload.apiSincAdmissaoDigital).toBe(false);
+  it("AUTOMATICO sem a variavel: o campo SAI e vale false, o default do FORNECEDOR (§A.48)", async () => {
+    expect((await payloadAutomatico({})).apiSincAdmissaoDigital).toBe(false);
   });
 
-  it("GI_API_SINC_ADMISSAO_DIGITAL=true: o campo vale true e a pre-admissao PERMANECE no G.I", async () => {
-    const payload = await payloadCom({ GI_API_SINC_ADMISSAO_DIGITAL: "true" });
+  it("AUTOMATICO com GI_API_SINC_ADMISSAO_DIGITAL=true: o campo vale true e a pre-admissao PERMANECE", async () => {
+    const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: "true" });
     expect(payload.apiSincAdmissaoDigital).toBe(true);
   });
 
   it.each([["false"], ["1"], ["sim"], ["on"], [""]])(
-    "valor %s NAO liga: uma forma so de ligar, para nao existir meio-ligado",
+    "AUTOMATICO valor %s NAO liga: uma forma so de ligar, para nao existir meio-ligado",
     async (valor) => {
-      const payload = await payloadCom({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
+      const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
       expect(payload.apiSincAdmissaoDigital).toBe(false);
     },
   );
 
-  it("espaco e caixa NAO atrapalham: ` TRUE ` liga, como no GI_DISPARO_ARMADO", async () => {
+  it("AUTOMATICO espaco e caixa NAO atrapalham: ` TRUE ` liga, como no GI_DISPARO_ARMADO", async () => {
     // Mesma leitura do `GI_DISPARO_ARMADO` de proposito: quem edita o `.env` nao deve perder a
     // decisao por um espaco, e duas reguas de leitura diferentes para duas flags vizinhas e pior.
-    const payload = await payloadCom({ GI_API_SINC_ADMISSAO_DIGITAL: " TRUE " });
+    const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: " TRUE " });
     expect(payload.apiSincAdmissaoDigital).toBe(true);
   });
 
+  // ⚠️ O MANUAL FORCA true ESCOPADO (decisao do diretor, 14/10/2026): o registro tem de PERMANECER na
+  // fila do G.I (com false some em menos de 10 min). O default GLOBAL fica intacto (§A.48), como provam
+  // os casos do automatico acima: o true e so do payload deste disparo manual, nao vaza para o env.
+  it("MANUAL sem a variavel: FORCA apiSinc=true, mesmo com o ambiente ausente (default false)", async () => {
+    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(true);
+  });
+
+  it("MANUAL com o ambiente explicitamente false: AINDA forca true (o escopo do clique manda)", async () => {
+    expect((await payloadManual({ GI_API_SINC_ADMISSAO_DIGITAL: "false" })).apiSincAdmissaoDigital).toBe(
+      true,
+    );
+  });
+
   it("a CHAVE existe sempre: campo booleano nao-anulavel no contrato do G.I", async () => {
-    const payload = await payloadCom({});
+    const payload = await payloadManual({});
     expect(Object.keys(payload)).toContain("apiSincAdmissaoDigital");
     expect(payload.apiSincAdmissaoDigital).not.toBeNull();
   });

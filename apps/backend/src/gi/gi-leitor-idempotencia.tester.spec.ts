@@ -19,8 +19,11 @@ import { DE_PARA_GI_VAZIO, RETENCAO_DADOS_GI_MS } from "../domain/portal-dados-g
  * │ SEGUNDA tentativa criava um SEGUNDO `FuncionarioSelecao` na PRODUÇÃO DO FORNECEDOR, que é um     │
  * │ efeito que o EA não tem como desfazer.                                                          │
  * │                                                                                                 │
- * │ Por isso o teste que mais importa aqui não é o do upsert isolado: é o de baixo, com o serviço de │
- * │ envio real sobre o leitor real, chamando `enviarManual` DUAS vezes.                              │
+ * │ O upsert (primeiro describe) segue sendo o que garante que a marca PASSA A EXISTIR mesmo sem    │
+ * │ linha previa. O que MUDOU (decisao do diretor, 14/10/2026) e o gatilho MANUAL: ele agora IGNORA │
+ * │ a idempotencia `jaEnviado` e REENVIA, para recuperar "sucesso falso" (carimbado no EA, ausente  │
+ * │ no G.I). O AUTOMATICO continua idempotente (nao re-dispara por estado). O segundo describe mede │
+ * │ os dois, com o serviço de envio real sobre o leitor real.                                       │
  * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * §A.6: nada de pessoa real. O CPF é sintético e válido no verificador só para o fluxo não recusar
@@ -274,7 +277,7 @@ describe("marcarEnviado e UPSERT: a marca passa a existir mesmo sem linha previa
   });
 });
 
-describe("O CENARIO QUE MOTIVOU O CONSERTO: duas chamadas de enviarManual, um registro so", () => {
+describe("A REGRA NOVA: o MANUAL REENVIA; o AUTOMATICO mantem a idempotencia", () => {
   function envio(b: ReturnType<typeof bancoFalso>) {
     const criar = vi.fn(
       async (): Promise<GiCriacaoResultado> => ({ ok: true, funcionarioSelecaoId: "GI-123" }),
@@ -293,7 +296,13 @@ describe("O CENARIO QUE MOTIVOU O CONSERTO: duas chamadas de enviarManual, um re
     return { svc, criar };
   }
 
-  it("SEM linha previa (o caso que duplicava): o segundo clique NAO cria no GI", async () => {
+  /** O contexto do gatilho automatico: admissao VIVA, para a operabilidade nao recusar antes da hora. */
+  const CONTEXTO_VIVO = { farolGlobal: "EM_ADMISSAO", pausadaEm: null, autorId: "auto-1" };
+
+  it("SEM linha previa: o segundo clique MANUAL REENVIA e cria no GI de novo", async () => {
+    // Decisao do diretor (14/10/2026): o botao SEMPRE reenvia, para recuperar "sucesso falso". O upsert
+    // re-carimba a MESMA linha (`gi_funcionario_selecao_id` aponta o registro mais novo), entao a tabela
+    // nao duplica, mas o `POST` ao fornecedor ACONTECE de novo.
     const b = bancoFalso(); // a admissão não tem linha em `admissao_dados_gi`
     const { svc, criar } = envio(b);
 
@@ -301,25 +310,29 @@ describe("O CENARIO QUE MOTIVOU O CONSERTO: duas chamadas de enviarManual, um re
     const segundo = await svc.enviarManual(ADM, "autor-1");
 
     expect(primeiro).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
-    expect(segundo.motivo, "o segundo clique voltou a enviar").toBe("GI_JA_ENVIADO");
-    expect(criar, "dois FuncionarioSelecao criados na producao do fornecedor").toHaveBeenCalledTimes(
-      1,
-    );
+    expect(segundo, "o segundo clique manual deveria REENVIAR").toEqual({
+      enviado: true,
+      motivo: "GI_ENVIADO",
+    });
+    expect(criar, "o manual reenvia: dois FuncionarioSelecao criados").toHaveBeenCalledTimes(2);
+    // O upsert re-carimba a mesma linha, sem criar uma segunda.
     expect(b.tabela.size).toBe(1);
+    expect(b.tabela.get(ADM)?.giFuncionarioSelecaoId).toBe("GI-123");
   });
 
-  it("COM linha previa: segue valendo (o caminho que ja funcionava nao regrediu)", async () => {
-    const b = bancoFalso({ giEnviadoEm: null });
+  it("COM linha previa (ja enviada): o MANUAL ainda assim REENVIA", async () => {
+    // O "sucesso falso" e exatamente este caso: a linha ja esta carimbada no EA (`giEnviadoEm` setado),
+    // mas o registro pode nao estar no G.I. O botao precisa conseguir mandar de novo.
+    const b = bancoFalso({ giEnviadoEm: new Date("2026-01-01T00:00:00.000Z") });
     const { svc, criar } = envio(b);
 
-    await svc.enviarManual(ADM, "autor-1");
-    const segundo = await svc.enviarManual(ADM, "autor-1");
+    const r = await svc.enviarManual(ADM, "autor-1");
 
-    expect(segundo.motivo).toBe("GI_JA_ENVIADO");
-    expect(criar).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(criar, "o manual nao reenviou a admissao ja carimbada").toHaveBeenCalledTimes(1);
   });
 
-  it("TRES cliques tambem param no primeiro envio", async () => {
+  it("TRES cliques MANUAIS criam TRES vezes (sucesso falso recuperavel a cada clique)", async () => {
     const b = bancoFalso();
     const { svc, criar } = envio(b);
 
@@ -329,7 +342,35 @@ describe("O CENARIO QUE MOTIVOU O CONSERTO: duas chamadas de enviarManual, um re
       (await svc.enviarManual(ADM, "autor-3")).motivo,
     ];
 
-    expect(motivos).toEqual(["GI_ENVIADO", "GI_JA_ENVIADO", "GI_JA_ENVIADO"]);
+    expect(motivos).toEqual(["GI_ENVIADO", "GI_ENVIADO", "GI_ENVIADO"]);
+    expect(criar).toHaveBeenCalledTimes(3);
+  });
+
+  it("o AUTOMATICO mantem a idempotencia: admissao ja enviada retorna GI_JA_ENVIADO, sem tocar o GI", async () => {
+    // A guarda da regra: o automatico NAO herda o reenvio do manual. Ele passa `ignorarJaEnviado=false`
+    // e continua nao re-disparando por estado (o fechamento da auditoria passa pelos oito chamadores do
+    // pos-veredito; re-disparar ali mandaria a mesma pessoa de novo a cada passagem).
+    const b = bancoFalso({ giEnviadoEm: new Date("2026-01-01T00:00:00.000Z") });
+    const { svc, criar } = envio(b);
+
+    const r = await svc.enviar(ADM, CONTEXTO_VIVO);
+
+    expect(r).toEqual({ enviado: false, motivo: "GI_JA_ENVIADO" });
+    expect(criar, "o automatico re-disparou por estado: a idempotencia caiu junto com a do manual").not.toHaveBeenCalled();
+  });
+
+  it("o AUTOMATICO so dispara UMA vez: segunda passagem do pos-veredito NAO recria", async () => {
+    // Duas chamadas do automatico sobre a mesma admissao: a primeira envia e carimba (upsert), a segunda
+    // ve a marca e para. E a prova de que o estado NAO re-dispara, que e o oposto do manual.
+    const b = bancoFalso();
+    const { svc, criar } = envio(b);
+
+    const primeiro = await svc.enviar(ADM, CONTEXTO_VIVO);
+    const segundo = await svc.enviar(ADM, CONTEXTO_VIVO);
+
+    expect(primeiro).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(segundo).toEqual({ enviado: false, motivo: "GI_JA_ENVIADO" });
     expect(criar).toHaveBeenCalledTimes(1);
+    expect(b.tabela.size).toBe(1);
   });
 });

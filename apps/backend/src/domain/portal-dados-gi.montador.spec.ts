@@ -595,11 +595,17 @@ describe("recusaDaContratacaoGi: as guardas duras, e a ordem delas", () => {
     expect(recusa({ ...OK, salario: -1 })).toBe("GI_SALARIO_INVALIDO");
   });
 
-  it("unidade NAO declarada: GI_SALARIO_SEM_UNIDADE, e NUNCA o default `M` do fornecedor", () => {
-    // É a guarda do bloqueio das 7 horistas. O valor é válido, a empresa e a filial resolvem, o par é
-    // conhecido: a ÚNICA coisa que impede R$ 9,34 de entrar como salário mensal é esta linha.
-    expect(recusa({ ...OK, tipoSalario: null })).toBe("GI_SALARIO_SEM_UNIDADE");
-    expect(recusa({ ...OK, tipoSalario: "MENSAL" as never })).toBe("GI_SALARIO_SEM_UNIDADE");
+  it("unidade NAO declarada NAO trava mais: PASSA, e o payload sai com tipoSalario null", () => {
+    // Regra NOVA do diretor (14/10/2026, permanente): unidade nula deixou de recusar. Se o time não
+    // cadastrou a unidade, ela é cadastrada DEPOIS na Folha (a Folha não deixa seguir sem ela), então o
+    // envio ao G.I vai com `tipoSalario: null` e o fornecedor aplica o default dele. O que NÃO pode é o
+    // nulo virar `M` sozinho: ele atravessa como NULO, e isso é o que este teste prova.
+    expect(recusa({ ...OK, tipoSalario: null })).toBeNull();
+    expect(payload({ ...OK, tipoSalario: null }).tipoSalario).toBeNull();
+    // Grafia que não é letra do GI (`MENSAL`, o vocabulário do EA) também vira NULO no payload e PASSA:
+    // a rede de runtime não a repassa como palpite, mas tampouco trava o envio.
+    expect(recusa({ ...OK, tipoSalario: "MENSAL" as never })).toBeNull();
+    expect(payload({ ...OK, tipoSalario: "MENSAL" as never }).tipoSalario).toBeNull();
   });
 
   it("declarada HORA sem jornada: GI_SALARIO_HORISTA_SEM_JORNADA, e o motivo diz O QUE FALTA", () => {
@@ -1708,8 +1714,10 @@ describe("codigoCliente: o CLIENTE FINAL, de/para DIRETO, e `0` NUNCA sai", () =
       "GI_SEM_EMPRESA_FILIAL",
     );
     expect(recusa({ ...completo, codigoCliente: null, salario: 0 })).toBe("GI_SALARIO_INVALIDO");
+    // ⚠️ Unidade nula NÃO é mais guarda (regra nova do diretor, 14/10/2026): com o cliente também nulo,
+    // a recusa que SOBRA é a do CLIENTE, a próxima guarda aplicável, não mais GI_SALARIO_SEM_UNIDADE.
     expect(recusa({ ...completo, codigoCliente: null, tipoSalario: null })).toBe(
-      "GI_SALARIO_SEM_UNIDADE",
+      "GI_CLIENTE_NAO_RESOLVIDO",
     );
   });
 });

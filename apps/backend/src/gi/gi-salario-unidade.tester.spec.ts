@@ -18,32 +18,29 @@ import {
 } from "../domain/portal-dados-gi";
 
 /**
- * A UNIDADE DO SALÁRIO: a guarda que impede o `default 'M'` do fornecedor de declarar MENSAL sozinho.
+ * A UNIDADE DO SALÁRIO: a regra NOVA do diretor (14/10/2026) e a guarda do HORISTA que FICOU.
  *
  * Escrito pelo `tester` A PARTIR DO REQUISITO (§A.38/§A.40), sem Postgres e sem rede.
  *
- * ┌─ O QUE ESTA RÉGUA EXISTE PARA IMPEDIR, e foi MEDIDO na produção em 01/10/2026 ─────────────────┐
- * │ `dados_vaga_folha.salario` é um `numeric(12,2)` SEM unidade, e há **7 admissões VIVAS com 9,34   │
- * │ (2) e 10,90 (5)**, que são valores de HORA. No GI, `tipoSalario` tem **`default 'M'` (Mês)**.    │
- * │ Enviar o salário sem a unidade faz aquelas 7 entrarem na folha como **salário MENSAL de R$ 9,34**│
- * │ passando por TODAS as guardas que já existiam: valor positivo, empresa e filial resolvidas, par  │
- * │ conhecido. O fornecedor responde sucesso, o EA carimba o envio, nada falha, e o erro aparece no  │
- * │ holerite. É a família da §A.33.                                                                 │
+ * ┌─ A REGRA MUDOU (decisao do diretor, 14/10/2026, permanente) ────────────────────────────────────┐
+ * │ ANTES: unidade NAO declarada (nula) RECUSAVA o envio (`GI_SALARIO_SEM_UNIDADE`), para o salario   │
+ * │ de HORA nao cair no `default 'M'` do fornecedor de forma calada.                                  │
+ * │                                                                                                   │
+ * │ AGORA: unidade nula **NAO trava mais**. Se o time nao cadastrou a unidade, ela e cadastrada        │
+ * │ DEPOIS na Folha (a Folha nao deixa seguir sem ela), entao o envio ao G.I vai com `tipoSalario:    │
+ * │ null` e o fornecedor aplica o default dele. A recusa `GI_SALARIO_SEM_UNIDADE` FOI REMOVIDA de      │
+ * │ `recusaDaContratacaoGi`; o motivo segue no TYPE e no mapa de mensagens por compatibilidade, mas    │
+ * │ nunca mais e retornado.                                                                           │
  * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ⚠️ O PERIGO NÃO É MANDAR O CAMPO ERRADO, É OMITIR. Por isso a régua central deste arquivo não é "o
- * campo saiu do payload": é **o `POST` inteiro não aconteceu**. Guarda implementada esvaziando o campo
- * seria exatamente cair no default do fornecedor, que é o dano. Todo teste de recusa aqui afirma, junto,
- * que `criarFuncionarioSelecao` **não foi chamado nenhuma vez**.
- *
- * SÃO DOIS MOTIVOS DISTINTOS, e confundi-los numa asserção só perderia a diferença que a tela precisa
- * mostrar ao time:
- *   - `GI_SALARIO_SEM_UNIDADE`: **ninguém declarou**. Ação: alguém olha o valor e declara (0140).
- *   - `GI_SALARIO_HORISTA_SEM_JORNADA`: **declarou HORA** e **falta a JORNADA** em horas que o
- *     `tipoSalario = 'H'` exige do outro lado (`qtdeHorasMes`/`qtdeHorasSem`, ambos `default 0`). Ação:
- *     informar a jornada. **Desde a 0140 isto é PENDÊNCIA PREENCHÍVEL, não recusa perpétua**, e a
- *     diferença importa: admissão auditada que o sistema recusa PARA SEMPRE é indistinguível de admissão
- *     quebrada, porque não há o que preencher.
+ * ⚠️ O QUE ESTE ARQUIVO PROVA AGORA, e sao duas coisas:
+ *   1. **Unidade nula NAO trava o envio**, e o campo ATRAVESSA como `null` (nunca vira `M` sozinho: quem
+ *      aplica o default e o fornecedor, nao o EA deduzindo). O envio ACONTECE e a idempotencia e
+ *      carimbada normalmente.
+ *   2. **HORISTA sem jornada CONTINUA recusando** (`GI_SALARIO_HORISTA_SEM_JORNADA`): declarar `H` sem a
+ *      jornada (`qtdeHorasMes`/`qtdeHorasSem`, ambos `default 0` no GI) gravaria "valor por hora vezes 0
+ *      horas". Essa recusa e PENDENCIA PREENCHIVEL: informar a jornada destrava. Para ela, e so para
+ *      ela, o `POST` inteiro nao pode acontecer.
  *
  * §A.6: toda entrada é SINTÉTICA (CPF de faixa reservada, nome inventado, domínio de homologação), e
  * nenhum valor de remuneração é impresso em mensagem de falha que não seja o próprio sintético.
@@ -132,7 +129,7 @@ function envio(contratacao: ContratacaoGi) {
 // A GUARDA BARRA O `POST` INTEIRO: nada é criado no fornecedor
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("a UNIDADE barra o POST inteiro, nao o campo", () => {
+describe("a UNIDADE nula NAO trava o envio; so o HORISTA sem jornada barra o POST", () => {
   it("CANARIO: com a unidade MENSAL declarada, o envio ACONTECE e o POST e feito", async () => {
     /**
      * ESTE TESTE É A METADE INDISPENSÁVEL DA RÉGUA, e sem ele os de baixo não valem nada: ele prova que
@@ -148,15 +145,18 @@ describe("a UNIDADE barra o POST inteiro, nao o campo", () => {
     expect(criar, "a unica variavel do experimento e a unidade").toHaveBeenCalledTimes(1);
   });
 
-  it("SEM unidade declarada: recusa GI_SALARIO_SEM_UNIDADE e NENHUM POST acontece", async () => {
+  it("SEM unidade declarada: o envio ACONTECE e o payload sai com tipoSalario null", async () => {
+    // Regra NOVA do diretor (14/10/2026): unidade nula NAO trava mais. O `POST` acontece, o campo
+    // atravessa como `null`, e o fornecedor aplica o default dele. A unidade e cadastrada depois na Folha.
     const { svc, criar, marcarEnviado } = envio(contratacaoCom(null));
 
     const r = await svc.enviarManual(ADM, "autor-sintetico");
 
-    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_SEM_UNIDADE" });
-    expect(criar, "criou FuncionarioSelecao na producao do fornecedor sem unidade").not.toHaveBeenCalled();
-    // E a idempotência NÃO é carimbada: a admissão continua pendente e reenviável depois da declaração.
-    expect(marcarEnviado, "carimbou envio que nao aconteceu").not.toHaveBeenCalled();
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(criar).toHaveBeenCalledTimes(1);
+    expect(criar.mock.calls[0][0].tipoSalario, "unidade nula virou M em vez de null").toBeNull();
+    // E a idempotência É carimbada: o envio aconteceu, como em qualquer envio de verdade.
+    expect(marcarEnviado).toHaveBeenCalledTimes(1);
   });
 
   it("unidade HORA SEM jornada: recusa GI_SALARIO_HORISTA_SEM_JORNADA e NENHUM POST acontece", async () => {
@@ -230,25 +230,25 @@ describe("a UNIDADE barra o POST inteiro, nao o campo", () => {
     }
   });
 
-  it("os DOIS motivos sao DIFERENTES, e a diferenca e o que a tela mostra ao time", async () => {
-    // "é horista e falta a jornada" e "ninguém declarou" pedem ações diferentes (nenhuma do time x
-    // declarar a unidade). Uma asserção só de "recusou" perderia justamente isso.
+  it("unidade nula ENVIA e HORISTA sem jornada RECUSA: desfechos e acoes diferentes", async () => {
+    // Os dois sao casos diferentes com acoes diferentes: unidade nula segue (a Folha cobra depois),
+    // horista sem jornada para (o time informa a jornada e destrava). Agora um deles nem recusa mais.
     const semUnidade = await envio(contratacaoCom(null)).svc.enviarManual(ADM, "a");
     const horista = await envio(contratacaoCom("HORA")).svc.enviarManual(ADM, "a");
 
-    expect(semUnidade.motivo).not.toBe(horista.motivo);
-    expect(semUnidade.motivo).toBe("GI_SALARIO_SEM_UNIDADE");
-    expect(horista.motivo).toBe("GI_SALARIO_HORISTA_SEM_JORNADA");
+    expect(semUnidade).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+    expect(horista).toEqual({ enviado: false, motivo: "GI_SALARIO_HORISTA_SEM_JORNADA" });
   });
 
-  it("grafia fora do CHECK do banco e tratada como NAO DECLARADA, nunca como palpite", async () => {
-    // A coluna tem CHECK, então grafia criativa é sinal de escrita por fora. O desfecho seguro é recusar
-    // como "ninguém declarou", e NUNCA deduzir pela letra parecida ("Horista" não vira `H`).
+  it("grafia fora do CHECK do banco e tratada como NAO DECLARADA (null), nunca como palpite", async () => {
+    // A coluna tem CHECK, então grafia criativa é sinal de escrita por fora. O desfecho é tratar como
+    // "não declarada" (`tipoSalario` null), e NUNCA deduzir pela letra parecida ("Horista" não vira `H`).
+    // E unidade nula NAO trava mais (regra do diretor): o envio ACONTECE com o campo nulo.
     for (const grafia of ["Horista", "MES", "mensal ao mes", "", "   ", "M", "H", "QUINZENA"]) {
       const { svc, criar } = envio(contratacaoCom(grafia));
       const r = await svc.enviarManual(ADM, "autor-sintetico");
-      expect(r.motivo, `grafia "${grafia}"`).toBe("GI_SALARIO_SEM_UNIDADE");
-      expect(criar, `grafia "${grafia}" virou envio`).not.toHaveBeenCalled();
+      expect(r, `grafia "${grafia}"`).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+      expect(criar.mock.calls[0][0].tipoSalario, `grafia "${grafia}" virou palpite`).toBeNull();
     }
     // ⚠️ `"M"` e `"H"` entram na lista do lixo DE PROPÓSITO: a coluna do EA guarda o VOCABULÁRIO DO EA
     // (`MENSAL`, `HORA`), não a letra do fornecedor. Letra na coluna é sinal de escrita por fora, e aceitá-la
@@ -265,13 +265,13 @@ describe("a UNIDADE barra o POST inteiro, nao o campo", () => {
 // NUNCA SE CAI NO DEFAULT: o campo CHEGA ao payload, e é a guarda que para o envio
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("o perigo e OMITIR: a guarda nao esvazia o campo, ela barra o envio", () => {
-  it("no caso RECUSADO, TODAS as outras guardas passavam: so a unidade parou o envio", () => {
+describe("o campo ATRAVESSA o payload: unidade nula passa, horista sem jornada barra", () => {
+  it("unidade nula: o campo ATRAVESSA como null e NENHUMA guarda recusa (envio liberado)", () => {
     /**
-     * É ESTE TESTE QUE PROVA O DANO, e não o de cima: ele mostra que o payload de 9,34 sem unidade está
-     * COMPLETO aos olhos de todas as guardas anteriores (empresa e filial resolvidas, par real, salário
-     * positivo). Sem a guarda da unidade, o `POST` sairia, o GI aplicaria `default 'M'` e o holerite
-     * viria com R$ 9,34 mensais. A recusa é a única coisa entre o dado e a folha.
+     * O payload de 9,34 sem unidade está COMPLETO aos olhos de todas as guardas: empresa e filial
+     * resolvidas, par real, salário positivo, cliente resolvido. A unidade nula atravessa como `null` e,
+     * pela regra nova do diretor (14/10/2026), NÃO recusa mais: o G.I aplica o default dele e a unidade é
+     * cadastrada depois na Folha. O que o montador NÃO faz é transformar o nulo em `M` sozinho.
      */
     const payload = montarFuncionarioSelecao(PESSOA, DE_PARA_GI_VAZIO, contratacaoCom(null));
 
@@ -279,9 +279,9 @@ describe("o perigo e OMITIR: a guarda nao esvazia o campo, ela barra o envio", (
     expect(payload.codigoFilial).toBe(4);
     expect(payload.salario).toBe(9.34);
     expect(PAR_CONHECIDO(1, 4)).toBe(true);
-    // A unidade é a ÚNICA coisa faltando, e ela é o que recusa.
+    // A unidade atravessa como NULO, e NÃO recusa.
     expect(payload.tipoSalario).toBeNull();
-    expect(recusaDaContratacaoGi(payload, PAR_CONHECIDO)).toBe("GI_SALARIO_SEM_UNIDADE");
+    expect(recusaDaContratacaoGi(payload, PAR_CONHECIDO)).toBeNull();
   });
 
   it("o H ATRAVESSA o payload de proposito, e quem o impede de chegar ao GI e a RECUSA", () => {
@@ -305,10 +305,10 @@ describe("o perigo e OMITIR: a guarda nao esvazia o campo, ela barra o envio", (
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// A ORDEM DAS TRÊS RECUSAS DO SALÁRIO, que o produto fixou e que a trilha lê
+// A ORDEM DAS RECUSAS DO SALÁRIO, que o produto fixou e que a trilha lê
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("a ORDEM: salario invalido, depois sem unidade, depois horista sem jornada", () => {
+describe("a ORDEM: salario invalido primeiro; unidade nula PASSA; horista sem jornada barra", () => {
   /**
    * A ORDEM É INFORMAÇÃO, não detalhe de implementação: cada motivo manda o time a uma ação diferente, e
    * trocar a ordem faz um caso ser reportado como outro.
@@ -316,9 +316,10 @@ describe("a ORDEM: salario invalido, depois sem unidade, depois horista sem jorn
    * O FUNDAMENTO de cada degrau:
    *  1. `GI_SALARIO_INVALIDO` vem primeiro porque o problema é do próprio número, e declarar a unidade de
    *     um número que não serve não conserta nada.
-   *  2. `GI_SALARIO_SEM_UNIDADE` vem antes do insumo que a unidade exige: não há como cobrar jornada em
-   *     horas de quem ainda não disse que é horista.
-   *  3. `GI_SALARIO_HORISTA_SEM_JORNADA` é o último, e é o único que o time NÃO resolve sozinho.
+   *  2. UNIDADE nula NÃO é mais degrau (regra do diretor, 14/10/2026): ela PASSA, o envio segue com
+   *     `tipoSalario` null e o G.I aplica o default. A recusa `GI_SALARIO_SEM_UNIDADE` foi removida.
+   *  3. `GI_SALARIO_HORISTA_SEM_JORNADA` segue valendo quando a unidade DECLARADA é `H` e falta a
+   *     jornada, e é o único que o time NÃO resolve sozinho.
    */
   function payload(salario: unknown, tipoSalario: unknown) {
     // `codigoCliente` resolvido e DISTINTO de empresa e filial: as três recusas medidas aqui são as do
@@ -335,8 +336,8 @@ describe("a ORDEM: salario invalido, depois sem unidade, depois horista sem jorn
     expect(recusaDaContratacaoGi(payload(-100, "H"), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
   });
 
-  it("salario VALIDO sem unidade reporta SEM UNIDADE, nunca horista sem horas", () => {
-    expect(recusaDaContratacaoGi(payload(9.34, null), PAR_CONHECIDO)).toBe("GI_SALARIO_SEM_UNIDADE");
+  it("salario VALIDO sem unidade NAO recusa mais: unidade nula passa a guarda", () => {
+    expect(recusaDaContratacaoGi(payload(9.34, null), PAR_CONHECIDO)).toBeNull();
   });
 
   it("salario VALIDO com unidade HORA reporta HORISTA SEM HORAS, nunca sem unidade", () => {
@@ -349,10 +350,12 @@ describe("a ORDEM: salario invalido, depois sem unidade, depois horista sem jorn
     expect(recusaDaContratacaoGi(payload(9.34, "M"), PAR_CONHECIDO)).toBeNull();
   });
 
-  it("a sequencia COMPLETA das tres, na ordem, com o mesmo cenario evoluindo", () => {
+  it("a sequencia COMPLETA, na ordem, com o mesmo cenario evoluindo", () => {
     // Lido de cima para baixo, é o caminho que uma admissão percorre à medida que o time a conserta.
+    // Salário inválido recusa; conserta o valor e a unidade nula JÁ PASSA (envio liberado); se o time
+    // declarar HORA sem jornada, volta a recusar até informar a jornada; MENSAL libera.
     expect(recusaDaContratacaoGi(payload(0, null), PAR_CONHECIDO)).toBe("GI_SALARIO_INVALIDO");
-    expect(recusaDaContratacaoGi(payload(9.34, null), PAR_CONHECIDO)).toBe("GI_SALARIO_SEM_UNIDADE");
+    expect(recusaDaContratacaoGi(payload(9.34, null), PAR_CONHECIDO)).toBeNull();
     expect(recusaDaContratacaoGi(payload(9.34, "H"), PAR_CONHECIDO)).toBe(
       "GI_SALARIO_HORISTA_SEM_JORNADA",
     );
