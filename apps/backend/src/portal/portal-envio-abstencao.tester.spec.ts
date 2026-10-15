@@ -80,14 +80,22 @@ const VIVO_E_ABERTO: LinkFake = {
   suspensoAte: null,
   bloqueadoEm: null,
   primeiroAcessoEm: new Date(AGORA - 5 * 60_000),
+  // `criado_em` é NOT NULL (default do banco): a devolução do mesmo link o lê para re-cunhar o token.
+  criadoEm: new Date(AGORA - 10 * 60_000),
 };
 
-describe("link VIVO e JÁ ABERTO: a emissão se ABSTÉM (S15)", () => {
-  it("devolve o link que já existe, em vez de um novo", async () => {
+// MUDANÇA DE CONTRATO (OST do reenvio do mesmo link): ANTES, link vivo e JÁ ABERTO fazia a emissão
+// por e-mail se ABSTER (`LINK_VIVO_EM_USO`, o pop-up "já tem o link e não pode reenviar"). AGORA ela
+// DEVOLVE esse mesmo link (o que o candidato está usando), sem reemitir. A proteção da S15 continua
+// inteira por outro mecanismo: devolver o mesmo link NÃO reemite, então NÃO há sessão de upload a
+// derrubar, que era o dano que a abstenção existia para evitar.
+describe("link VIVO e JÁ ABERTO: a emissão DEVOLVE o mesmo link, sem reemitir (S15)", () => {
+  it("devolve o link que já existe (mesmo `jti`), marcado como reutilizado", async () => {
     const m = montar([VIVO_E_ABERTO]);
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido).toBeNull();
-    expect(r.jaAtivo?.jti).toBe(JTI_SINTETICO);
+    expect(r.emitido?.jti, "tinha de devolver o link que o candidato já usa").toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(r.jaAtivo, "não se abstém mais com o pop-up").toBeNull();
   });
 
   it("NÃO insere linha nova em `portal_links`", async () => {
@@ -102,7 +110,7 @@ describe("link VIVO e JÁ ABERTO: a emissão se ABSTÉM (S15)", () => {
     expect(revogou(m), "a sessão de quem estava enviando documento foi derrubada").toBe(false);
   });
 
-  /** Abstenção é NÃO EVENTO: registrá-la encheria a trilha de "não fiz nada" a cada clique. */
+  /** Devolver o link que já existe é NÃO EVENTO: registrá-lo encheria a trilha a cada clique. */
   it("não registra nada na trilha", async () => {
     const m = montar([VIVO_E_ABERTO]);
     await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
@@ -110,17 +118,19 @@ describe("link VIVO e JÁ ABERTO: a emissão se ABSTÉM (S15)", () => {
   });
 });
 
-describe("o recorte é ESTREITO: fora dele, emite (senão o reenvio morre)", () => {
+describe("o recorte é ESTREITO: sem link vivo, emite; com link vivo, devolve o mesmo", () => {
   /**
-   * O CASO MAIS COMUM DA OPERAÇÃO: o link foi enviado e a pessoa NUNCA abriu. Abster-se aqui
-   * deixaria o RH sem nenhuma forma de reenviar, que é exatamente o pedido do dia a dia, e não há
-   * sessão nenhuma a proteger: ninguém entrou.
+   * O CASO MAIS COMUM DA OPERAÇÃO: o link foi enviado e a pessoa NUNCA abriu. ANTES, isto era
+   * reemitido (link novo). AGORA o reenvio DEVOLVE o mesmo link vivo (o que já está na caixa do
+   * candidato), sem inserir outro: reenviar o MESMO link é o pedido do dia a dia, e não há por que
+   * cunhar um segundo e revogar o primeiro, que deixaria a pessoa com a mensagem antiga quebrada.
    */
-  it("link vivo NUNCA aberto é reemitido", async () => {
+  it("link vivo NUNCA aberto: o reenvio devolve o MESMO link, sem inserir outro", async () => {
     const m = montar([{ ...VIVO_E_ABERTO, primeiroAcessoEm: null }]);
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido?.jti, "o reenvio para quem não recebeu ficou impossível").toBeTruthy();
-    expect(inseriu(m)).toBe(true);
+    expect(r.emitido?.jti, "o reenvio para quem não recebeu ficou impossível").toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(inseriu(m), "cunhou um segundo link em vez de devolver o que já existe").toBe(false);
   });
 
   it("link já aberto mas VENCIDO é reemitido: não há sessão viva a proteger", async () => {
@@ -140,6 +150,37 @@ describe("o recorte é ESTREITO: fora dele, emite (senão o reenvio morre)", () 
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
     expect(r.emitido?.link).toContain("#");
     expect(inseriu(m)).toBe(true);
+  });
+
+  /**
+   * ENTRE VÁRIOS VIVOS, DEVOLVE O QUE O CANDIDATO JÁ ABRIU, não o mais recente. É o link que ele
+   * está usando AGORA; devolver outro o mandaria para uma sessão diferente. Sem este teste, trocar
+   * `vivos.find(primeiroAcessoEm !== null)` por "o mais recente" passaria despercebido.
+   */
+  it("entre dois links vivos, devolve o JÁ ACESSADO mesmo sendo o mais VELHO", async () => {
+    // IDs distintos de ADMISSAO_SINTETICA/JTI_SINTETICO de propósito: o dublê casa link por id, e um
+    // id igual ao da admissão faria a consulta devolver só aquele link.
+    const JTI_ACESSADO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const JTI_NAO_ACESSADO = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const acessadoVelho: LinkFake = {
+      ...VIVO_E_ABERTO,
+      id: JTI_ACESSADO,
+      criadoEm: new Date(AGORA - 3 * 3_600_000),
+      primeiroAcessoEm: new Date(AGORA - 2 * 3_600_000),
+    };
+    const naoAcessadoNovo: LinkFake = {
+      ...VIVO_E_ABERTO,
+      id: JTI_NAO_ACESSADO,
+      criadoEm: new Date(AGORA - 60_000),
+      primeiroAcessoEm: null,
+    };
+    const m = montar([naoAcessadoNovo, acessadoVelho]);
+    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
+    expect(r.emitido?.jti, "devolveu o mais recente em vez do que o candidato já abriu").toBe(
+      JTI_ACESSADO,
+    );
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(inseriu(m)).toBe(false);
   });
 });
 

@@ -54,7 +54,17 @@ import { PortalTrilhaService } from "./portal-trilha.service";
  * ali. Não é persistido, não é logado e não volta em resposta de rota de envio.
  */
 export interface EmissaoParaEnvio {
-  emitido: { jti: string; link: string; expiraEm: Date } | null;
+  /**
+   * `reutilizado` DIZ SE O LINK FOI REAPROVEITADO, e é o que separa o reenvio da primeira emissão.
+   *
+   * `false` (ou ausente): a linha NASCEU neste `emitirComTrava`, e os links vivos anteriores foram
+   * revogados no caminho. `true`: NADA foi escrito nem revogado, a emissão DEVOLVEU o link vivo que
+   * já existia (reenvio do MESMO link, decisão do diretor Rike). Quem envia por e-mail LÊ este campo
+   * para decidir o desfecho da FALHA de envio: revogar um link recém-nascido e órfão é a limpeza
+   * certa, mas revogar um link REUTILIZADO encerraria o acesso que o candidato talvez esteja usando
+   * agora, por causa de uma falha de REENVIO. Então a falha só revoga quando `reutilizado` é falso.
+   */
+  emitido: { jti: string; link: string; expiraEm: Date; reutilizado?: boolean } | null;
   jaAtivo: {
     jti: string;
     expiraEm: Date;
@@ -377,12 +387,23 @@ export class PortalIdentidadeService {
    */
   async emitirLinkParaEnvio(admissaoId: string, autorId: string): Promise<EmissaoParaEnvio> {
     /*
-     * ORIGEM NULA NO NASCIMENTO, e é deliberado: por este caminho a origem só se sabe quando o
-     * e-mail SAI, e quem a carimba é `marcarEnvioDoLink`, depois de o correio aceitar a mensagem.
-     * Gravá-la aqui diria "enviado por e-mail" sobre um link que ainda pode nem ser entregue (e
-     * que, nesse caso, é revogado pelo serviço de envio).
+     * REENVIAR POR E-MAIL = O MESMO LINK, QUANTAS VEZES PRECISAR (decisão do diretor Rike). O RH
+     * perdia candidato porque, para quem JÁ tinha acessado, o reenvio se abstinha com o pop-up "já
+     * tem o link e não pode reenviar" (`LINK_VIVO_EM_USO`), e dentro da janela curta com
+     * `ENVIADO_HA_POUCO`. Agora o reenvio DEVOLVE o link vivo que já existe (`devolverExistenteSeVivo=true`),
+     * preferindo o que o candidato JÁ ABRIU: re-cunha o token do MESMO `jti` e MESMA janela, e o
+     * correio reenvia ESSE link. NÃO cunha link novo, NÃO revoga, NÃO encerra o acesso vigente e NÃO
+     * estende o prazo. É a MESMA lógica que o `emitirLinkParaCopiar` já usa e que o `seguranca` já
+     * aprovou; a abstenção "já acessou" fica DESLIGADA pelo mesmo motivo (o perigo dela era a
+     * REEMISSÃO que derrubava a sessão, e o reenvio deixou de reemitir).
+     *
+     * SEM LINK VIVO NENHUM, emite o PRIMEIRO (comportamento normal), e aí a ORIGEM NASCE NULA de
+     * propósito: por este caminho a origem só se sabe quando o e-mail SAI, e quem a carimba é
+     * `marcarEnvioDoLink`, depois de o correio aceitar a mensagem. Gravá-la aqui diria "enviado por
+     * e-mail" sobre um link que ainda pode nem ser entregue (e que, nesse caso, é revogado pelo
+     * serviço de envio, porque aí `reutilizado` é falso).
      */
-    return this.emitirComTrava(admissaoId, autorId, true, null, true);
+    return this.emitirComTrava(admissaoId, autorId, false, null, true, true);
   }
 
   /**
@@ -663,7 +684,10 @@ export class PortalIdentidadeService {
         chave,
       );
       return {
-        emitido: { jti: e.jti, link: this.urlDoLink(token), expiraEm: e.expiraEm },
+        // `reutilizado: true`: nada foi escrito nem revogado, só devolvemos o link que já existia.
+        // Quem reenvia por e-mail lê isto para NÃO revogar este link numa falha de envio (ele pode
+        // estar em uso pelo candidato agora). Ver `EmissaoParaEnvio.emitido`.
+        emitido: { jti: e.jti, link: this.urlDoLink(token), expiraEm: e.expiraEm, reutilizado: true },
         jaAtivo: null,
         foraDoRecorte: null,
       };
@@ -697,7 +721,9 @@ export class PortalIdentidadeService {
       exp: Math.floor(expiraEm.getTime() / 1000),
     });
 
-    return { emitido: { jti, link: this.urlDoLink(token), expiraEm }, jaAtivo: null, foraDoRecorte: null };
+    // `reutilizado: false`: a linha NASCEU aqui e revogou os vivos anteriores. Uma falha de envio
+    // DEVE revogar este link (recém-nascido e órfão), e é isso que o serviço de envio faz lendo o campo.
+    return { emitido: { jti, link: this.urlDoLink(token), expiraEm, reutilizado: false }, jaAtivo: null, foraDoRecorte: null };
   }
 
   /**

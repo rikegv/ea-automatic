@@ -2,7 +2,6 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { PortalEnvioService } from "./portal-envio.service";
 import { PortalIdentidadeService } from "./portal-identidade.service";
-import { JANELA_DE_REENVIO_MS } from "../domain/portal-envio";
 import {
   ADMISSAO_SINTETICA,
   AUTOR_SINTETICO,
@@ -75,6 +74,9 @@ const VIVO: LinkFake = {
   suspensoAte: null,
   bloqueadoEm: null,
   primeiroAcessoEm: null,
+  // `criado_em` é NOT NULL em `portal_links` (default do banco); a devolução do mesmo link lê ele
+  // para re-cunhar o token com a MESMA janela. Cada caso que precisa de outro instante sobrescreve.
+  criadoEm: new Date(AGORA - 60_000),
 };
 
 // ══ ITEM 3: A EMISSÃO ANTIGA CARIMBA A ORIGEM ════════════════════════════════════════════════
@@ -113,127 +115,115 @@ describe("o `gerar link` carimba `ENTREGA_A_MAO`, e não finge um envio", () => 
   });
 });
 
-// ══ ITEM 4: A JANELA CURTA ═══════════════════════════════════════════════════════════════════
+// ══ ITEM 4: O REENVIO POR E-MAIL DEVOLVE O MESMO LINK VIVO (decisão do diretor Rike) ══════════
+//
+// MUDANÇA DE CONTRATO (OST "reenviar o link por e-mail, o mesmo link, quantas vezes precisar").
+// ANTES, o reenvio por e-mail se ABSTINHA: `LINK_VIVO_EM_USO` quando o candidato já tinha aberto o
+// link, e `ENVIADO_HA_POUCO` dentro da janela curta. O RH perdia candidato (a pessoa perde o link,
+// pede de novo, e o reenvio recusava). AGORA o reenvio DEVOLVE o link vivo que já existe (prefere o
+// que o candidato JÁ ABRIU), re-cunhando o token do MESMO `jti`. NÃO insere link novo, NÃO revoga,
+// NÃO encerra o acesso, NÃO estende o prazo. Só quando NÃO há link vivo nenhum é que ele emite o
+// PRIMEIRO. A abstenção `ENVIADO_HA_POUCO` deixa de ser alcançável por este caminho, porque qualquer
+// link vivo (aberto ou não, dentro ou fora da janela) é DEVOLVIDO antes de a janela ser avaliada.
+//
+// A trava que PROTEGIA de verdade (não derrubar a sessão de quem está enviando documento) continua
+// de pé por OUTRO mecanismo: devolver o mesmo link não reemite, então não há sessão a derrubar.
 
-describe("janela curta: dois cliques seguidos não mandam dois e-mails (item b da S15)", () => {
+describe("reenviar por e-mail devolve o MESMO link vivo, sem revogar nem encerrar o acesso", () => {
   const RECEM_ENVIADO: LinkFake = { ...VIVO, enviadoEm: new Date(AGORA - 5_000) };
 
-  it("o segundo clique se ABSTÉM, com código próprio", async () => {
+  it("link vivo recém-enviado: o reenvio DEVOLVE o mesmo `jti`, marcado como reutilizado", async () => {
     const m = montar([RECEM_ENVIADO]);
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido).toBeNull();
-    expect(r.jaAtivo?.motivo).toBe("ENVIADO_HA_POUCO");
-    expect(r.jaAtivo?.jti).toBe(JTI_SINTETICO);
+    expect(r.emitido?.jti, "o reenvio tinha de devolver o link que já existe").toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado, "reenvio do mesmo link é reutilização").toBe(true);
+    expect(r.jaAtivo, "não se abstém mais").toBeNull();
+    // NÃO ESTENDE O PRAZO (exigência do diretor): o `expira_em` devolvido é o da linha existente.
+    expect(r.emitido?.expiraEm, "o reenvio estendeu o prazo do link").toEqual(RECEM_ENVIADO.expiraEm);
   });
 
   /**
-   * O DANO QUE ISTO EVITA: o segundo link REVOGA o primeiro, então o candidato fica com duas
-   * mensagens e a primeira, a que ele provavelmente abre, não funciona mais.
+   * O PONTO INTEIRO DA FRENTE: devolver o mesmo link não pode custar o acesso vigente. Nenhum link
+   * novo, nenhuma revogação, nenhum carimbo de envio escrito pela emissão (o carimbo do envio sai
+   * depois, no `marcarEnvioDoLink`, quando o correio aceita).
    */
-  it("não insere link novo e NÃO revoga o que acabou de ser mandado", async () => {
+  it("não insere link novo, NÃO revoga e não escreve trilha", async () => {
     const m = montar([RECEM_ENVIADO]);
     await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
     expect(insercoes(m)).toHaveLength(0);
-    expect(revogou(m), "a mensagem que está na caixa do candidato foi invalidada").toBe(false);
-  });
-
-  it("abstenção é NÃO EVENTO: nada vai para a trilha", async () => {
-    const m = montar([RECEM_ENVIADO]);
-    await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(m.trilha.registros).toEqual([]);
-  });
-
-  it("passada a janela, o reenvio legítimo volta a funcionar", async () => {
-    const m = montar([{ ...VIVO, enviadoEm: new Date(AGORA - JANELA_DE_REENVIO_MS - 1_000) }]);
-    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido?.jti, "o reenvio de quem não recebeu ficou impossível").toBeTruthy();
-  });
-
-  it("link ANTIGO nunca enviado continua sendo reemitido na hora (é o caminho comum)", async () => {
-    // Nascido fora da janela: reenviar para quem não recebeu continua sendo o gesto mais comum da
-    // operação, e a correção do achado 14 não podia custá-lo.
-    const m = montar([{ ...VIVO, criadoEm: new Date(AGORA - 3 * 3_600_000) }]);
-    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido?.jti).toBeTruthy();
+    expect(revogou(m), "o reenvio revogou um link vivo").toBe(false);
+    expect(m.trilha.registros, "devolver o link que já existe é um não-evento").toEqual([]);
   });
 
   /**
-   * ══ A FRESTA DO ACHADO 14, FECHADA ═══════════════════════════════════════════════════════
-   *
-   * O link entregue À MÃO ("gerar link") nasce com `ENTREGA_A_MAO` e SEM `enviado_em`, porque
-   * nada foi enviado. Enquanto a janela olhava só `enviado_em`, clicar em "enviar por e-mail"
-   * segundos depois (os dois botões ficam lado a lado na coluna de Ações) reemitia e REVOGAVA a
-   * URL que o consultor tinha acabado de mandar pelo WhatsApp. Ninguém via nada falhar; quem
-   * ficava com o link morto na mão era o candidato.
+   * O CASO QUE O POP-UP TRAVAVA: candidato que JÁ ACESSOU. Antes, abstenção `LINK_VIVO_EM_USO`
+   * ("já tem o link e não pode reenviar"). Agora, devolve o MESMO link (o que ele está usando), sem
+   * revogar nada. A sessão dele fica intocada.
    */
-  it("link ENTREGUE À MÃO agora há pouco também segura o envio por e-mail", async () => {
+  it("link já ABERTO: devolve o mesmo link (não é mais o pop-up `LINK_VIVO_EM_USO`)", async () => {
+    const m = montar([
+      { ...VIVO, primeiroAcessoEm: new Date(AGORA - 60_000), enviadoEm: new Date(AGORA - 5_000) },
+    ]);
+    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
+    expect(r.emitido?.jti).toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(r.jaAtivo).toBeNull();
+    expect(revogou(m), "o acesso vigente do candidato foi encerrado").toBe(false);
+  });
+
+  it("link entregue À MÃO recém-criado: o reenvio por e-mail devolve ESSE mesmo link", async () => {
     const recemEntregueAMao = { ...VIVO, enviadoEm: null, criadoEm: new Date(AGORA - 5_000) };
     const m = montar([recemEntregueAMao]);
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido, "reemitiu e matou o link que acabou de ser entregue à mão").toBeNull();
-    expect(r.jaAtivo?.motivo).toBe("ENVIADO_HA_POUCO");
+    expect(r.emitido?.jti, "devolveu outro link em vez do que acabou de ser entregue").toBe(
+      JTI_SINTETICO,
+    );
+    expect(r.emitido?.reutilizado).toBe(true);
     expect(revogou(m)).toBe(false);
   });
 
-  it("passada a janela, o link entregue à mão não segura mais o envio por e-mail", async () => {
-    const m = montar([
-      { ...VIVO, enviadoEm: null, criadoEm: new Date(AGORA - JANELA_DE_REENVIO_MS - 1_000) },
-    ]);
+  it("dentro da janela curta, o reenvio TAMBÉM devolve o mesmo link (não abstém mais)", async () => {
+    const m = montar([{ ...VIVO, enviadoEm: new Date(AGORA - 200) }]);
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido?.jti).toBeTruthy();
+    expect(r.emitido?.jti).toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(r.jaAtivo?.motivo, "`ENVIADO_HA_POUCO` não é mais alcançável no reenvio").toBeUndefined();
+  });
+
+  it("SEM link vivo nenhum, emite o PRIMEIRO: nasce, não é reutilizado, e com origem nula", async () => {
+    const m = montar([]);
+    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
+    expect(r.emitido?.jti, "sem link vivo, o primeiro tinha de nascer").toBeTruthy();
+    expect(r.emitido?.reutilizado, "o primeiro link não é reutilização").toBe(false);
+    expect(insercoes(m)).toHaveLength(1);
+    expect(insercoes(m)[0].valores.envioOrigem, "o primeiro nasce sem origem de envio").toBeNull();
+  });
+
+  it("link MORTO não é devolvido: vencido não é vivo, então emite um link NOVO", async () => {
+    const vencido = { ...VIVO, enviadoEm: new Date(AGORA - 1_000), expiraEm: new Date(AGORA - 1) };
+    const m = montar([vencido]);
+    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
+    expect(r.emitido?.jti, "emitiu um link para quem não tinha nenhum vivo").toBeTruthy();
+    expect(r.emitido?.reutilizado, "link morto não é reutilizável; nasce um novo").toBe(false);
   });
 
   /**
-   * A SEGUNDA CORRIDA QUE `criado_em` FECHA, e ela é a que a auditoria tinha deixado como "meio
-   * cumprida": entre o `insert` e o `marcarEnvioDoLink` existe um vão (o correio aceitando a
-   * mensagem) em que a linha está viva, não aberta e AINDA SEM `enviado_em`. Um segundo envio
-   * nesse vão lia a linha do primeiro, não via carimbo, reemitia e matava o link do e-mail que
-   * estava saindo naquele instante.
+   * E O "GERAR LINK" (`emitirLink`) NÃO MUDA: ele REVOGA sempre e é a VÁLVULA DE ESCAPE de quando
+   * algo trava. Nada nesta frente tocou essa porta.
    */
-  it("o vão entre emitir e carimbar o envio também está coberto", async () => {
-    const emVoo = { ...VIVO, enviadoEm: null, criadoEm: new Date(AGORA - 200) };
-    const r = await montar([emVoo]).servico.emitirLinkParaEnvio(
-      ADMISSAO_SINTETICA,
-      AUTOR_SINTETICO,
-    );
-    expect(r.emitido).toBeNull();
-  });
-
-  /**
-   * E O "GERAR LINK" NÃO GANHA A JANELA, de propósito: ele passa com `recusarSeJaAcessado = false`
-   * e é a VÁLVULA DE ESCAPE de quando alguma coisa trava. É essa porta que sustenta a afirmação da
-   * auditoria de que não existe estado em que o time fique sem conseguir entregar um link.
-   */
-  it("o `gerar link` continua emitindo mesmo com entrega recentíssima", async () => {
+  it("o `gerar link` continua emitindo e revogando, como sempre", async () => {
     const m = montar([{ ...VIVO, enviadoEm: null, criadoEm: new Date(AGORA - 1_000) }]);
     const r = await m.servico.emitirLink(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
     expect(r.link).toBeTruthy();
     expect(insercoes(m)).toHaveLength(1);
   });
 
-  it("link MORTO não segura ninguém, por mais recente que seja o envio", async () => {
-    const vencido = { ...VIVO, enviadoEm: new Date(AGORA - 1_000), expiraEm: new Date(AGORA - 1) };
-    expect(
-      (await montar([vencido]).servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO))
-        .emitido?.jti,
-    ).toBeTruthy();
-  });
-
-  /** A precedência: quem JÁ ENTROU é o caso mais grave, e tem frase própria. */
-  it("link já ABERTO e recém-enviado se abstém como `LINK_VIVO_EM_USO`, não como janela", async () => {
-    const m = montar([
-      { ...VIVO, primeiroAcessoEm: new Date(AGORA - 60_000), enviadoEm: new Date(AGORA - 5_000) },
-    ]);
-    const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.jaAtivo?.motivo).toBe("LINK_VIVO_EM_USO");
-  });
-
   /**
-   * A DECISÃO É TOMADA DENTRO DA TRANSAÇÃO, e é isso que a torna correta: fora dela, a pergunta
-   * responderia sobre um instante anterior à escrita, e dois cliques simultâneos passariam os dois
-   * antes de qualquer um carimbar. É o mesmo furo que a trava fechou para a revogação.
+   * A DECISÃO É TOMADA DENTRO DA TRANSAÇÃO, sob a mesma `pg_advisory_xact_lock` por admissão: a
+   * busca pelo link vivo a devolver corre sob a trava, igual à revogação. Fora dela, a leitura
+   * responderia sobre um instante anterior à escrita.
    */
-  it("a janela é decidida sob a mesma trava por admissão", async () => {
+  it("o reenvio consulta a admissão sob a mesma trava", async () => {
     const m = montar([RECEM_ENVIADO]);
     await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
     const consultas = m.banco.consultas.flat().join(" ");
@@ -243,6 +233,11 @@ describe("janela curta: dois cliques seguidos não mandam dois e-mails (item b d
 
 // ══ O SERVIÇO DE ENVIO REPASSA O CÓDIGO, EM VEZ DE REESCREVER A RÉGUA ════════════════════════
 
+// NOTA: com o reenvio devolvendo o mesmo link, a emissão por e-mail NÃO produz mais
+// `LINK_VIVO_EM_USO` nem `ENVIADO_HA_POUCO` (qualquer link vivo é devolvido antes). Estes testes
+// continuam provando o REPASSE do código pelo serviço de envio, que é contrato defensivo: se a
+// emissão algum dia devolver uma abstenção, a tela recebe o rótulo certo e nenhum e-mail sai. O
+// desfecho VIVO do reenvio (devolver o mesmo link e enviá-lo) é provado logo abaixo.
 describe("o serviço de envio devolve o código que a emissão escolheu", () => {
   const montarEnvio = (motivo?: "LINK_VIVO_EM_USO" | "ENVIADO_HA_POUCO") => {
     const banco = bancoDoEnvio({ pessoa: {} });
@@ -289,41 +284,44 @@ describe("o serviço de envio devolve o código que a emissão escolheu", () => 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 // O DUBLÊ APLICA A ESCRITA, E A LEITURA SEGUINTE ENXERGA (achado da 5ª auditoria)
 //
-// Enquanto o banco falso só REGISTRAVA a escrita, a janela de reenvio só era testável semeando
-// `enviado_em` à mão: nunca se provava que a SEGUNDA emissão lê o que a PRIMEIRA gravou. Estes
-// testes fecham a corrida real (retry / duplo-clique / dois cliques em "enviar"): o segundo envio
-// dentro da janela mataria a sessão que o candidato acabou de abrir e dispararia um segundo e-mail.
+// O banco falso PERSISTE o `insert` e a leitura seguinte o enxerga, então a SEGUNDA emissão lê o
+// que a PRIMEIRA gravou. É o que faz "reenviar 2x" ser testável de verdade: sem a persistência, a
+// segunda não veria a linha da primeira e inseriria uma segunda, revogando a primeira. Com a nova
+// regra (devolver o mesmo link), a prova é a oposta da antiga: o segundo DEVOLVE o que o primeiro
+// criou, em vez de se abster.
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("a segunda emissão lê a linha que a primeira INSERIU, e se abstém", () => {
-  it("emitir para envio duas vezes seguidas: o segundo se abstém como `ENVIADO_HA_POUCO`", async () => {
+describe("reenviar 2x seguidas: o segundo devolve o MESMO link que o primeiro criou", () => {
+  it("o primeiro NASCE; o segundo DEVOLVE o mesmo `jti`, marcado como reutilizado", async () => {
     const m = montar([]);
 
     const primeiro = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
     const segundo = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
 
     expect(primeiro.emitido?.jti, "o primeiro envio precisa nascer").toBeTruthy();
-    expect(segundo.emitido, "o segundo reemitiu, sem enxergar o link recém-criado").toBeNull();
-    expect(segundo.jaAtivo?.motivo).toBe("ENVIADO_HA_POUCO");
+    expect(primeiro.emitido?.reutilizado, "o primeiro é novo, não reutilizado").toBe(false);
+    expect(segundo.emitido?.jti, "o segundo devolveu um link diferente do primeiro").toBe(
+      primeiro.emitido?.jti,
+    );
+    expect(segundo.emitido?.reutilizado, "o segundo é reenvio do mesmo link").toBe(true);
   });
 
-  it("o segundo envio NÃO insere link novo e NÃO revoga o primeiro (a régua que ele mataria)", async () => {
+  it("o segundo NÃO insere link novo e NÃO revoga o primeiro", async () => {
     const m = montar([]);
 
     await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
     await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
 
-    // Um único `insert`: se a escrita do primeiro não fosse aplicada, o segundo não enxergaria a
-    // linha e inseriria a segunda, revogando a primeira, que é exatamente o dano da corrida.
+    // Um único `insert`: o do NASCIMENTO do primeiro. Se o segundo tivesse reemitido, haveria dois.
     expect(insercoes(m)).toHaveLength(1);
-    // Uma única revogação (a do NASCIMENTO do primeiro, sobre uma admissão sem links vivos). O
-    // segundo se absteve antes de revogar; se tivesse reemitido, haveria uma segunda revogação.
+    // Uma única revogação: a do nascimento do primeiro (admissão sem links vivos na hora). O segundo
+    // devolveu o link que já existia, sem revogar nada.
     expect(m.banco.escritas.filter((e) => "revogadoEm" in e.valores)).toHaveLength(1);
   });
 });
 
-describe("a emissão lê o `enviado_em` que `marcarEnvioDoLink` GRAVOU na linha", () => {
-  const LINK_ANTIGO = (): LinkFake => ({
+describe("o reenvio enxerga o link que já existe no banco e o devolve", () => {
+  const LINK_VIVO = (): LinkFake => ({
     id: JTI_SINTETICO,
     admissaoId: ADMISSAO_SINTETICA,
     expiraEm: new Date(AGORA + 40 * 3_600_000),
@@ -332,18 +330,24 @@ describe("a emissão lê o `enviado_em` que `marcarEnvioDoLink` GRAVOU na linha"
     bloqueadoEm: null,
     primeiroAcessoEm: null,
     enviadoEm: null,
-    // Fora da janela por criação: sem o carimbo do envio, este link é reemitido na hora.
-    criadoEm: new Date(AGORA - JANELA_DE_REENVIO_MS - 10_000),
+    criadoEm: new Date(AGORA - 3 * 3_600_000),
   });
 
-  it("CONTROLE: sem o carimbo do envio, o link antigo é reemitido (a decisão SEM a escrita)", async () => {
-    const m = montar([LINK_ANTIGO()]);
+  it("devolve o link vivo existente, com o mesmo `jti`", async () => {
+    const m = montar([LINK_VIVO()]);
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
-    expect(r.emitido?.jti, "sem `enviado_em`, o antigo deveria reemitir").toBeTruthy();
+    expect(r.emitido?.jti).toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(insercoes(m)).toHaveLength(0);
   });
 
-  it("depois de `marcarEnvioDoLink` carimbar `enviado_em`, a emissão seguinte se abstém", async () => {
-    const m = montar([LINK_ANTIGO()]);
+  /**
+   * Carimbar o envio (`marcarEnvioDoLink`) NÃO muda o desfecho do reenvio: o link segue vivo, e o
+   * reenvio continua devolvendo o MESMO `jti`, sem reemitir. O carimbo só atualiza `enviado_em`, que
+   * não é a autoridade do prazo (essa é `expira_em`, intocada).
+   */
+  it("mesmo depois de `marcarEnvioDoLink` carimbar `enviado_em`, o reenvio devolve o mesmo link", async () => {
+    const m = montar([LINK_VIVO()]);
 
     await m.servico.marcarEnvioDoLink(JTI_SINTETICO, {
       canal: "EMAIL",
@@ -352,9 +356,8 @@ describe("a emissão lê o `enviado_em` que `marcarEnvioDoLink` GRAVOU na linha"
     });
     const r = await m.servico.emitirLinkParaEnvio(ADMISSAO_SINTETICA, AUTOR_SINTETICO);
 
-    // A ESCRITA MUDOU A DECISÃO SEGUINTE: o `enviado_em` recém-gravado trouxe o link para dentro da
-    // janela. Com o dublê que só registrava, esta leitura continuaria vendo `enviado_em` nulo.
-    expect(r.emitido, "a emissão não enxergou o `enviado_em` gravado").toBeNull();
-    expect(r.jaAtivo?.motivo).toBe("ENVIADO_HA_POUCO");
+    expect(r.emitido?.jti, "o reenvio devia ter devolvido o mesmo link").toBe(JTI_SINTETICO);
+    expect(r.emitido?.reutilizado).toBe(true);
+    expect(insercoes(m), "não podia ter inserido link novo").toHaveLength(0);
   });
 });

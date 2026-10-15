@@ -257,7 +257,7 @@ export class PortalEnvioService {
       );
     }
 
-    const { jti, link, expiraEm } = emissao.emitido;
+    const { jti, link, expiraEm, reutilizado } = emissao.emitido;
 
     // PASSO 4. O envio. `email` já passou por `emailEnviavel`, então o `as string` é o que o
     // fluxo garante, e não uma suposição.
@@ -286,17 +286,30 @@ export class PortalEnvioService {
 
     if (!saiu) {
       /*
-       * NÃO DEIXE CREDENCIAL ÓRFÃ. O link acabou de nascer, ninguém o recebeu, e ele já matou o
-       * anterior: mantê-lo vivo seria uma chave de acesso ao prontuário circulando sem dono, e o
-       * consultor tentaria de novo, gerando uma segunda.
+       * O DESFECHO DA FALHA DEPENDE DE O LINK TER NASCIDO AGORA OU TER SIDO REUTILIZADO, e a
+       * diferença é entre limpar uma órfã e destruir um acesso vivo.
        *
-       * REVOGA COM CÓDIGO PRÓPRIO (`ENVIO_FALHOU`), e não com `REVOGADO_MANUAL`: aqui não houve
-       * decisão de ninguém, foi o sistema desfazendo o que começou. Contar isto junto com a
-       * revogação deliberada inflaria o número que a Sala De Segurança lê como incidente.
+       * LINK RECÉM-NASCIDO (`reutilizado` falso): NÃO DEIXE CREDENCIAL ÓRFÃ. Ele acabou de nascer,
+       * ninguém o recebeu, e ele já matou o anterior: mantê-lo vivo seria uma chave de acesso ao
+       * prontuário circulando sem dono, e o consultor tentaria de novo, gerando uma segunda. Revoga
+       * com código próprio (`ENVIO_FALHOU`), e não `REVOGADO_MANUAL`: aqui não houve decisão de
+       * ninguém, foi o sistema desfazendo o que começou, e contar isto como revogação deliberada
+       * inflaria o número que a Sala De Segurança lê como incidente.
+       *
+       * LINK REUTILIZADO (`reutilizado` verdadeiro, o REENVIO do mesmo link): NÃO REVOGA. O link já
+       * existia antes deste clique, o candidato talvez esteja USANDO ele agora, e nada foi inserido
+       * nem revogado para desfazer. Matá-lo por uma falha de REENVIO encerraria o acesso vigente,
+       * que é exatamente o que o reenvio existe para NÃO fazer (decisão do diretor Rike). O e-mail
+       * não saiu; o link segue vivo e o consultor tenta de novo, com o MESMO link.
        */
-      await this.identidade.revogarLink(jti, autorId, "ENVIO_FALHOU");
-      // §A.6: nem o destino, nem a URL, nem o nome. Só o fato e a origem, que é rótulo fixo.
-      this.log.error(`envio do link do portal falhou e o link foi revogado (origem ${origem})`);
+      if (!reutilizado) {
+        await this.identidade.revogarLink(jti, autorId, "ENVIO_FALHOU");
+        // §A.6: nem o destino, nem a URL, nem o nome. Só o fato e a origem, que é rótulo fixo.
+        this.log.error(`envio do link do portal falhou e o link foi revogado (origem ${origem})`);
+      } else {
+        // §A.6: só o fato e a origem. O link reutilizado é PRESERVADO de propósito.
+        this.log.error(`reenvio do link do portal falhou; link preservado, sem revogar (origem ${origem})`);
+      }
       return recusado("FALHA_NO_ENVIO");
     }
 

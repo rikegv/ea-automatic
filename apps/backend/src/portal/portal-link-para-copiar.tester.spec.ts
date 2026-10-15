@@ -471,10 +471,15 @@ describe("regra 6: a URL devolvida resolve para o MESMO link (jti) e preserva a 
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// REGRA 6. REGRESSÃO: O CAMINHO DO E-MAIL NÃO PODE TER MUDADO
+// REGRA 6. O CAMINHO DO E-MAIL: as GUARDAS de antes do envio seguem iguais; a ABSTENÇÃO MUDOU
+//
+// ATUALIZADO pela OST do reenvio do mesmo link (frente-reenvio-email-mesmo-link). Na frente de
+// COPIAR, este bloco pinava que o e-mail "não mudou" (continuava se abstendo). Agora o e-mail MUDOU
+// de propósito: reenviar devolve o MESMO link vivo e o envia (não abstém mais). O que NÃO mudou, e
+// segue pinado aqui, são as guardas ANTES da emissão: sem e-mail, e-mail inválido, canal desligado.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("regra 6: `enviarParaAdmissao` continua exatamente como foi auditado", () => {
+describe("regra 6: as guardas do `enviarParaAdmissao` seguem iguais; o reenvio devolve o mesmo link", () => {
   const enviar = (m: Montagem) =>
     m.envio.enviarParaAdmissao(ADMISSAO_SINTETICA, AUTOR_SINTETICO, "MANUAL");
 
@@ -505,22 +510,46 @@ describe("regra 6: `enviarParaAdmissao` continua exatamente como foi auditado", 
     expect(inseriu(m), "link vivo e órfão por um e-mail que nunca sairia").toBe(false);
   });
 
-  it("continua se abstendo por LINK_VIVO_EM_USO", async () => {
+  /**
+   * ANTES abstinha com `LINK_VIVO_EM_USO` (o pop-up "já tem o link"). AGORA reenvia o MESMO link que
+   * o candidato já abriu: envia (`enviado:true`), sem revogar e sem inserir outro. O acesso vigente
+   * dele fica intocado, que é o ponto da frente.
+   */
+  it("link JÁ ABERTO: reenvia o MESMO link, sem revogar nem inserir outro", async () => {
     const m = montar(
       { pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] },
       { correioLigado: true },
     );
     const r = await enviar(m);
-    expect(r.enviado).toBe(false);
-    expect(r.motivo).toBe("LINK_VIVO_EM_USO");
-    expect(revogou(m)).toBe(false);
+    expect(r.enviado, "o reenvio para quem já acessou foi bloqueado").toBe(true);
+    expect(revogou(m), "o acesso vigente do candidato foi encerrado").toBe(false);
+    expect(inseriu(m), "cunhou um link novo em vez de reenviar o mesmo").toBe(false);
   });
 
   /**
-   * A JANELA CONTINUA VALENDO LÁ, e é este o teste que prova que a mudança da regra 5 não vazou
-   * para o caminho do e-mail. Sem ele, "dispensar a janela" viraria "apagar a janela".
+   * A VALIDAÇÃO QUE O DIRETOR PEDIU, PONTA A PONTA NO SERVIÇO DE ENVIO (identidade REAL): reenviar
+   * 2x seguidas para quem JÁ tem link vivo. As duas enviam, nenhum link novo é cunhado e nenhum é
+   * revogado. É o espelho exato do caso da Brenda em produção.
    */
-  it("continua se abstendo por ENVIADO_HA_POUCO", async () => {
+  it("reenviar 2x seguidas por e-mail para quem já tem link vivo: ambas enviam o MESMO link, zero link novo, zero revogação", async () => {
+    const m = montar(
+      { pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoNuncaAberto()] },
+      { correioLigado: true },
+    );
+    const a = await enviar(m);
+    const b = await enviar(m);
+    expect(a.enviado, "o primeiro reenvio falhou").toBe(true);
+    expect(b.enviado, "o segundo reenvio falhou").toBe(true);
+    expect(inseriu(m), "cunhou link novo em vez de reenviar o mesmo").toBe(false);
+    expect(revogou(m), "revogou o link vigente no reenvio").toBe(false);
+    expect(m.correio.enviados.length, "os dois e-mails do mesmo link têm de sair").toBe(2);
+  });
+
+  /**
+   * ANTES a janela curta abstinha com `ENVIADO_HA_POUCO`. AGORA reenviar quantas vezes precisar é o
+   * pedido do diretor: dentro da janela, reenvia o MESMO link, sem cunhar outro e sem revogar.
+   */
+  it("dentro da janela curta: reenvia o MESMO link (não abstém mais por `ENVIADO_HA_POUCO`)", async () => {
     const recem = vivoNuncaAberto({
       enviadoEm: new Date(AGORA - 5_000),
       criadoEm: new Date(AGORA - 5_000),
@@ -530,12 +559,10 @@ describe("regra 6: `enviarParaAdmissao` continua exatamente como foi auditado", 
       { correioLigado: true },
     );
     const r = await enviar(m);
-    expect(
-      r.motivo,
-      "a janela de reenvio sumiu do caminho do e-mail: um segundo clique mata a mensagem na caixa do candidato",
-    ).toBe("ENVIADO_HA_POUCO");
-    expect(r.enviado).toBe(false);
+    expect(r.enviado, "a janela ainda está bloqueando o reenvio").toBe(true);
+    expect(r.motivo).toBeNull();
     expect(revogou(m)).toBe(false);
+    expect(inseriu(m), "cunhou um link novo em vez de reenviar o mesmo").toBe(false);
   });
 
   it("caminho feliz: envia, carimba e NÃO devolve a URL na resposta", async () => {
@@ -592,23 +619,21 @@ describe("o link nasce carimbado como ENTREGA_A_MAO e sem carimbo de envio", () 
     }
   });
 
-  /** A prova do cruzamento, pelo comportamento: copiar agora não impede enviar por e-mail agora. */
-  it("copiar o link NÃO bloqueia o envio por e-mail logo em seguida por `ENVIADO_HA_POUCO`", async () => {
+  /**
+   * A PROVA DO CRUZAMENTO, PELO COMPORTAMENTO: copiar o link à mão e, logo em seguida, enviar por
+   * e-mail entrega o MESMO link. Antes a janela abstinha aqui; agora o e-mail reenvia o link que o
+   * copiar acabou de devolver (o copiar nasce `ENTREGA_A_MAO`, sem `enviado_em`, então não há link
+   * novo nem revogação entre as duas ações). O desfecho certo passou a ser o ENVIO do mesmo link.
+   */
+  it("copiar o link e enviar por e-mail logo em seguida entrega o MESMO link", async () => {
     const m = montar({ pessoa: { admissaoId: ADMISSAO_SINTETICA } }, { correioLigado: true });
     const copiado = await copiar(m);
     expect(copiado.gerado).toBe(true);
     const enviado = await m.envio.enviarParaAdmissao(ADMISSAO_SINTETICA, AUTOR_SINTETICO, "MANUAL");
-    /*
-     * ┌─ E AQUI O DESFECHO CERTO É A ABSTENÇÃO, não o envio ──────────────────────────────────────┐
-     * │ A janela DEVE segurar: o consultor acabou de receber a URL para entregar à mão, e o envio │
-     * │ por e-mail revogaria justamente esse link. O que este teste afirma é que a abstenção vem  │
-     * │ da ENTREGA (`criado_em`), que é o critério do achado 14, e NÃO de um `enviado_em` falso   │
-     * │ escrito pela porta de copiar. As duas coisas dariam o mesmo código aqui, então a          │
-     * │ distinção é feita pelo teste de cima, que olha a escrita.                                 │
-     * └───────────────────────────────────────────────────────────────────────────────────────────┘
-     */
-    expect(enviado.motivo).toBe("ENVIADO_HA_POUCO");
-    expect(enviado.enviado).toBe(false);
+    expect(enviado.enviado, "o envio por e-mail logo após copiar foi bloqueado").toBe(true);
+    expect(enviado.motivo).toBeNull();
+    // Um único `insert`: o do copiar. O envio por e-mail reenviou esse mesmo link, sem cunhar outro.
+    expect(m.banco.escritas.filter((e) => e.tipo === "insert")).toHaveLength(1);
   });
 });
 

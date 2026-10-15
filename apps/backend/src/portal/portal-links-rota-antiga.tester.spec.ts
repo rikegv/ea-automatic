@@ -536,7 +536,10 @@ describe("requisito 2: farol fora do recorte NÃO gera link nenhum", () => {
 // REQUISITOS 5 E 6. REGRESSÃO: OS DOIS CAMINHOS NOVOS NÃO PODEM TER MUDADO
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("requisito 5: o caminho do E-MAIL continua exatamente como foi auditado", () => {
+// ATUALIZADO pela OST do reenvio do mesmo link: as GUARDAS antes do envio (sem e-mail, e-mail
+// inválido, canal desligado, fora do recorte) seguem iguais; a ABSTENÇÃO por link vivo deu lugar ao
+// REENVIO do mesmo link, de propósito.
+describe("requisito 5: as guardas do E-MAIL seguem iguais; o reenvio devolve o mesmo link", () => {
   const enviar = (m: Montagem) =>
     m.envio.enviarParaAdmissao(ADMISSAO_SINTETICA, AUTOR_SINTETICO, "MANUAL");
 
@@ -567,18 +570,19 @@ describe("requisito 5: o caminho do E-MAIL continua exatamente como foi auditado
     expect(inseriu(m), "link vivo e órfão por um e-mail que nunca sairia").toBe(false);
   });
 
-  it("continua se abstendo por LINK_VIVO_EM_USO, sem revogar", async () => {
+  it("link JÁ ABERTO: reenvia o MESMO link, sem revogar nem inserir outro", async () => {
     const m = montar(
       { pessoa: { admissaoId: ADMISSAO_SINTETICA }, links: [vivoEAberto()] },
       { correioLigado: true },
     );
     const r = await enviar(m);
-    expect(r.motivo).toBe("LINK_VIVO_EM_USO");
-    expect(revogou(m)).toBe(false);
+    expect(r.enviado, "o reenvio para quem já acessou foi bloqueado").toBe(true);
+    expect(revogou(m), "o acesso vigente do candidato foi encerrado").toBe(false);
+    expect(inseriu(m), "cunhou um link novo em vez de reenviar o mesmo").toBe(false);
   });
 
-  /** A janela de 3 minutos é DO E-MAIL. Dispensá-la na porta de gerar não pode apagá-la aqui. */
-  it("continua se abstendo por ENVIADO_HA_POUCO", async () => {
+  /** Reenviar quantas vezes precisar: dentro da janela, reenvia o MESMO link, sem cunhar outro. */
+  it("dentro da janela curta: reenvia o MESMO link (não abstém mais por ENVIADO_HA_POUCO)", async () => {
     const recem = vivoNuncaAberto({
       enviadoEm: new Date(AGORA - 5_000),
       criadoEm: new Date(AGORA - 5_000),
@@ -588,11 +592,10 @@ describe("requisito 5: o caminho do E-MAIL continua exatamente como foi auditado
       { correioLigado: true },
     );
     const r = await enviar(m);
-    expect(
-      r.motivo,
-      "a janela de reenvio sumiu: um segundo clique mata a mensagem na caixa do candidato",
-    ).toBe("ENVIADO_HA_POUCO");
+    expect(r.enviado, "a janela ainda está bloqueando o reenvio").toBe(true);
+    expect(r.motivo).toBeNull();
     expect(revogou(m)).toBe(false);
+    expect(inseriu(m), "cunhou um link novo em vez de reenviar o mesmo").toBe(false);
   });
 
   it("caminho feliz: envia, mascara o destino e NÃO devolve a URL", async () => {

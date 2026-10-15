@@ -368,6 +368,13 @@ export function identidadeFake(
       expiraEm: Date;
       motivo?: "LINK_VIVO_EM_USO" | "ENVIADO_HA_POUCO";
     } | null;
+    /**
+     * `reutilizadoNoEnvio`: simula o REENVIO do MESMO link vivo (o novo caminho de
+     * `emitirLinkParaEnvio`). Com ele, a emissão devolve `emitido.reutilizado = true`, e é esse bit
+     * que o serviço de envio lê para NÃO revogar o link numa falha de envio. Ausente = link
+     * recém-nascido (`reutilizado` falso), que é o caso histórico.
+     */
+    reutilizadoNoEnvio?: boolean;
   } = {},
 ) {
   const emitidos: { admissaoId: string; autorId: string }[] = [];
@@ -393,7 +400,15 @@ export function identidadeFake(
       if (opcoes.falhaAoEmitir) throw new Error("emissao indisponivel");
       if (opcoes.jaAtivo) return { emitido: null, jaAtivo: { ...opcoes.jaAtivo, enviadoEm: null } };
       emitidos.push({ admissaoId, autorId });
-      return { emitido: { jti: JTI_SINTETICO, link: URL_SINTETICA, expiraEm }, jaAtivo: null };
+      return {
+        emitido: {
+          jti: JTI_SINTETICO,
+          link: URL_SINTETICA,
+          expiraEm,
+          reutilizado: opcoes.reutilizadoNoEnvio ?? false,
+        },
+        jaAtivo: null,
+      };
     },
     revogarLink: async (jti: string, autorId?: string, motivo?: string) => {
       revogados.push({ jti, autorId, motivo });
