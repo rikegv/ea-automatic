@@ -1348,8 +1348,8 @@ export default function PortalLinksPage() {
 
                           <button
                             type="button"
-                            title="Gerar o link do portal e copiar. O anterior deixa de valer, e se o candidato estiver usando o link dele agora o sistema avisa e não troca"
-                            aria-label={`Gerar link do portal para ${l.nome}`}
+                            title="Copiar o link do candidato. Devolve sempre o mesmo link vivo, sem gerar outro e sem encerrar o acesso"
+                            aria-label={`Copiar o link do portal de ${l.nome}`}
                             disabled={rodando || trocando || mandando}
                             onClick={() => void emitir(l)}
                             className={cn(
@@ -1369,16 +1369,16 @@ export default function PortalLinksPage() {
                               "reemissão dali" pedida. Nas demais linhas, continuam como sempre. */}
                           {!linhaSemLink && (
                           <>
-                          {/* ENVIAR POR E-MAIL, que é o caminho manual da OST. Ele é IRMÃO do
+                          {/* REENVIAR POR E-MAIL, que é o caminho manual da OST. Ele é IRMÃO do
                               botão ao lado e não o substitui: um COPIA a URL para quem vai passar
-                              o link por outro canal, o outro MANDA o e-mail. Os dois emitem link
-                              novo e o anterior deixa de valer, com uma diferença que importa: o
-                              de copiar se ABSTÉM quando o candidato está com o portal aberto, em
-                              vez de derrubar a sessão dele em silêncio. */}
+                              o link por outro canal, o outro MANDA o e-mail. Os dois devolvem o
+                              MESMO link vivo que o candidato já tem (preferindo o que ele já abriu),
+                              sem gerar link novo, sem revogar e sem encerrar o acesso: pode reenviar
+                              quantas vezes precisar. */}
                           <button
                             type="button"
-                            title="Enviar o link do portal por e-mail para o candidato"
-                            aria-label={`Enviar o link do portal por e-mail para ${l.nome}`}
+                            title="Reenviar o link por e-mail. Manda sempre o mesmo link vivo, quantas vezes precisar, sem encerrar o acesso"
+                            aria-label={`Reenviar o link do portal por e-mail para ${l.nome}`}
                             disabled={rodando || trocando || mandando}
                             onClick={() => void enviarPorEmail(l)}
                             className={cn(
@@ -1585,12 +1585,12 @@ export default function PortalLinksPage() {
                         </td>
                         <td>
                           <div className="flex items-center justify-center gap-0.5">
-                            {/* GERAR LINK NOVO: reusa a emissão de sempre (o modal com a URL para
-                                copiar e enviar). O anterior deixa de valer. */}
+                            {/* COPIAR O LINK: reusa a emissão de sempre (o modal com a URL para
+                                copiar). Devolve o mesmo link vivo, sem gerar outro nem revogar. */}
                             <button
                               type="button"
-                              title="Gerar o link do portal deste candidato e copiar. Se ele estiver usando o link dele agora, o sistema avisa e não troca"
-                              aria-label={`Gerar link do portal para ${p.nome}`}
+                              title="Copiar o link do candidato. Devolve sempre o mesmo link vivo, sem gerar outro e sem encerrar o acesso"
+                              aria-label={`Copiar o link do portal de ${p.nome}`}
                               disabled={rodando}
                               onClick={() =>
                                 void emitir({ admissaoId: p.admissaoId, nome: p.nome })
