@@ -63,14 +63,15 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
   autenticação por token estático (o painel monta o `Authorization: Bearer`). **Confirmado ao vivo:**
   duas admissões reais chegaram e caíram na Liberação Admissional. O corte temporal do go-live está
   feito e o sistema recebe fluxo vivo. **Não re-litigar** (entrada de 21/07).
-- **G.I: `apiSinc=FALSE` é o CORRETO, e o `true` NUNCA deve ser usado (DEFINITIVO, 15/10/2026).**
-  `false` PROMOVE o registro à tela de **Cadastro de Funcionários**, onde o time trabalha (por isso ele
-  sai da fila `FuncionarioSelecao`). `apiSinc=TRUE` prende no limbo **Admissão Digital**, que o time
-  **NÃO acessa**, e foi o que fez Kauã/Edson/Fabricio sumirem da vista. **Sucesso = o candidato chega à
-  tela de Cadastro, NÃO "permanece na fila"** (permanecer na fila é o SINTOMA do bug). O valor é `false`
-  FIXO no código (sem knob de ambiente), nos três caminhos (botão, automático, reconciliação). Decisão
-  do Rike, **risco de LGPD assumido por ele** (veto de retenção da §A.48 liberado). **Não re-litigar,
-  não reinverter.**
+- **G.I: `apiSinc=TRUE` é o CORRETO (DEFINITIVO, 15/10/2026, com PROVA NA TELA).** `true` PERSISTE na
+  pré-admissão (`FuncionarioSelecao`) e o SINCRONIZADOR do G.I promove à tela de **Cadastro de
+  Funcionários**; foi assim que Edson e Fabricio apareceram e o diretor VALIDOU na tela. `false` CONSOME
+  e o registro SOME sem chegar ao Cadastro (foi o FALSO SUCESSO: "saiu da fila" lido como promoção, era
+  sumiço). A promoção é do LADO do G.I, por isso `403` em `Funcionario/*` é ESPERADO, não bloqueio.
+  Valor `true` FIXO no código, nos três caminhos (botão, automático, reconciliação). Veto de retenção
+  LGPD LIBERADO pelo diretor (risco dele). **Sucesso = aparecer na tela de Cadastro (o diretor confirma),
+  NÃO "saiu da fila".** CORRIGE a leitura anterior ("false=correto", 06/10 a 15/10 de manhã): estava
+  invertida. **Não re-litigar, NUNCA reinverter para false.**
 
 ---
 
@@ -22321,3 +22322,58 @@ JÁ não trava (regra 14/10). E, acima de tudo, mandar mais false-send por um ca
 repetir o falso-sucesso. Entreguei lista nominal dos 8 MANUAL já enviados com false para o Rike bater
 na tela dele, declarando que NÃO consigo confirmar (403). Próximo passo real depende do G.I: como a
 Seleção vira Funcionário (import da equipe? endpoint/permissão que não temos?). Decisão/insumo do Rike.
+
+## 2026-10-15 — G.I CAMINHO VENCEDOR (PERMANENTE): apiSinc=TRUE, provado por Edson/Fabrício na tela
+
+**CORREÇÃO DE RUMO do diretor:** o diagnóstico anterior ("false=correto, canal não chega") estava
+ERRADO. Edson Pereira da Silva Neto (`2853bfc6`) e Fabrício dos Santos Silva (`5eeb96cc`) APARECERAM na
+tela de Cadastro de Funcionários do G.I e o diretor VALIDOU em 14/10. O caminho existe e já funcionou.
+
+**O PASSO-A-PASSO DO CAMINHO QUE FUNCIONA (gravar como PERMANENTE, nenhuma sessão futura diz que "não dá"):**
+1. A fábrica escreve na PRÉ-SELEÇÃO via `FuncionarioSelecao/Add` com **`apiSincAdmissaoDigital = TRUE`**.
+2. Com `true`, o registro **PERSISTE** na pré-admissão (aparece no `FuncionarioSelecao/GetAll`).
+3. Um **SINCRONIZADOR do lado do G.I** pega a pré-seleção e **promove para a tela de Cadastro de
+   Funcionários** (a promoção é do G.I, roda num CICLO, ordem de ~20 min observada pelo diretor).
+4. O time cadastra na folha a partir da tela de Cadastro.
+- `false` NÃO entra nesse fluxo: CONSOME o registro, ele SOME do `GetAll` sem chegar ao Cadastro. "Saiu
+  da fila" com false é sumiço, não promoção (o falso sucesso que a fábrica reportou de manhã).
+- `403` em `Funcionario/*` (ler a tela de Cadastro) é ESPERADO: a promoção é do G.I, não lemos a folha.
+  A confirmação final é SEMPRE o diretor na tela. A fábrica só lê a pré-seleção (`GetAll`).
+
+**PROVA CONTROLADA:** os MESMOS Edson/Fabrício têm, no `GetAll`, a entrada `true` (idReg 35/36) que
+PERSISTE (visível, validada) e a entrada `false` (reenvio de teste de 15/10 de manhã, idReg 47/48) que
+SUMIU. Mesma pessoa, dois valores, só o `true` fica.
+
+**O QUE A CREDENCIAL LÊ (medido):** `GET /Funcionario/GetAll` = 403, `/Funcionario/Get` = 403,
+`/ApiFicha/GetAll` = 403; só `/FuncionarioSelecao/GetAll` = 200. `GiApiService` só escreve em
+`/FuncionarioSelecao/Add`.
+
+**REENVIO dos 8 do Grupo Plataforma + Samuel pelo caminho vencedor (apiSinc=true), feito pela cadeia
+deployada (montador+giApi), guardas duras valendo, guarda de salário ignorada p/ Samuel:** todos OK
+(idReg 57 a 65), `GetAll` 8 -> 17, todos `true`. Nominais: Jonas `72f57c73`, Karine `2ef1ac05`, Naara
+`0f1963ca`, Valéria `ddd57fd5`, Carlos Eduardo `bf314abf`, Pedro Isaac `c0ed251c`, Kauã `7f45b8d1`,
+Lays `2bc2735b`, Samuel `12d971ef`. Agora estão no MESMO estado de Edson/Fabrício (pré-admissão, true);
+o diretor confere na tela de Cadastro após o ciclo do sincronizador.
+
+**CÓDIGO (permanente):** `enviar-para-gi.service.ts` monta o payload com `apiSincAdmissaoDigital: true`
+(revertendo o `false` de `c3e1d5a`). `recusaDaContratacaoGi` (`portal-dados-gi.ts`): salário NULO/
+AUSENTE/ZERO não trava mais (o montador já nula zero/negativo; a Folha exige salário depois, igual à
+unidade), só NEGATIVO recusa; foi o que destravou Samuel (salário nulo, Interno). §A.48 reescrita para
+`true`; `gi-apisinc-sempre-false` -> `gi-apisinc-sempre-true`. Veto LGPD liberado pelo diretor.
+
+**AUDITORIA §A.38:** `seguranca` APROVADO (sem PII em log; payload idêntico ao que já saía, só o flag
+mudou; guardas duras intactas). `tester` (ver veredito). **DÉBITOS registrados (risco do diretor):**
+(1) retenção LGPD do `true` no fornecedor sem DELETE ao nosso alcance; (2) PREMISSA LOAD-BEARING: a
+Folha do G.I barra a continuação sem salário (afirmação do diretor, NÃO verificável pelo nosso código),
+então salário nulo é pendência preenchível, não dano §A.33; SE a Folha não barrar, salário nulo vira
+dano silencioso amplificado pela promoção do apiSinc=true; (3) reenvio manual "sempre reenvia" +
+apiSinc=true ACUMULA `FuncionarioSelecao` duplicados no G.I (antes, com false, sumiam), o time deduplica
+na tela. (4) corrigido o comentário defasado do scheduler (dizia false). `tester`: cobertura SUFICIENTE,
+nenhum ALTO. **GAPS de follow-up (não bloqueiam):** (M1) o predicado-alvo da reconciliação (`where`:
+AUDITORIA `concluida=true` etc.) não tem teste unitário (o fake de db ignora o `where`), e "auditoria
+concluída" NÃO é re-checada por `enviar()`, então uma regressão que afrouxe esse filtro mandaria
+admissão com régua aberta sem teste pegar; mesmo limite do `reconciliacao-regua.spec` (padrão da casa).
+(M2) a guarda de salário negativo é defesa em profundidade INALCANÇÁVEL pelo caminho real (o montador
+nula o negativo antes -> envio PASSA com null, não recusa); falta teste de costura e a narrativa dos
+specs superdimensiona. (B3) apiSinc=true da reconciliação só coberto transitivamente. (B4, FEITO) texto
+de produção do `GI_SALARIO_INVALIDO` atualizado (ausente/zero passam, só negativo recusa).

@@ -1409,52 +1409,45 @@ dois lados é frente própria, a decidir pelo diretor.
 *(Decisão do diretor, 02/10/2026, após a varredura duplicar 259 pré-admissões em produção. O
 coordenador mediu, o diretor deu a regra.)*
 
-## A.48: A ADMISSÃO VAI AO GI COM apiSinc = FALSE, e o true DESVIA (regra permanente)
+## A.48: A ADMISSÃO VAI AO GI COM apiSinc = TRUE (persiste e o sincronizador promove ao Cadastro)
 
-**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = FALSE`, FIXO no código.** Desde
-15/10/2026 o valor NÃO vem mais de ambiente: o método que lia `GI_API_SINC_ADMISSAO_DIGITAL` e o 4º
-parâmetro que o botão manual usava para forçar `true` FORAM REMOVIDOS. Os TRÊS caminhos (botão manual,
-gatilho automático, reconciliação) montam o payload com `false`, travado por teste
-(`gi-apisinc-sempre-false.tester.spec.ts`: mesmo com a env `true`, o envio sai `false`). Ninguém liga o
-`true`, nem "só para o registro não sumir": não há mais caminho que o ligue.
+**Todo envio de admissão ao G.I grava `apiSincAdmissaoDigital = TRUE`, FIXO no código**, nos TRÊS
+caminhos (botão manual, gatilho automático, reconciliação). O valor NÃO vem de ambiente
+(`GI_API_SINC_ADMISSAO_DIGITAL` é ignorado). Travado por teste (`gi-apisinc-sempre-true.tester.spec.ts`).
 
-**O FUNDAMENTO, validado pelo diretor NA TELA do GI (06/10/2026):**
-- **`false` "Sincroniza com GI"**: roteia para o fluxo normal, a tela de **Cadastro de Funcionários**
-  onde o time cadastra na folha. É onde o diretor PRECISA ver o registro.
-- **`true` "Sincroniza com Admissão Digital"**: desvia para um **módulo separado que o time não
-  acessa**. O registro não some, mas fica num limbo invisível para quem cadastra.
+**O FUNDAMENTO, com PROVA NA TELA do diretor (Edson e Fabricio, validados em 14/10/2026):**
+- **`true` "Sincroniza com Admissão Digital"**: o registro **PERSISTE** na pré-admissão
+  (`FuncionarioSelecao`) e um **SINCRONIZADOR do lado do G.I** o **PROMOVE para a tela de Cadastro de
+  Funcionários**, onde o time trabalha. Edson e Fabricio foram enviados com `true`, persistiram, e o
+  diretor os VIU e validou na tela de Cadastro. É o valor que FUNCIONA.
+- **`false` "Sincroniza com GI"**: o registro é **CONSUMIDO** e **SOME** da `FuncionarioSelecao/GetAll`
+  em menos de 10 min, **sem chegar à tela de Cadastro**. Sair da fila com `false` NÃO é promoção, é
+  sumiço: o diretor não acha esses registros em lugar nenhum da tela dele.
 
-**O "SUMIÇO" NUNCA FOI PERDA, e é o que fechou a dúvida que arrastou de 02 a 06/10.** O registro com
-`false` sai da fila de pré-admissão da API porque **foi PROMOVIDO para a tela de cadastro**, o lugar
-certo. Os que a fábrica forçou para `true` é que se perdiam da vista. A leitura antiga confundiu "saiu
-da fila" com "perdeu-se" e inverteu o valor seguro, chegando a registrar `true` como o correto. **Não
-é.**
+**A PROMOÇÃO pré-admissão -> Cadastro é DO LADO DO G.I, não nossa.** Nós escrevemos só na pré-seleção
+(`FuncionarioSelecao/Add`); o sincronizador do G.I faz o resto, num CICLO (o diretor observou algo da
+ordem de ~20 min). **Por isso a nossa credencial leva `403` em `Funcionario/*` (a tela de Cadastro), e
+isso é ESPERADO, NÃO é bloqueio do caminho.** A confirmação final de que um registro chegou é SEMPRE o
+diretor abrindo a tela de Cadastro (a fábrica não consegue ler essa tela: só a pré-seleção, `GetAll`).
 
-**LIMITE QUE A REGRA CARREGA: a API não arbitra isto.** A folha do fornecedor responde **403** à nossa
-credencial, então, depois que o registro sai do `GetAll`, a leitura GET não distingue "promovido" de
-"descartado". Quem arbitra o destino é a **tela do GI**, não a nossa medição. Foi medição de tela, do
-diretor, que decidiu.
+**LGPD: o veto de retenção foi LIBERADO pelo diretor (15/10/2026), risco assumido por ele.** O `true`
+retém dados no fornecedor, e o `seguranca` havia vetado o `true` permanente por isso (§A.6). O diretor
+liberou: todo o sistema já é pautado em LGPD, o G.I administra essas fontes e a plataforma também. O
+veto deixou de ser bloqueio; o `true` é a regra.
 
-**BÔNUS DE LGPD (§A.6): `false` também fecha a retenção.** O `true` deixava nome, CPF, RG, PIS, nome da
-mãe, endereço e salário parados no fornecedor **sem prazo e sem DELETE ao nosso alcance**. `false`
-entrega ao fluxo que consome e não cria esse limbo. O veto do `seguranca` ao `true` permanente fica
-resolvido pelo próprio valor escolhido.
+**O ERRO QUE ISTO CORRIGE, para NENHUMA sessão futura repetir.** Entre 02 e 06/10 houve a leitura de
+que `false` promovia ao Cadastro e `true` prendia num "limbo"; em 15/10 de manhã a fábrica chegou a FIXAR
+`false` no código com essa premissa (commit `c3e1d5a`) e reportou "promovido ao Cadastro" porque o
+registro "saía da fila". **Era FALSO SUCESSO: "saiu da fila" com `false` é sumiço, não promoção.** O
+diretor apontou que os `false`-sends NÃO aparecem na tela, enquanto Edson/Fabricio (enviados com `true`)
+aparecem. A prova controlada fechou: os MESMOS dois têm a entrada `true` que PERSISTE (visível) e a
+entrada `false` (reenvio de teste) que SUMIU. **`true` é o certo. NUNCA reinverter para `false`.**
 
-**15/10/2026, REFORÇO E LIBERAÇÃO DO VETO.** Kauã, Edson e Fabricio "sumiram" de novo porque o **botão
-manual forçava `true`** (resíduo de uma leitura antiga), prendendo-os no limbo "Admissão Digital",
-invisível na tela de Cadastro. O conserto de ORIGEM: `false` FIXO em todos os caminhos (acima) + uma
-**reconciliação no processo** (`ReconciliacaoGiScheduler`, kill-switch `GI_RECONCILIACAO=off`,
-idempotente por `jaEnviado`) que reenvia quem foi auditado e NUNCA chegou ao G.I, fechando o
-edge-trigger do fechamento da auditoria (que dispara uma vez, sem retry). **SUCESSO é o candidato
-CHEGAR à tela de Cadastro (sair da fila `FuncionarioSelecao`); "permanecer na fila" é o SINTOMA do bug,
-não prova de sucesso.** O diretor LIBEROU explicitamente o veto de retenção LGPD que antes barrava o
-`true` (todo o sistema já é pautado em LGPD, o G.I administra essas fontes de dado e a plataforma
-também), **risco assumido por ele**: o veto deixou de ser um bloqueio. Como o envio usa `false`, a
-retenção no limbo nem chega a existir, mas o registro fica: se um dia o `true` for necessário, é decisão
-do diretor, não da fábrica.
+**SUCESSO = o candidato APARECE na tela de Cadastro de Funcionários** (depois do ciclo do
+sincronizador), confirmado pelo diretor na tela. "Saiu da fila" ou "promovido em tese" NÃO é prova.
 
-*(Decisão do diretor, 06/10/2026, validada na tela; reescrita e veto de retenção LIBERADO em
-15/10/2026, após Kauã/Edson/Fabricio voltarem a sumir pelo `true` do botão. Detalhe no DIARIO.)*
+*(Decisão do diretor: `false` em 06/10 (premissa que se mostrou errada), CORRIGIDO para `true` em
+15/10/2026 com prova na tela (Edson/Fabricio) e veto de retenção LGPD liberado. Detalhe no DIARIO.)*
 
 ## A.49: PRODUCAO SOBE DO origin/main POR WORKTREE LIMPO, NUNCA DO TREE DE SESSAO (regra permanente)
 
