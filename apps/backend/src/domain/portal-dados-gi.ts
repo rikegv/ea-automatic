@@ -1194,10 +1194,11 @@ export interface FuncionarioSelecao {
    * auditoria que fecha fora do horário de trabalho faz o time **perder a admissão**: o registro
    * desaparece antes de alguém ver.
    *
-   * ⚠️ O EA ENTREGA O MECANISMO, NÃO O VALOR. O valor vem de variável de ambiente
-   * (`GI_API_SINC_ADMISSAO_DIGITAL`, lida pelo `EnviarParaGiService`) e o **default aqui é `false`**, que
-   * é o default do fornecedor: sem ninguém decidir, o comportamento não muda. Assim a decisão é
-   * reversível numa linha de `.env`, e não num commit.
+   * ⚠️ ESTE MONTADOR É FUNÇÃO PURA e aceita o valor por parâmetro, mas a POLÍTICA mora no serviço: o
+   * `EnviarParaGiService` passa `false` FIXO em todos os caminhos (manual, automático, reconciliação) e
+   * NÃO lê mais ambiente. Decisão permanente do diretor (15/10/2026, §A.48 reescrita): `false` PROMOVE
+   * o registro para a tela de Cadastro de Funcionários (onde o time trabalha); `true` prende no limbo
+   * "Admissão Digital" invisível ao time, e não deve mais ser usado. O default aqui segue `false`.
    *
    * ⚠️ ELE ENTRA PELO MONTADOR, DENTRO DA ALLOWLIST FECHADA, nunca injetado depois dela: campo enfiado
    * no payload por fora não passa pelas redes de runtime desta fronteira e não aparece nas varreduras

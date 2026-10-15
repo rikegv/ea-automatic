@@ -659,14 +659,14 @@ describe("EnviarParaGiService: admissao ENCERRADA nao sai por caminho nenhum", (
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// O `apiSincAdmissaoDigital` (item 3): MECANISMO de ambiente, com default `false`
+// O `apiSincAdmissaoDigital` (item 3): SEMPRE `false`, FIXO, nos DOIS gatilhos (§A.48 reescrita 15/10)
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("EnviarParaGiService: apiSincAdmissaoDigital, ambiente no AUTOMATICO e true forcado no MANUAL", () => {
+describe("EnviarParaGiService: apiSincAdmissaoDigital e SEMPRE false, manual e automatico", () => {
   const ARMADO = { GI_DISPARO_ARMADO: "true" };
 
-  // O AUTOMATICO LE O AMBIENTE (default false, §A.48). Passa pela trava de origem (o fixture atende com
-  // origem MANUAL, autorizada) e cria com a contratacao OK.
+  // O AUTOMATICO (fechamento da auditoria). Passa pela trava de origem (o fixture atende com origem
+  // MANUAL, autorizada) e cria com a contratacao OK.
   async function payloadAutomatico(env: Record<string, string>) {
     const f = fakes({ configurado: true });
     await build({ ...ARMADO, ...env }, f).enviar(ADMISSAO, CONTEXTO_VIVO);
@@ -674,7 +674,7 @@ describe("EnviarParaGiService: apiSincAdmissaoDigital, ambiente no AUTOMATICO e 
     return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
   }
 
-  // O MANUAL (botao do time) FORCA apiSinc=true ESCOPADO no clique, qualquer que seja o ambiente.
+  // O MANUAL (botao do time).
   async function payloadManual(env: Record<string, string>) {
     const f = fakes({ configurado: true });
     await build({ ...ARMADO, ...env }, f).enviarManual(ADMISSAO, "autor-1");
@@ -682,42 +682,34 @@ describe("EnviarParaGiService: apiSincAdmissaoDigital, ambiente no AUTOMATICO e 
     return (f.criar.mock.calls[0] as unknown[])[0] as FuncionarioSelecao;
   }
 
-  it("AUTOMATICO sem a variavel: o campo SAI e vale false, o default do FORNECEDOR (§A.48)", async () => {
+  // ⚠️ A DECISAO PERMANENTE (diretor, 15/10/2026): apiSinc=`false` PROMOVE o registro para a tela de
+  // Cadastro de Funcionarios (onde o time trabalha); `true` prendia no limbo "Admissao Digital" que o
+  // time nao acessa, e NUNCA deve ser usado. Nao ha mais leitura de ambiente: estes testes provam que
+  // mesmo com `GI_API_SINC_ADMISSAO_DIGITAL=true` no `.env` o envio sai `false` (o knob esta morto),
+  // que e a trava contra REINVERTER o valor por `.env`.
+  it("AUTOMATICO sem a variavel: o campo SAI e vale false", async () => {
     expect((await payloadAutomatico({})).apiSincAdmissaoDigital).toBe(false);
   });
 
-  it("AUTOMATICO com GI_API_SINC_ADMISSAO_DIGITAL=true: o campo vale true e a pre-admissao PERMANECE", async () => {
-    const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: "true" });
-    expect(payload.apiSincAdmissaoDigital).toBe(true);
+  it("MANUAL sem a variavel: o campo SAI e vale false (nao force mais true)", async () => {
+    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(false);
   });
 
-  it.each([["false"], ["1"], ["sim"], ["on"], [""]])(
-    "AUTOMATICO valor %s NAO liga: uma forma so de ligar, para nao existir meio-ligado",
+  it.each([["true"], [" TRUE "], ["True"], ["1"], ["sim"], ["false"], [""]])(
+    "AUTOMATICO ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai false",
     async (valor) => {
       const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
       expect(payload.apiSincAdmissaoDigital).toBe(false);
     },
   );
 
-  it("AUTOMATICO espaco e caixa NAO atrapalham: ` TRUE ` liga, como no GI_DISPARO_ARMADO", async () => {
-    // Mesma leitura do `GI_DISPARO_ARMADO` de proposito: quem edita o `.env` nao deve perder a
-    // decisao por um espaco, e duas reguas de leitura diferentes para duas flags vizinhas e pior.
-    const payload = await payloadAutomatico({ GI_API_SINC_ADMISSAO_DIGITAL: " TRUE " });
-    expect(payload.apiSincAdmissaoDigital).toBe(true);
-  });
-
-  // ⚠️ O MANUAL FORCA true ESCOPADO (decisao do diretor, 14/10/2026): o registro tem de PERMANECER na
-  // fila do G.I (com false some em menos de 10 min). O default GLOBAL fica intacto (§A.48), como provam
-  // os casos do automatico acima: o true e so do payload deste disparo manual, nao vaza para o env.
-  it("MANUAL sem a variavel: FORCA apiSinc=true, mesmo com o ambiente ausente (default false)", async () => {
-    expect((await payloadManual({})).apiSincAdmissaoDigital).toBe(true);
-  });
-
-  it("MANUAL com o ambiente explicitamente false: AINDA forca true (o escopo do clique manda)", async () => {
-    expect((await payloadManual({ GI_API_SINC_ADMISSAO_DIGITAL: "false" })).apiSincAdmissaoDigital).toBe(
-      true,
-    );
-  });
+  it.each([["true"], [" TRUE "], ["1"], ["false"]])(
+    "MANUAL ignora GI_API_SINC_ADMISSAO_DIGITAL=%s: o knob esta morto, sai false",
+    async (valor) => {
+      const payload = await payloadManual({ GI_API_SINC_ADMISSAO_DIGITAL: valor });
+      expect(payload.apiSincAdmissaoDigital).toBe(false);
+    },
+  );
 
   it("a CHAVE existe sempre: campo booleano nao-anulavel no contrato do G.I", async () => {
     const payload = await payloadManual({});

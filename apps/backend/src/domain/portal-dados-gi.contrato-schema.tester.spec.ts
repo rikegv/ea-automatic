@@ -122,9 +122,11 @@ interface PropriedadeDoSchema {
  */
 const SCHEMA: Record<string, PropriedadeDoSchema> = {
     // ACRESCENTADO em 06/10/2026, colado do contrato real do fornecedor
-    // (https://apigeral.gi.app.br/openapi/v1.json, relido nesta data). Decide se a pre-admissao fica
-    // ESPERANDO no GI ou e consumida por ele em menos de 10 minutos: medido em producao, com `false`
-    // o registro some, com `true` permanece. A chave sai SEMPRE, nunca omitida.
+    // (https://apigeral.gi.app.br/openapi/v1.json, relido nesta data). Decide para QUAL lado o G.I
+    // roteia a pre-admissao recebida. O ENVIO USA SEMPRE `false` (decisao permanente do diretor,
+    // 15/10/2026, §A.48 reescrita): `false` PROMOVE o registro para a tela de Cadastro de Funcionarios
+    // (onde o time trabalha) e por isso ele SAI da fila `FuncionarioSelecao`; `true` PRENDE no limbo
+    // "Admissao Digital" que o time nao acessa, e nao deve mais ser usado. A chave sai SEMPRE.
     // A `description` do contrato real, que o tipo `PropriedadeDoSchema` nao modela, e:
     // "true - Sincroniza com Admissao Digital, false - Sincroniza com GI".
     "apiSincAdmissaoDigital": {

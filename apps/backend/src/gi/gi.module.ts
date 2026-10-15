@@ -5,6 +5,7 @@ import { EnviarParaGiService } from "./enviar-para-gi.service";
 import { GiApiService } from "./gi-api.service";
 import { GiDeParaService } from "./gi-depara.service";
 import { GiLeitorService } from "./gi-leitor.service";
+import { ReconciliacaoGiScheduler } from "./reconciliacao-gi.scheduler";
 
 /**
  * PORTAL→GI (peça 2 + a peça 3 CONSTRUÍDA, com o disparo DESARMADO).
@@ -29,7 +30,16 @@ import { GiLeitorService } from "./gi-leitor.service";
 @Module({
   imports: [ConfigModule],
   controllers: [EnviarParaGiController],
-  providers: [EnviarParaGiService, GiApiService, GiLeitorService, GiDeParaService],
+  providers: [
+    EnviarParaGiService,
+    GiApiService,
+    GiLeitorService,
+    GiDeParaService,
+    // Varredura periódica no processo (padrão da casa): reenvia quem foi auditado e nunca chegou ao
+    // G.I, fechando o edge-trigger do fechamento da auditoria. Kill-switch `GI_RECONCILIACAO=off`.
+    // NÃO exportado: nada externo o consome. Ver `reconciliacao-gi.scheduler.ts`.
+    ReconciliacaoGiScheduler,
+  ],
   exports: [EnviarParaGiService],
 })
 export class GiModule {}

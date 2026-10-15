@@ -220,24 +220,20 @@ export class EnviarParaGiService {
   }
 
   /**
-   * `apiSincAdmissaoDigital` do payload: para QUAL lado o G.I sincroniza a pré-admissão recebida.
+   * `apiSincAdmissaoDigital` do payload: SEMPRE `false`, FIXO, em TODOS os caminhos (manual, automático
+   * e reconciliação). NÃO é mais lido de ambiente, e NÃO existe caminho que o ligue.
    *
-   * O EA ENTREGA O MECANISMO, NÃO O VALOR: a decisão mora em `GI_API_SINC_ADMISSAO_DIGITAL` e o
-   * **default é `false`**, que é o default do fornecedor. Só a string "true" liga; qualquer outra coisa
-   * (vazia, ausente, "1", "sim") deixa como está. Mesma régua de leitura do `GI_DISPARO_ARMADO`: uma
-   * forma só de ligar, para não existir meio-ligado.
-   *
-   * POR QUE A DECISÃO É DE `.env` E NÃO DE CÓDIGO: medido na produção do fornecedor em 05/10/2026, com
-   * `false` a pré-admissão SOME em menos de 10 minutos e com `true` PERMANECE. Os dois lados têm custo
-   * (com `false` a auditoria que fecha fora do horário faz o time PERDER a admissão; com `true` o dado
-   * fica no fornecedor sem relógio ao nosso alcance), então quem decide é o diretor, e reverter é uma
-   * linha de ambiente, não um commit.
+   * POR QUE FIXO, E NÃO MAIS UMA LINHA DE `.env` (decisão do diretor, 15/10/2026, §A.48 reescrita):
+   * medido na produção do fornecedor, `false` PROMOVE o registro para a tela de Cadastro de
+   * Funcionários (onde o time trabalha) e por isso ele SAI da fila `FuncionarioSelecao/GetAll`; `true`
+   * PRENDE o registro no módulo "Admissão Digital", um limbo que o time NÃO acessa. Foi o `true` que fez
+   * Kauã/Edson/Fabricio "sumirem": não sumiram, ficaram presos no limbo, invisíveis na tela de Cadastro.
+   * SUCESSO é o candidato CHEGAR ao Cadastro, nunca "permanecer na fila". O `true` não deve mais ser
+   * usado, então deixou de ser um knob de ambiente que alguém reabre: é `false` fixo, travado por teste
+   * (`gi-apisinc-sempre-false.tester.spec.ts`). O veto de retenção LGPD da §A.48 foi LIBERADO pelo
+   * diretor (risco assumido por ele). Antes havia `apiSincAdmissaoDigital()` lendo
+   * `GI_API_SINC_ADMISSAO_DIGITAL`; a leitura foi removida para o valor não poder reverter por `.env`.
    */
-  private apiSincAdmissaoDigital(): boolean {
-    return (
-      (this.config.get<string>("GI_API_SINC_ADMISSAO_DIGITAL") ?? "").trim().toLowerCase() === "true"
-    );
-  }
 
   /**
    * GATILHO AUTOMÁTICO (fechamento da auditoria). ENVIA de verdade, pela MESMA cadeia do manual.
@@ -345,14 +341,12 @@ export class EnviarParaGiService {
     // gatilho AUTOMÁTICO continua passando `false` (respeita a idempotência, não re-dispara por estado).
     // As demais guardas (encerramento, empresa/filial, salário, cliente) seguem valendo para os dois.
     //
-    // ⚠️ apiSinc=TRUE ESCOPADO NO CLIQUE (decisão do diretor, confirmada 14/10/2026): o 4º argumento
-    // força `apiSincAdmissaoDigital=true` SÓ neste disparo manual, no processo do envio. Medido na
-    // produção do fornecedor (05/10/2026): com `false` a pré-admissão SOME em menos de 10 min, com
-    // `true` PERMANECE. O envio manual tem de ficar na fila de verdade, então o botão força o `true`.
-    // Isto NÃO altera o default global (`GI_API_SINC_ADMISSAO_DIGITAL` segue ausente=false, §A.48): o
-    // gatilho AUTOMÁTICO continua lendo o env. O flip GLOBAL permanece vetado por retenção LGPD (§A.48);
-    // aqui é pontual, por clique, com a mitigação de o time importar e deletar pela tela do G.I.
-    return this.enviarComGuardas(admissaoId, autorId, true, true);
+    // ⚠️ apiSinc É SEMPRE `false` AGORA (decisão do diretor, 15/10/2026, §A.48 reescrita): o `false`
+    // PROMOVE o registro para a tela de Cadastro de Funcionários (onde o time trabalha); o `true`
+    // prendia no limbo "Admissão Digital" que o time não acessa, e era o que fazia a pessoa "sumir". O
+    // botão não força mais `true` (não há mais o 4º argumento). Sucesso = chegar ao Cadastro, não ficar
+    // na fila. O `ignorarJaEnviado=true` do manual segue valendo, por outro motivo: o "sucesso falso".
+    return this.enviarComGuardas(admissaoId, autorId, true);
   }
 
   /**
@@ -380,7 +374,6 @@ export class EnviarParaGiService {
     admissaoId: string,
     _autorId: string,
     ignorarJaEnviado = false,
-    apiSincManualForcado = false,
   ): Promise<GiEnvioResultado> {
     if (!this.configurado()) {
       // A frase deixou de dizer "manual": a cadeia passou a ser a dos DOIS gatilhos.
@@ -460,12 +453,12 @@ export class EnviarParaGiService {
     // A OPÇÃO DE SINCRONISMO entra PELO MONTADOR, dentro da allowlist fechada, nunca injetada depois
     // dela: campo enfiado no payload por fora não passa pelas redes de runtime daquela fronteira.
     //
-    // O VALOR DO apiSinc: o gatilho AUTOMÁTICO usa o de ambiente (`GI_API_SINC_ADMISSAO_DIGITAL`, default
-    // `false`, o do fornecedor, §A.48). O BOTÃO MANUAL força `true` ESCOPADO neste disparo
-    // (`apiSincManualForcado`), para o registro PERMANECER na fila do G.I (com `false` some em menos de
-    // 10 min). O `true` não vaza para o default global: é só o payload deste envio manual.
+    // O VALOR DO apiSinc É FIXO `false`, nos DOIS gatilhos e na reconciliação (decisão do diretor,
+    // 15/10/2026, §A.48 reescrita). `false` PROMOVE o registro à tela de Cadastro de Funcionários (onde
+    // o time trabalha) e por isso ele sai da fila `FuncionarioSelecao`; `true` prendia no limbo
+    // "Admissão Digital" invisível ao time. Não é mais lido de ambiente nem forçado por caminho nenhum.
     const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined, {
-      apiSincAdmissaoDigital: apiSincManualForcado ? true : this.apiSincAdmissaoDigital(),
+      apiSincAdmissaoDigital: false,
     });
 
     if (!this.disparoArmado()) {

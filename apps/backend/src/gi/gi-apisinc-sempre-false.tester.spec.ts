@@ -1,0 +1,132 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ConfigService } from "@nestjs/config";
+import { EnviarParaGiService } from "./enviar-para-gi.service";
+import type { GiApiService, GiCriacaoResultado } from "./gi-api.service";
+import type { GiDeParaService } from "./gi-depara.service";
+import type { GiLeitorService } from "./gi-leitor.service";
+import {
+  DE_PARA_GI_VAZIO,
+  montarFuncionarioSelecao,
+  type FuncionarioSelecao,
+} from "../domain/portal-dados-gi";
+import { PAR_CONHECIDO, PESSOA, contratacaoDeFolhaCompleta } from "./gi-automatico.arnes";
+
+/**
+ * INVARIANTE 3 (reescrita 15/10/2026): o `apiSincAdmissaoDigital` do envio é SEMPRE `false`, FIXO, e
+ * o knob de ambiente `GI_API_SINC_ADMISSAO_DIGITAL` está MORTO.
+ *
+ * ┌─ A DECISAO PERMANENTE DO DIRETOR, validada na tela do G.I ─────────────────────────────────────┐
+ * │ `false` "Sincroniza com GI": PROMOVE o registro para a tela de Cadastro de Funcionarios, onde o  │
+ * │ time trabalha. Por isso ele SAI da fila `FuncionarioSelecao/GetAll` (nao se perdeu: foi para o   │
+ * │ lugar certo). `true` "Sincroniza com Admissao Digital": PRENDE o registro num modulo que o time  │
+ * │ NAO acessa (limbo). Foi o `true` que fez Kaua/Edson/Fabricio "sumirem" da tela de Cadastro. logo │
+ * │ SUCESSO = chegar ao Cadastro (sair da fila), NUNCA "permanecer na fila". O `true` nao deve mais  │
+ * │ ser usado por caminho nenhum (manual, automatico, reconciliacao).                                │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE ESTE TESTE E A TRAVA CONTRA REINVERTER ──────────────────────────────────────────────┐
+ * │ Antes o valor vinha de `.env` (`GI_API_SINC_ADMISSAO_DIGITAL`), para ser reversivel numa linha. │
+ * │ O diretor decidiu o OPOSTO: FIXO em `false`, para ninguem reabrir o `true` sem querer. A leitura │
+ * │ de ambiente foi REMOVIDA do servico. Este arquivo prova que, mesmo com a variavel `true` no      │
+ * │ `.env`, o envio sai `false` nos DOIS gatilhos. Se algum dia o envio sair `true`, este teste      │
+ * │ reprova, e a reprovacao e o pedido de revisao.                                                   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE SE MEDE E O PAYLOAD QUE CHEGA AO CLIENTE DO GI, capturado no espiao de
+ * `criarFuncionarioSelecao`: e o ultimo ponto antes do `POST`.
+ *
+ * §A.6: toda entrada e SINTETICA (arnes). O payload carrega PII e SALARIO sinteticos: NAO e impresso.
+ * §A.11: nenhum travessao.
+ */
+
+afterEach(() => vi.restoreAllMocks());
+
+const ADM = "66666666-6666-6666-6666-666666666666";
+const CHAVE = "apiSincAdmissaoDigital";
+const ESTADO_VIVO = { farolGlobal: "EM_ADMISSAO", pausadaEm: null, origem: "MANUAL" };
+
+function servicoComAmbiente(env: Record<string, string | undefined>) {
+  const criar = vi.fn(
+    async (_payload: FuncionarioSelecao): Promise<GiCriacaoResultado> => ({
+      ok: true,
+      funcionarioSelecaoId: "GI-SINTETICO",
+    }),
+  );
+  const giApi = { configurado: () => true, criarFuncionarioSelecao: criar } as unknown as GiApiService;
+  const leitor = {
+    jaEnviado: async () => false,
+    lerPessoa: async () => PESSOA,
+    lerContratacao: async () => contratacaoDeFolhaCompleta(),
+    marcarEnviado: vi.fn(async () => {}),
+    lerEstado: async () => ESTADO_VIVO,
+    lerEstadoParaEnvio: async () => ESTADO_VIVO,
+  } as unknown as GiLeitorService;
+  const depara = {
+    ...DE_PARA_GI_VAZIO,
+    parEmpresaFilialConhecido: PAR_CONHECIDO,
+  } as unknown as GiDeParaService;
+  const config = {
+    get: (k: string) => ({ GI_DISPARO_ARMADO: "true", ...env })[k],
+  } as unknown as ConfigService;
+  return { svc: new EnviarParaGiService(config, giApi, leitor, depara), criar };
+}
+
+/** O payload que CHEGOU ao cliente do GI, pelo gatilho pedido. Falha o teste se nada foi enviado. */
+async function payloadDoEnvio(
+  env: Record<string, string | undefined>,
+  gatilho: "manual" | "automatico",
+) {
+  const { svc, criar } = servicoComAmbiente(env);
+  if (gatilho === "manual") await svc.enviarManual(ADM, "autor-sintetico");
+  else await svc.enviar(ADM, { farolGlobal: "EM_ADMISSAO", pausadaEm: null, autorId: "autor-sintetico" });
+  expect(criar, "nada foi enviado: o cenario nao chegou ao POST").toHaveBeenCalledTimes(1);
+  return criar.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+}
+
+describe("INVARIANTE 3: o envio sai SEMPRE false, nos dois gatilhos, qualquer que seja o ambiente", () => {
+  for (const gatilho of ["manual", "automatico"] as const) {
+    it(`${gatilho}: sem a variavel, o campo SAI e vale false`, async () => {
+      const payload = await payloadDoEnvio({}, gatilho);
+      expect(CHAVE in payload, "o campo nao saiu: a allowlist fechada o descartou").toBe(true);
+      expect(payload[CHAVE]).toBe(false);
+    });
+
+    it(`${gatilho}: o campo e BOOLEANO, nunca a string do .env`, async () => {
+      const payload = await payloadDoEnvio({}, gatilho);
+      expect(typeof payload[CHAVE]).toBe("boolean");
+    });
+
+    for (const valor of ["true", "TRUE", " true ", "True", "1", "sim", "false", ""]) {
+      it(`${gatilho}: GI_API_SINC_ADMISSAO_DIGITAL=${JSON.stringify(valor)} NAO liga (knob morto)`, async () => {
+        const payload = await payloadDoEnvio({ GI_API_SINC_ADMISSAO_DIGITAL: valor }, gatilho);
+        expect(payload[CHAVE], "o knob de ambiente reviveu e ligou o true: reabriu o limbo").toBe(false);
+      });
+    }
+  }
+});
+
+describe("INVARIANTE 3: o montador emite false por padrao e a rede de runtime coage nao-booleano a false", () => {
+  it("o montador emite a chave por conta propria, com false quando ninguem decide", () => {
+    const payload = montarFuncionarioSelecao(PESSOA) as unknown as Record<string, unknown>;
+    expect(CHAVE in payload, "a chave nao nasce no montador: esta sendo injetada por fora").toBe(true);
+    expect(payload[CHAVE]).toBe(false);
+  });
+
+  it("valor nao-booleano NAO atravessa como true (a fronteira do payload coage)", () => {
+    for (const sujo of ["true", 1, "1", {}, [], "yes"]) {
+      const payload = montarFuncionarioSelecao(PESSOA, undefined, undefined, {
+        apiSincAdmissaoDigital: sujo,
+      } as never) as unknown as Record<string, unknown>;
+      expect(typeof payload[CHAVE]).toBe("boolean");
+      expect(payload[CHAVE], "valor nao-booleano foi tratado como decisao de LIGAR").toBe(false);
+    }
+  });
+
+  it("a opcao de sincronismo NAO vira campo de pessoa (allowlist 1 segue fechada)", () => {
+    const payload = montarFuncionarioSelecao({
+      ...PESSOA,
+      apiSincAdmissaoDigital: true,
+    } as never) as unknown as Record<string, unknown>;
+    expect(payload[CHAVE], "o campo entrou pela porta da PESSOA: a allowlist 1 abriu").toBe(false);
+  });
+});
