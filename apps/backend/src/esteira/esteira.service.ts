@@ -97,7 +97,7 @@ import { clienteExigeIntegracao } from "./integracao-obrigatoria.repo";
 import { nascerCadastroEIntegracao } from "./nascimento-cadastro";
 import type { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import type { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
-import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
+import type { AgendamentoExameDto, AgendamentoExameLoteDto } from "./dto/agendamento-exame.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 
@@ -3131,6 +3131,36 @@ export class EsteiraService {
       agendamento,
       ...(statusAuto ? { statusAuto } : {}),
     };
+  }
+
+  /**
+   * AGENDAMENTO EM MASSA do exame (OST das ondas, Onda 3). Aplica os MESMOS dados a cada selecionado
+   * pelo caminho JÁ VALIDADO do individual (`salvarAgendamento`): cada candidato ganha o seu registro
+   * (pai + endereços), o contador de reagendamento e o evento de status, igual a agendar um por um.
+   *
+   * SEM TRAVA DE SOBREPOSIÇÃO, de propósito (decisão do diretor): o lote da INTEGRAÇÃO barra horário
+   * repetido, o do EXAME NÃO. Clientes diferentes podem marcar o mesmo horário na mesma clínica.
+   *
+   * POR CANDIDATO, não num `db.transaction` único: ao contrário da integração (um `insert` simples
+   * por linha), cada agendamento de exame é uma transação própria com apagar-e-regravar de endereços
+   * e o efeito de status. Rodar o caminho validado por candidato grava o registro CERTO de cada um;
+   * uma falha isolada (ex.: clínica removida) não derruba os demais, e o retorno diz o que falhou.
+   * §A.6: a falha carrega só o id da admissão e o NOME do erro, nunca a mensagem crua nem PII.
+   */
+  async agendarExameEmLote(dto: AgendamentoExameLoteDto, user: AuthUser) {
+    const ids = [...new Set(dto.admissaoIds)];
+    let agendados = 0;
+    const falhas: { admissaoId: string; erro: string }[] = [];
+    for (const id of ids) {
+      try {
+        // `dto` É um AgendamentoExameDto (a lote herda os campos); o `admissaoIds` extra é ignorado.
+        await this.salvarAgendamento(id, dto, user);
+        agendados++;
+      } catch (e) {
+        falhas.push({ admissaoId: id, erro: e instanceof Error ? e.name : "ERRO" });
+      }
+    }
+    return { total: ids.length, agendados, falhas };
   }
 
   /**

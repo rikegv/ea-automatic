@@ -98,3 +98,20 @@ export class AgendamentoExameDto {
   @IsBoolean()
   reagendar?: boolean;
 }
+
+/**
+ * AGENDAMENTO EM MASSA do exame (OST das ondas, Onda 3). Os MESMOS dados do modal individual (data,
+ * endereços com clínica/local/horário, valor e previsão do ASO) aplicados a VÁRIOS candidatos de uma
+ * vez. Herda os campos e as regras do individual; só acrescenta a lista de admissões.
+ *
+ * `ArrayMinSize(2)` espelha a regra do diretor: o botão "Agendar em massa" só vale para MAIS DE UM
+ * selecionado (um só usa o modal individual). SEM trava de sobreposição: clientes diferentes podem
+ * ter o MESMO horário de propósito, então o lote do exame NÃO replica a verificação da integração.
+ */
+export class AgendamentoExameLoteDto extends AgendamentoExameDto {
+  @IsArray()
+  @ArrayMinSize(2, { message: "Selecione mais de um candidato para agendar em massa." })
+  @ArrayMaxSize(500)
+  @IsUUID("all", { each: true })
+  admissaoIds!: string[];
+}

@@ -17,7 +17,7 @@ import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
-import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
+import { AgendamentoExameDto, AgendamentoExameLoteDto } from "./dto/agendamento-exame.dto";
 // Value import (não `import type`): o ValidationPipe precisa da CLASSE em runtime.
 import { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import { SalvarIfractalDto } from "./dto/ifractal.dto";
@@ -240,5 +240,17 @@ export class EsteiraController {
     // `user` alimenta o autor do evento de status: salvar o agendamento agora move a frente para
     // AGENDADO automaticamente (OST Onda 2), e toda transição de frente tem autor na trilha.
     return this.esteira.salvarAgendamento(admissaoId, dto, user);
+  }
+
+  /**
+   * Agendamento EM MASSA do exame (OST das ondas, Onda 3). Os mesmos dados do modal individual
+   * aplicados a vários selecionados. SEM trava de sobreposição (ao contrário da integração): o
+   * diretor pediu que clientes diferentes possam compartilhar o mesmo horário de propósito. Cada
+   * candidato é gravado pelo MESMO caminho validado do individual (`salvarAgendamento`), com o seu
+   * próprio registro e o seu evento de status; o resultado diz quantos agendaram e o que falhou.
+   */
+  @Post("exame/agendamento-lote")
+  agendarExameEmLote(@Body() dto: AgendamentoExameLoteDto, @CurrentUser() user: AuthUser) {
+    return this.esteira.agendarExameEmLote(dto, user);
   }
 }

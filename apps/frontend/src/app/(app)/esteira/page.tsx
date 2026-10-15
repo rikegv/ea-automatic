@@ -39,6 +39,7 @@ import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { AgendamentoIntegracaoModal } from "@/components/esteira/AgendamentoIntegracaoModal";
 import { ApresentacaoIntegracaoModal } from "@/components/esteira/ApresentacaoIntegracaoModal";
 import { AgendamentoIntegracaoLoteModal } from "@/components/esteira/AgendamentoIntegracaoLoteModal";
+import { AgendamentoExameLoteModal } from "@/components/esteira/AgendamentoExameLoteModal";
 import { ExportarExcelButton } from "@/components/ui/ExportarExcelButton";
 import { montarExportEsteira } from "@/lib/esteira-export";
 
@@ -454,6 +455,7 @@ export default function EsteiraPage() {
   const [agendaIntegracao, setAgendaIntegracao] = useState<EsteiraItem | null>(null);
   const [apresentacaoId, setApresentacaoId] = useState<string | null>(null);
   const [loteAberto, setLoteAberto] = useState(false);
+  const [loteExameAberto, setLoteExameAberto] = useState(false);
   /** Confirmação do DESCONSIDERAR. Guarda os ids e os nomes, para o texto dizer sobre quem é. */
   const [desconsiderar, setDesconsiderar] = useState<{ ids: string[]; nomes: string[] } | null>(
     null,
@@ -2067,6 +2069,15 @@ export default function EsteiraPage() {
         {isExame && (
           <div className="mb-[14px] flex shrink-0 flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
+              {/* Agendar em massa (OST das ondas, Onda 3): SÓ fica ativo com MAIS DE UM selecionado
+                  (um só usa o modal individual). Abre o mesmo formulário de agendamento, aplicado a
+                  todos de uma vez. SEM trava de sobreposição, de propósito. */}
+              {selecionados.size > 1 && (
+                <Button onClick={() => setLoteExameAberto(true)}>
+                  <Icon name="clock" className="h-4 w-4" />
+                  Agendar em massa ({selecionados.size})
+                </Button>
+              )}
               {/* Bloco E: o botão "Gerar Relatório Clínica" foi para o topo (ao lado do filtro). Aqui
                 permanece só o "Limpar seleção" de apoio. */}
               {selecionados.size > 0 && !gerandoRelatorio && (
@@ -2077,6 +2088,11 @@ export default function EsteiraPage() {
                 >
                   Limpar seleção
                 </button>
+              )}
+              {selecionados.size > 1 && (
+                <span className="text-[13px] text-faint">
+                  Clientes diferentes podem ser agendados no mesmo horário.
+                </span>
               )}
             </div>
             {relatorioError && (
@@ -2957,6 +2973,20 @@ export default function EsteiraPage() {
             if (salvou) {
               setSelecionados(new Set());
               setFlash({ tone: "ok", msg: "Integração agendada para os selecionados." });
+              void load();
+            }
+          }}
+        />
+      )}
+
+      {loteExameAberto && (
+        <AgendamentoExameLoteModal
+          admissaoIds={[...selecionados]}
+          onClose={(salvou) => {
+            setLoteExameAberto(false);
+            if (salvou) {
+              setSelecionados(new Set());
+              setFlash({ tone: "ok", msg: "Exame agendado para os selecionados." });
               void load();
             }
           }}
