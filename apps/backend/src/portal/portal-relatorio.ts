@@ -14,7 +14,9 @@ import type { ColunaXlsx, LinhaRelatorio } from "../admissoes/relatorio-export";
  */
 
 export const COLUNAS_RELATORIO_PORTAL: ColunaXlsx[] = [
-  { chave: "candidato", rotulo: "Candidato", largura: 28 },
+  { chave: "candidato", rotulo: "Nome Completo", largura: 28 },
+  { chave: "telefone", rotulo: "Telefone", largura: 16 },
+  { chave: "email", rotulo: "E-mail", largura: 26 },
   { chave: "cargo", rotulo: "Cargo", largura: 22 },
   { chave: "cliente", rotulo: "Cliente", largura: 26 },
   { chave: "dataAdmissao", rotulo: "Data de Admissão", largura: 16 },
@@ -26,6 +28,26 @@ export const COLUNAS_RELATORIO_PORTAL: ColunaXlsx[] = [
   { chave: "origem", rotulo: "Origem do Envio", largura: 18 },
   { chave: "link", rotulo: "Link de Acesso", largura: 60 },
 ];
+
+/**
+ * Colunas SEMPRE presentes no Excel do Portal (Onda 3.1): Nome, Telefone e E-mail (obrigatórias do
+ * diretor) e o LINK DE ACESSO, que é o motivo desta exportação existir (envio em massa). As demais
+ * entram só quando o usuário as marca no seletor.
+ */
+const CHAVES_SEMPRE_PORTAL = new Set(["candidato", "telefone", "email", "link"]);
+
+/**
+ * Filtra as colunas do Portal pela seleção do usuário, preservando as sempre-presentes e a ordem
+ * original. `null`/vazio = nenhuma seleção informada: volta ao conjunto completo (compatível com o
+ * download que não manda seleção).
+ */
+export function colunasDoRelatorioPortal(selecionadas: string[] | null | undefined): ColunaXlsx[] {
+  if (!selecionadas || selecionadas.length === 0) return COLUNAS_RELATORIO_PORTAL;
+  const marcadas = new Set(selecionadas);
+  return COLUNAS_RELATORIO_PORTAL.filter(
+    (c) => CHAVES_SEMPRE_PORTAL.has(c.chave) || marcadas.has(c.chave),
+  );
+}
 
 const ROTULO_ESTADO: Record<EstadoLinkPainel, string> = {
   VIVO: "Vivo",
@@ -70,9 +92,12 @@ export function celulaDoLink(estado: EstadoLinkPainel, urlResolvida: string | nu
 export function montarLinhaRelatorioPortal(
   linha: LinhaDoPainelPortal,
   urlResolvida: string | null,
+  contato?: { telefone: string | null; email: string | null } | null,
 ): LinhaRelatorio {
   return {
     candidato: linha.nome ?? "",
+    telefone: contato?.telefone ?? "",
+    email: contato?.email ?? "",
     cargo: linha.cargo ?? "",
     cliente: linha.cliente ?? "",
     dataAdmissao: fmtData(linha.dataAdmissao),

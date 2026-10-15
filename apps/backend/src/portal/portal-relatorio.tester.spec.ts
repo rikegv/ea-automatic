@@ -3,6 +3,7 @@ import type { LinhaDoPainelPortal } from "@ea/shared-types";
 import {
   COLUNAS_RELATORIO_PORTAL,
   celulaDoLink,
+  colunasDoRelatorioPortal,
   montarLinhaRelatorioPortal,
   precisaResolverLink,
 } from "./portal-relatorio";
@@ -67,5 +68,37 @@ describe("portal-relatorio: link vivo sempre, nunca gerar à toa", () => {
 
   it("a coluna do link existe no catálogo de colunas", () => {
     expect(COLUNAS_RELATORIO_PORTAL.some((c) => c.chave === "link")).toBe(true);
+  });
+
+  // Onda 3.1: contato obrigatório (Nome/Telefone/E-mail) e seleção de colunas.
+  it("preenche telefone e e-mail quando o contato é passado; vazio quando não", () => {
+    const com = montarLinhaRelatorioPortal(linhaBase(), "https://portal/vivo", {
+      telefone: "11999990000",
+      email: "maria@exemplo.com",
+    });
+    expect(com.telefone).toBe("11999990000");
+    expect(com.email).toBe("maria@exemplo.com");
+    const sem = montarLinhaRelatorioPortal(linhaBase(), "https://portal/vivo");
+    expect(sem.telefone).toBe("");
+    expect(sem.email).toBe("");
+  });
+
+  it("sem seleção informada, devolve o catálogo completo de colunas", () => {
+    expect(colunasDoRelatorioPortal(null)).toEqual(COLUNAS_RELATORIO_PORTAL);
+    expect(colunasDoRelatorioPortal([])).toEqual(COLUNAS_RELATORIO_PORTAL);
+  });
+
+  it("com seleção, mantém sempre Nome/Telefone/E-mail e o link, e só as colunas marcadas", () => {
+    const chaves = colunasDoRelatorioPortal(["cargo"]).map((c) => c.chave);
+    // Obrigatórias e o link entram sempre:
+    expect(chaves).toContain("candidato");
+    expect(chaves).toContain("telefone");
+    expect(chaves).toContain("email");
+    expect(chaves).toContain("link");
+    // A marcada entra:
+    expect(chaves).toContain("cargo");
+    // As não marcadas ficam de fora:
+    expect(chaves).not.toContain("cliente");
+    expect(chaves).not.toContain("documentoAtual");
   });
 });

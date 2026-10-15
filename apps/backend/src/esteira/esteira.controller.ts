@@ -14,10 +14,12 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
-import { CurrentUser } from "../auth/decorators";
+import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto, AgendamentoExameLoteDto } from "./dto/agendamento-exame.dto";
+// Value import (não `import type`): o ValidationPipe precisa das CLASSES em runtime.
+import { AtribuirConsultorDto, AtribuirConsultorLoteDto } from "./dto/atribuir-consultor.dto";
 // Value import (não `import type`): o ValidationPipe precisa da CLASSE em runtime.
 import { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import { SalvarIfractalDto } from "./dto/ifractal.dto";
@@ -252,5 +254,28 @@ export class EsteiraController {
   @Post("exame/agendamento-lote")
   agendarExameEmLote(@Body() dto: AgendamentoExameLoteDto, @CurrentUser() user: AuthUser) {
     return this.esteira.agendarExameEmLote(dto, user);
+  }
+
+  /**
+   * CONSULTOR RESPONSÁVEL por frente (Onda 2). A atribuição é SÓ do Master (`@Roles`), ao contrário
+   * do resto da esteira que é operacional aberto: definir quem responde por uma frente é decisão de
+   * coordenação, não operação. SUPER_ADMIN entra junto no idioma do projeto para não travar o
+   * próprio administrador. Prefixo literal `consultor/` para não colidir com a rota genérica da fila.
+   */
+  @Patch("consultor/:frente/:admissaoId")
+  @Roles("MASTER", "SUPER_ADMIN")
+  atribuirConsultor(
+    @Param("frente") frente: string,
+    @Param("admissaoId") admissaoId: string,
+    @Body() dto: AtribuirConsultorDto,
+  ) {
+    return this.esteira.atribuirConsultor(frente, admissaoId, dto.consultorId ?? null);
+  }
+
+  /** Atribuição EM MASSA do consultor responsável (mesma frente, várias admissões). Só Master. */
+  @Post("consultor-lote")
+  @Roles("MASTER", "SUPER_ADMIN")
+  atribuirConsultorEmLote(@Body() dto: AtribuirConsultorLoteDto) {
+    return this.esteira.atribuirConsultorEmLote(dto);
   }
 }

@@ -1,4 +1,5 @@
 import { caixaAlta } from "@/lib/nome";
+import { rotuloDaAuditoria } from "@/lib/rotulo-auditoria";
 import type { ColunaExport } from "@/components/ui/ExportarExcelButton";
 
 /**
@@ -12,6 +13,11 @@ import type { ColunaExport } from "@/components/ui/ExportarExcelButton";
 /** Campos que a exportação lê do item da esteira (subconjunto do EsteiraItem da página). */
 export interface ItemEsteiraExport {
   candidatoNome: string;
+  candidatoCpf?: string | null;
+  candidatoEmail?: string | null;
+  candidatoTelefone?: string | null;
+  // CONSULTOR RESPONSÁVEL da frente (Onda 2): coluna selecionável nas três abas de trabalho.
+  consultorResponsavelNome?: string | null;
   clienteRazao: string;
   clienteOperacao?: string | null;
   projetoNome?: string | null;
@@ -21,7 +27,12 @@ export interface ItemEsteiraExport {
   dataAdmissao: string | null;
   status: string;
   docsPendentes?: number;
-  progressoObrigatorios?: { entregues: number; total: number; inconformes: number } | null;
+  progressoObrigatorios?: {
+    entregues: number;
+    total: number;
+    inconformes: number;
+    recebidos: number;
+  } | null;
   temPendencias?: boolean;
   agendamento?: {
     data: string | null;
@@ -59,8 +70,13 @@ const TIPO_INTEGRACAO: Record<string, string> = {
   PRESENCIAL: "Presencial",
 };
 
+// OBRIGATÓRIAS SEMPRE (Onda 3.1): Nome, Telefone e E-mail entram em todo Excel, marcadas e sem
+// como desmarcar. O CPF é opcional (só sai se o usuário marcar).
 const COMUNS: ColunaExport[] = [
-  { chave: "candidato", rotulo: "Candidato", largura: 28 },
+  { chave: "candidato", rotulo: "Nome Completo", largura: 28, obrigatoria: true },
+  { chave: "telefone", rotulo: "Telefone", largura: 16, obrigatoria: true },
+  { chave: "email", rotulo: "E-mail", largura: 26, obrigatoria: true },
+  { chave: "cpf", rotulo: "CPF", largura: 16 },
   { chave: "cliente", rotulo: "Cliente", largura: 28 },
   { chave: "operacao", rotulo: "Operação", largura: 20 },
   { chave: "projeto", rotulo: "Projeto", largura: 18 },
@@ -71,12 +87,23 @@ const COMUNS: ColunaExport[] = [
   { chave: "status", rotulo: "Status", largura: 22 },
 ];
 
+// Coluna CONSULTOR RESPONSÁVEL (Onda 2), selecionável nas três abas de trabalho.
+const COL_CONSULTOR: ColunaExport = {
+  chave: "consultorResp",
+  rotulo: "Consultor Responsável",
+  largura: 24,
+};
+
 const EXTRAS: Record<string, ColunaExport[]> = {
   auditoria: [
-    { chave: "obrigatorios", rotulo: "Obrigatórios (Entregues/Total)", largura: 24 },
-    { chave: "inconformes", rotulo: "Inconformes", largura: 12 },
+    // Onda 3.2: o status concatenado da tela vira colunas separadas. "Aprovados" e "Reprovados"
+    // levam SÓ o número e ficam vazios quando a admissão não tem substatus (ex.: só Análise
+    // Pendente). O "Status" (coluna comum) já traz o rótulo principal derivado.
+    { chave: "aprovados", rotulo: "Aprovados", largura: 12 },
+    { chave: "reprovados", rotulo: "Reprovados", largura: 12 },
     { chave: "docsPendentes", rotulo: "Documentos Pendentes", largura: 18 },
     { chave: "pendencias", rotulo: "Tem Pendências", largura: 14 },
+    COL_CONSULTOR,
   ],
   exame: [
     { chave: "exameData", rotulo: "Data do Exame", largura: 16 },
@@ -86,10 +113,12 @@ const EXTRAS: Record<string, ColunaExport[]> = {
     { chave: "fornecedor", rotulo: "Fornecedor", largura: 14 },
     { chave: "asoEstado", rotulo: "Estado do ASO", largura: 16 },
     { chave: "asoValidado", rotulo: "ASO Validado", largura: 12 },
+    COL_CONSULTOR,
   ],
   cadastro: [
     { chave: "matricula", rotulo: "Matrícula", largura: 14 },
     { chave: "clicksign", rotulo: "Status da Assinatura", largura: 20 },
+    COL_CONSULTOR,
   ],
   integracao: [
     { chave: "integracaoData", rotulo: "Data da Integração", largura: 16 },
@@ -117,9 +146,14 @@ export function montarExportEsteira(
 ): { aba: string; colunas: ColunaExport[]; nomeArquivo: string; linhas: Linha[] } {
   const colunas = [...COMUNS, ...(EXTRAS[rota] ?? [])];
 
+  const temConsultor = rota === "auditoria" || rota === "exame" || rota === "cadastro";
+
   const linhas: Linha[] = itens.map((it) => {
     const base: Linha = {
       candidato: caixaAlta(it.candidatoNome),
+      telefone: it.candidatoTelefone ?? "",
+      email: it.candidatoEmail ?? "",
+      cpf: it.candidatoCpf ?? "",
       cliente: it.clienteRazao ?? "",
       operacao: it.clienteOperacao ?? "",
       projeto: it.projetoNome ?? "MATRIZ",
@@ -129,10 +163,20 @@ export function montarExportEsteira(
       dataAdmissao: fmtData(it.dataAdmissao),
       status: rotuloStatus(it.status),
     };
+    if (temConsultor) {
+      base.consultorResp = it.consultorResponsavelNome ? caixaAlta(it.consultorResponsavelNome) : "";
+    }
     if (rota === "auditoria") {
       const p = it.progressoObrigatorios;
-      base.obrigatorios = p ? `${p.entregues}/${p.total}` : "";
-      base.inconformes = p ? String(p.inconformes) : "";
+      // Substatus presente = tem régua obrigatória com algum total. Sem substatus (ex.: só "Análise
+      // Pendente"), Aprovados/Reprovados ficam VAZIOS (não zero), como pediu o diretor.
+      const temSubstatus = !!p && p.total > 0;
+      // Coluna Status casa com a TELA: quando há substatus e a frente está em ANALISE_PENDENTE, o
+      // rótulo é o derivado (Entrega Pendente / Análise Em Andamento / Análise Finalizada).
+      base.status =
+        temSubstatus && it.status === "ANALISE_PENDENTE" ? rotuloDaAuditoria(p!) : rotuloStatus(it.status);
+      base.aprovados = temSubstatus ? String(p!.entregues) : "";
+      base.reprovados = temSubstatus ? String(p!.inconformes) : "";
       base.docsPendentes = it.docsPendentes === undefined ? "" : String(it.docsPendentes);
       base.pendencias = simNao(it.temPendencias);
     } else if (rota === "exame") {

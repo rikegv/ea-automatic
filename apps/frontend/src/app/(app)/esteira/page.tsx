@@ -40,6 +40,7 @@ import { AgendamentoIntegracaoModal } from "@/components/esteira/AgendamentoInte
 import { ApresentacaoIntegracaoModal } from "@/components/esteira/ApresentacaoIntegracaoModal";
 import { AgendamentoIntegracaoLoteModal } from "@/components/esteira/AgendamentoIntegracaoLoteModal";
 import { AgendamentoExameLoteModal } from "@/components/esteira/AgendamentoExameLoteModal";
+import { AtribuirConsultorLoteModal } from "@/components/esteira/AtribuirConsultorLoteModal";
 import { ExportarExcelButton } from "@/components/ui/ExportarExcelButton";
 import { montarExportEsteira } from "@/lib/esteira-export";
 
@@ -190,6 +191,15 @@ interface EsteiraItem {
     consultorNome: string | null;
   } | null;
   candidatoNome: string;
+  // Contato do candidato (Onda 3.1): colunas selecionáveis do Excel. Telefone e E-mail são
+  // obrigatórios no export; CPF é opcional. Vêm em todas as abas que exibem o botão de exportação.
+  candidatoCpf?: string | null;
+  candidatoEmail?: string | null;
+  candidatoTelefone?: string | null;
+  // CONSULTOR RESPONSÁVEL por esta frente (Onda 2), atribuído à mão pelo Master. `null` = sem
+  // atribuição (coluna vazia). O id alimenta o seletor; o nome, a célula.
+  consultorResponsavelId?: string | null;
+  consultorResponsavelNome?: string | null;
   codCliente: string;
   clienteRazao: string;
   clienteOperacao?: string | null;
@@ -274,6 +284,14 @@ interface EsteiraResp {
 // de "Aguardando Liberação Do ASO" (que segue em amarelo, porque o prazo ainda não venceu). O NOME
 // não muda; muda só a cor, dentro do mesmo esquema já usado pelas outras tags.
 const STATUS_DANGER = new Set(["DECLINOU", "CANCELADO", "ASO_PENDENTE"]);
+
+// Opções do filtro de SUBSTATUS da Auditoria (Onda 3.2): os rótulos derivados da régua, os mesmos
+// que a coluna Status mostra. O valor é o próprio rótulo, porque o recorte é no cliente (§A.28).
+const SUBSTATUS_AUDITORIA_OPC = [
+  { value: "Entrega Pendente", label: "Entrega Pendente" },
+  { value: "Análise Em Andamento", label: "Análise Em Andamento" },
+  { value: "Análise Finalizada", label: "Análise Finalizada" },
+];
 
 // Coluna Pendências Obrig. (§A.12): o mapa de tom/rótulo que vivia AQUI, copiado do Gerenciador,
 // virou `lib/pendencias-pill`. Era a duplicação que deixava as duas telas divergirem, e a razão de a
@@ -360,7 +378,9 @@ type DialogState = {
 } | null;
 
 export default function EsteiraPage() {
-  const { token } = useAuth();
+  // `isAdmin` = papel MASTER ou SUPER_ADMIN (tradução do @Roles das rotas de consultor). Só ele vê
+  // e usa a atribuição do consultor responsável (Onda 2); o comum enxerga a coluna como leitura.
+  const { token, isAdmin } = useAuth();
   const [aba, setAba] = useState(0);
   const rota = ABAS[aba].rota;
   const isExame = rota === "exame";
@@ -371,8 +391,31 @@ export default function EsteiraPage() {
   const isAuditoria = rota === "auditoria";
   const isIntegracao = rota === "integracao";
   const isIfractal = rota === "ifractal";
+  // SELEÇÃO MÚLTIPLA por aba. Exame e Integração já a têm (agendamento/relatório em massa). Onda 2:
+  // Auditoria e Cadastro ganham seleção SÓ para o Master, que é quem atribui consultor em massa.
+  const temSelecao = isExame || isIntegracao || (isAdmin && (isAuditoria || isCadastro));
+  // Ação de massa "Atribuir Consultor" (Onda 2): nas três abas de trabalho, só Master.
+  const temConsultorMass = isAdmin && (isAuditoria || isExame || isCadastro);
   /** Rascunho de login/senha por admissão, para a linha editar sem recarregar a lista inteira. */
   const [credEdit, setCredEdit] = useState<Record<string, { login: string; senha: string }>>({});
+
+  // CONSULTOR RESPONSÁVEL (Onda 2). A lista de atribuíveis é "quem acessa a Esteira" e é a MESMA
+  // para Auditoria/Exame/Cadastro (as três compartilham o menu `esteira`). Só o Master atribui, e
+  // só o Master vê o seletor, então só para ele a carregamos.
+  const [consultoresEsteira, setConsultoresEsteira] = useState<{ id: string; nome: string }[]>([]);
+  const [consultorSalvando, setConsultorSalvando] = useState<string | null>(null);
+  useEffect(() => {
+    if (!token || !isAdmin) return;
+    let vivo = true;
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/consultores-esteira", { token })
+      .then((lista) => {
+        if (vivo) setConsultoresEsteira(lista);
+      })
+      .catch(() => setConsultoresEsteira([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token, isAdmin]);
   const [credSalvando, setCredSalvando] = useState<string | null>(null);
   /**
    * FILTROS DA ABA IFRACTAL (§A.30, escolha do diretor), todos MÚLTIPLOS (§A.28).
@@ -447,6 +490,42 @@ export default function EsteiraPage() {
     }
   }
 
+  /**
+   * Atribui (ou desatribui, com `null`) o consultor responsável DESTA frente (Onda 2). Otimista:
+   * reflete no item sem recarregar a fila inteira (mesmo molde de `salvarCred`). `rota` é a frente
+   * corrente. Só o Master chega aqui (o seletor só aparece para ele e o backend exige @Roles).
+   */
+  async function atribuirConsultorNaFrente(item: EsteiraItem, consultorId: string | null) {
+    if ((item.consultorResponsavelId ?? null) === consultorId) return;
+    const nome = consultorId
+      ? (consultoresEsteira.find((c) => c.id === consultorId)?.nome ?? null)
+      : null;
+    setConsultorSalvando(item.admissaoId);
+    try {
+      await apiFetch(`/esteira/consultor/${rota}/${item.admissaoId}`, {
+        method: "PATCH",
+        token,
+        body: { consultorId },
+      });
+      setData((cur) =>
+        cur
+          ? {
+              ...cur,
+              items: cur.items.map((i) =>
+                i.admissaoId === item.admissaoId
+                  ? { ...i, consultorResponsavelId: consultorId, consultorResponsavelNome: nome }
+                  : i,
+              ),
+            }
+          : cur,
+      );
+    } catch {
+      setFlash({ msg: "Falha ao atribuir o consultor responsável. Tente de novo.", tone: "wn" });
+    } finally {
+      setConsultorSalvando(null);
+    }
+  }
+
   /** Rótulo do tipo de marcação herdado do cliente. NOT NULL no banco: nunca cai no vazio. */
   function rotuloMarcacao(item: EsteiraItem) {
     return item.tipoMarcacao ? TIPO_MARCACAO_LABEL[item.tipoMarcacao] : "não informado";
@@ -456,6 +535,8 @@ export default function EsteiraPage() {
   const [apresentacaoId, setApresentacaoId] = useState<string | null>(null);
   const [loteAberto, setLoteAberto] = useState(false);
   const [loteExameAberto, setLoteExameAberto] = useState(false);
+  /** Atribuição de consultor EM MASSA (Onda 2): modal aberto sobre os selecionados. */
+  const [loteConsultorAberto, setLoteConsultorAberto] = useState(false);
   /** Confirmação do DESCONSIDERAR. Guarda os ids e os nomes, para o texto dizer sobre quem é. */
   const [desconsiderar, setDesconsiderar] = useState<{ ids: string[]; nomes: string[] } | null>(
     null,
@@ -510,6 +591,9 @@ export default function EsteiraPage() {
   const [fHorario, setFHorario] = useState("");
   const [fTipoInteg, setFTipoInteg] = useState("");
   const [fConsultor, setFConsultor] = useState("");
+  // SUBSTATUS da Auditoria (Onda 3.2): filtro client-side pelo rótulo derivado da régua (Entrega
+  // Pendente / Análise Em Andamento / Análise Finalizada). Só a aba Auditoria tem substatus.
+  const [fSubstatus, setFSubstatus] = useState<string[]>([]);
   // Busca por candidato (item 3), nome ou CPF; revela também concluídos (item 1).
   const [candQuery, setCandQuery] = useState("");
   const [candDebounced, setCandDebounced] = useState("");
@@ -671,6 +755,7 @@ export default function EsteiraPage() {
     setFHorario("");
     setFTipoInteg("");
     setFConsultor("");
+    setFSubstatus([]);
     setFMatricula([]);
     setFNomeIf([]);
     setFMarcacao([]);
@@ -693,6 +778,7 @@ export default function EsteiraPage() {
       fHorario ||
       fTipoInteg ||
       fConsultor ||
+      fSubstatus.length ||
       fMatricula.length ||
       fNomeIf.length ||
       fMarcacao.length ||
@@ -712,7 +798,7 @@ export default function EsteiraPage() {
     [fContrato, fNome, fCargo, fHorario, fTipoInteg, fConsultor].filter(Boolean).length +
     // Os três da aba iFractal são LISTAS, então contam por `length` e não por `Boolean` (array
     // vazio é truthy: incluí-los na linha acima faria o contador marcar filtro que ninguém pôs).
-    [fMatricula, fNomeIf, fMarcacao].filter((f) => f.length > 0).length;
+    [fMatricula, fNomeIf, fMarcacao, fSubstatus].filter((f) => f.length > 0).length;
 
   // ── PATCH de status (avanço/reversão/aceite) ────────────────────────────────
   const doPatch = useCallback(
@@ -1109,6 +1195,15 @@ export default function EsteiraPage() {
       if (fContrato && it.tipoContrato !== fContrato) return false;
       if (fCargo && it.cargoNome !== fCargo) return false;
       if (fConsultor && (it.integracao?.consultorNome ?? "") !== fConsultor) return false;
+      // SUBSTATUS da Auditoria (Onda 3.2): só o rótulo DERIVADO da régua, o mesmo que a coluna
+      // Status mostra. Admissão sem substatus (não é ANALISE_PENDENTE com régua) não casa com o
+      // filtro ativo e sai, pela mesma regra dos demais filtros de lista.
+      if (fSubstatus.length) {
+        const p = it.progressoObrigatorios;
+        const sub =
+          p && p.total > 0 && it.status === "ANALISE_PENDENTE" ? rotuloDaAuditoria(p) : null;
+        if (!sub || !fSubstatus.includes(sub)) return false;
+      }
       if (fTipoInteg && it.integracao?.tipo !== fTipoInteg) return false;
       // ── ABA IFRACTAL: os três filtros de coluna escolhidos pelo diretor (§A.30) ──
       // MÚLTIPLOS (§A.28): lista vazia significa "todos", e é por isso que o `length` vem antes.
@@ -1125,6 +1220,7 @@ export default function EsteiraPage() {
     fMatricula,
     fNomeIf,
     fMarcacao,
+    fSubstatus,
   ]);
   const statusCatalogo = data?.statusCatalogo ?? [];
 
@@ -1198,14 +1294,12 @@ export default function EsteiraPage() {
 
   // KPIs (item 5/6): "Total na fila" + um card por status EM ANDAMENTO (exclui o de conclusão, que
   // sai da fila). Cada card de status filtra a lista ao clicar (toggle).
-  //
-  // Declínio SEMPRE o ÚLTIMO card da fileira (decisão do diretor). Não basta ordenar entre os cards
-  // de status: depois deles ainda vem o card "Com Pendências Obrigatórias" (§A.12), e era ELE que
-  // deixava o "Declinou" no meio. Por isso o card de declínio é separado aqui e renderizado depois
-  // do de pendências. Só a Auditoria tem DECLINOU no catálogo; nas outras abas nada é renderizado.
   /**
-   * Os cards de status EM ANDAMENTO. O concluinte sai (tem card próprio de "realizado") e o
-   * "Declinou" sai daqui para ser sempre o ÚLTIMO da fileira.
+   * Os cards de status EM ANDAMENTO. O concluinte sai (tem card próprio de "realizado").
+   *
+   * DECLÍNIO NÃO GANHA CARD na frente de trabalho (decisão do diretor): o farol DECLINOU já sai da
+   * fila na raiz da consulta, então o card vivia sempre zerado. O declínio continua visível apenas
+   * no Gerenciador, que tem representação própria. Por isso DECLINOU é filtrado aqui e não aparece.
    *
    * RESCISÃO SAI DA INTEGRAÇÃO (decisão do diretor). Ela é um valor do catálogo daquela frente, e
    * por isso ganhava card automaticamente; a aba não a quer. O recorte é só da Integração: onde
@@ -1217,7 +1311,6 @@ export default function EsteiraPage() {
       c.codigo !== "DECLINOU" &&
       !(isIntegracao && c.codigo === "RESCISAO"),
   );
-  const kpiDeclinio = statusCatalogo.find((c) => c.codigo === "DECLINOU");
   // Máscara única de tabela (§A.12): colunas REALMENTE separadas, com min-width por coluna para o
   // conteúdo NUNCA cortar/sobrepor; o container rola na horizontal (overflow-x) em vez de esmagar.
   // Ordem: [check(exame)] Candidato · Cliente · Cargo · Contrato · Data · Status · Pendências ·
@@ -1256,6 +1349,9 @@ export default function EsteiraPage() {
     loja: "minmax(232px,1fr)",
     status: "210px",
     pend: "168px",
+    // CONSULTOR RESPONSÁVEL (Onda 2): cabe nome de gente e, para o Master, o seletor inline. Piso de
+    // 200px no mesmo espírito da coluna Consultor da Integração (§A.20).
+    consultorResp: "minmax(200px,1.1fr)",
     acoes: "120px",
     // Colunas da INTEGRAÇÃO. Larguras pelo CONTEÚDO mais longo, não pelo título: "Presencial" manda
     // em Tipo, "00:00" em Horário, e Consultor precisa caber nome de gente (§A.20).
@@ -1330,7 +1426,8 @@ export default function EsteiraPage() {
           "168px",
         ]
       : [
-          isExame ? "40px" : null,
+          // Checkbox de seleção: no Exame sempre; em Auditoria/Cadastro só para o Master (Onda 2).
+          temSelecao ? "40px" : null,
           COL.contrato,
           // MATRÍCULA só na aba CADASTRO (decisão do diretor): é lá que a importação acontece, e o
           // time precisa ver quem já foi importado. Vem ANTES do nome, como na tela de Benefícios.
@@ -1351,6 +1448,9 @@ export default function EsteiraPage() {
           // delas continua cabendo em 210px.
           isExame ? "248px" : COL.status,
           COL.pend,
+          // CONSULTOR RESPONSÁVEL (Onda 2): logo DEPOIS de Pendências Obrigatórias, só nas três abas
+          // de trabalho (Auditoria, Exame, Cadastro). Integração e iFractal têm composição própria.
+          COL.consultorResp,
           avanco,
           COL.acoes,
         ]
@@ -1364,8 +1464,8 @@ export default function EsteiraPage() {
     : isExame
     ? // +38px com a coluna de status mais larga (o rótulo "Liberado Para Cadastro Sem ASO"), +176px
       // com a coluna PROJETO e +196px com a coluna LOJA: o piso acompanha CADA coluna, senão a aba
-      // passaria a espremer em vez de rolar (§A.20).
-      "min-w-[2286px]"
+      // passaria a espremer em vez de rolar (§A.20). +200px com o CONSULTOR RESPONSÁVEL (Onda 2).
+      "min-w-[2486px]"
     : isIntegracao
       ? // +110px com a Data adm. e +112px com o Contrato: o piso acompanha CADA coluna nova, senão a
         // aba passaria a espremer em vez de rolar (§A.20). Nenhuma coluna existente cedeu largura:
@@ -1377,9 +1477,15 @@ export default function EsteiraPage() {
         "min-w-[2050px]"
       : // +130px na aba Cadastro, com a entrada da Matrícula: o piso acompanha a coluna nova, senão
         // a aba passaria a espremer em vez de rolar (§A.20).
+        // +200px com o CONSULTOR RESPONSÁVEL (Onda 2), nas abas Cadastro e Auditoria; +40px a mais
+        // quando o Master vê a coluna de seleção (ação de massa).
         isCadastro
-        ? "min-w-[2078px]"
-        : "min-w-[1948px]";
+        ? temSelecao
+          ? "min-w-[2318px]"
+          : "min-w-[2278px]"
+        : temSelecao
+          ? "min-w-[2188px]"
+          : "min-w-[2148px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
@@ -1699,6 +1805,19 @@ export default function EsteiraPage() {
                 />
               </FiltroCampo>
 
+              {/* SUBSTATUS da Auditoria (Onda 3.2): só nesta aba, pelo rótulo derivado da régua. */}
+              {isAuditoria && (
+                <FiltroCampo label="Substatus da Auditoria">
+                  <MultiSelect
+                    ariaLabel="Filtrar por substatus da auditoria"
+                    values={fSubstatus}
+                    onChange={setFSubstatus}
+                    options={SUBSTATUS_AUDITORIA_OPC}
+                    placeholder="Todos os substatus"
+                  />
+                </FiltroCampo>
+              )}
+
               {/* DATAS COM NOME PRÓPRIO. O rótulo "Período" saiu: ele filtrava por quando a
                   admissão entrou no sistema, e quem marcava um intervalo esperando a data de
                   admissão via um resultado que não batia com nada, sem ter como descobrir por quê.
@@ -2003,9 +2122,6 @@ export default function EsteiraPage() {
               "FINALIZADO" aqui deixaria o card mudo no dia em que alguém marcasse outro status como
               concluinte. */}
           {!isIntegracao && cardRealizado}
-          {/* Declínio SEMPRE o último card da fileira (decisão do diretor) — por isso vem DEPOIS do
-              card de pendências, e não junto dos demais status. */}
-          {kpiDeclinio && cardStatus(kpiDeclinio)}
         </div>
 
         {/* ── Feedback de ação ─────────────────────────────────────────────── */}
@@ -2065,6 +2181,23 @@ export default function EsteiraPage() {
           </div>
         )}
 
+        {/* ── Atribuir consultor em massa (abas Auditoria e Cadastro): só Master ── */}
+        {(isAuditoria || isCadastro) && temConsultorMass && selecionados.size > 0 && (
+          <div className="mb-[14px] flex shrink-0 flex-wrap items-center gap-3">
+            <Button onClick={() => setLoteConsultorAberto(true)}>
+              <Icon name="users" className="h-4 w-4" />
+              Atribuir consultor em massa ({selecionados.size})
+            </Button>
+            <button
+              type="button"
+              className="text-[13px] text-dim underline-offset-2 hover:underline"
+              onClick={() => setSelecionados(new Set())}
+            >
+              Limpar seleção
+            </button>
+          </div>
+        )}
+
         {/* ── Relatório da clínica (aba Exame): seleção múltipla → CSV ──────── */}
         {isExame && (
           <div className="mb-[14px] flex shrink-0 flex-wrap items-center justify-between gap-3">
@@ -2076,6 +2209,13 @@ export default function EsteiraPage() {
                 <Button onClick={() => setLoteExameAberto(true)}>
                   <Icon name="clock" className="h-4 w-4" />
                   Agendar em massa ({selecionados.size})
+                </Button>
+              )}
+              {/* Atribuir consultor em massa (Onda 2): só Master, só com seleção. */}
+              {temConsultorMass && selecionados.size > 0 && (
+                <Button variant="secondary" onClick={() => setLoteConsultorAberto(true)}>
+                  <Icon name="users" className="h-4 w-4" />
+                  Atribuir consultor em massa ({selecionados.size})
                 </Button>
               )}
               {/* Bloco E: o botão "Gerar Relatório Clínica" foi para o topo (ao lado do filtro). Aqui
@@ -2111,7 +2251,7 @@ export default function EsteiraPage() {
           <div className="ea-scroll min-h-0 flex-1 overflow-auto">
             <div className={gridMin}>
               <div className="list-head" style={{ gridTemplateColumns: gridCols }}>
-                {(isExame || isIntegracao) && (
+                {temSelecao && (
                   <span className="flex items-center justify-center">
                     <input
                       type="checkbox"
@@ -2239,6 +2379,8 @@ export default function EsteiraPage() {
                     <ColunaOrdenavel ord={ord} chave="pendencias">
                       Pendências Obrig.
                     </ColunaOrdenavel>
+                    {/* CONSULTOR RESPONSÁVEL (Onda 2): logo depois de Pendências Obrigatórias. */}
+                    <span>Consultor Responsável</span>
                     <span>
                       {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
                     </span>
@@ -2301,7 +2443,7 @@ export default function EsteiraPage() {
                       className={cn("row", isIntegracao && farolIntegracaoClasse(item))}
                       style={{ gridTemplateColumns: gridCols }}
                     >
-                      {(isExame || isIntegracao) && (
+                      {temSelecao && (
                         <div className="flex items-center justify-center">
                           <input
                             type="checkbox"
@@ -2603,6 +2745,34 @@ export default function EsteiraPage() {
                             label={sinalP.label}
                             onClick={() => setPendItem(item)}
                           />
+                        </div>
+                      )}
+
+                      {/* Coluna CONSULTOR RESPONSÁVEL (Onda 2): só nas três abas de trabalho. O
+                          Master atribui pelo seletor; o comum lê o nome (ou "Não atribuído"). */}
+                      {!isIntegracao && (
+                        <div className="flex min-w-0 items-center justify-center">
+                          {isAdmin ? (
+                            <Select
+                              value={item.consultorResponsavelId ?? ""}
+                              onChange={(v) => void atribuirConsultorNaFrente(item, v || null)}
+                              disabled={consultorSalvando === item.admissaoId}
+                              ariaLabel="Consultor responsável"
+                              options={[
+                                { value: "", label: "Não atribuído" },
+                                ...consultoresEsteira.map((c) => ({ value: c.id, label: c.nome })),
+                              ]}
+                            />
+                          ) : (
+                            <span
+                              className="truncate text-[13px]"
+                              title={item.consultorResponsavelNome ?? undefined}
+                            >
+                              {item.consultorResponsavelNome ?? (
+                                <span className="text-faint">Não atribuído</span>
+                              )}
+                            </span>
+                          )}
                         </div>
                       )}
 
@@ -2987,6 +3157,22 @@ export default function EsteiraPage() {
             if (salvou) {
               setSelecionados(new Set());
               setFlash({ tone: "ok", msg: "Exame agendado para os selecionados." });
+              void load();
+            }
+          }}
+        />
+      )}
+
+      {loteConsultorAberto && (
+        <AtribuirConsultorLoteModal
+          admissaoIds={[...selecionados]}
+          frente={rota}
+          consultores={consultoresEsteira}
+          onClose={(salvou) => {
+            setLoteConsultorAberto(false);
+            if (salvou) {
+              setSelecionados(new Set());
+              setFlash({ tone: "ok", msg: "Consultor responsável atribuído aos selecionados." });
               void load();
             }
           }}

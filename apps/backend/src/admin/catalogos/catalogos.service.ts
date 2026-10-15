@@ -240,6 +240,33 @@ export class CatalogosService {
       .orderBy(asc(usuarios.nome));
   }
 
+  /**
+   * CONSULTORES ATRIBUÍVEIS como responsável nas frentes da Esteira (Auditoria/Exame/Cadastro),
+   * Onda 2. É "quem pode ACESSAR a tela da Esteira".
+   *
+   * As três abas compartilham o MESMO menu `esteira` no RBAC, então a lista é a mesma para as três:
+   * não há no modelo de permissão uma chave que distinga Auditoria de Exame de Cadastro. Regra:
+   *  - MASTER ativo entra (perfil que administra a operação; é quem atribui).
+   *  - COMUM ativo entra SE tiver o menu `esteira` concedido — é o "usuário do ADM liberado para a
+   *    esteira" que o diretor citou. COMUM sem o menu não acessa a tela, logo não é atribuível.
+   *  - SUPER_ADMIN fica FORA, como na lista da integração: é administração do sistema, não operação.
+   * §A.6: só id e nome, sem e-mail nem qualquer contato.
+   */
+  listConsultoresEsteira() {
+    const temMenuEsteira = sql<boolean>`EXISTS (SELECT 1 FROM usuario_menus um
+      WHERE um.usuario_id = ${usuarios.id} AND um.menu_codigo = 'esteira')`;
+    return this.db
+      .select({ id: usuarios.id, nome: usuarios.nome })
+      .from(usuarios)
+      .where(
+        and(
+          eq(usuarios.ativo, true),
+          or(eq(usuarios.papel, "MASTER"), and(eq(usuarios.papel, "COMUM"), temMenuEsteira)),
+        ),
+      )
+      .orderBy(asc(usuarios.nome));
+  }
+
   listEscalas() {
     return this.db
       .select({ id: escalasCatalogo.id, nome: escalasCatalogo.nome })

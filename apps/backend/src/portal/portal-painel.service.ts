@@ -703,6 +703,31 @@ export class PortalPainelService {
   }
 
   /**
+   * CONTATO (telefone/e-mail) por admissão, SÓ para o relatório (Onda 3.1: colunas obrigatórias).
+   * Fica fora da lista do painel de propósito: a tela não precisa do contato, então ele não trafega
+   * ali; vem apenas no Excel que o ADM pediu, de quem já tem acesso à admissão. §A.6: não é logado.
+   */
+  async contatosPorAdmissao(
+    admissaoIds: string[],
+  ): Promise<Map<string, { telefone: string | null; email: string | null }>> {
+    const mapa = new Map<string, { telefone: string | null; email: string | null }>();
+    if (admissaoIds.length === 0) return mapa;
+    const rows = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        telefone: candidatos.telefone,
+        email: candidatos.email,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, LIGA_CANDIDATO)
+      .where(inArray(admissoes.id, admissaoIds));
+    for (const r of rows) {
+      mapa.set(r.admissaoId, { telefone: r.telefone ?? null, email: r.email ?? null });
+    }
+    return mapa;
+  }
+
+  /**
    * O CATÁLOGO DOS FILTROS (§A.37), e ele sai do RECORTE, nunca das linhas carregadas.
    *
    * Derivar as opções da página encolhe a lista assim que o primeiro valor é escolhido, e aí não

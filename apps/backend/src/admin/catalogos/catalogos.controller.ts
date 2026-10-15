@@ -31,6 +31,15 @@ export class CatalogosController {
     return this.catalogos.listConsultores();
   }
 
+  // Consultores ATRIBUÍVEIS às frentes da Esteira (Onda 2): quem tem acesso ao menu `esteira`.
+  // Gated a Master/Super Admin porque só eles atribuem o consultor responsável e só eles veem o
+  // seletor; a lista de usuários não precisa circular para o perfil comum.
+  @Get("consultores-esteira")
+  @Roles("MASTER", "SUPER_ADMIN")
+  consultoresEsteira() {
+    return this.catalogos.listConsultoresEsteira();
+  }
+
   @Get("cargos")
   cargos() {
     return this.catalogos.listCargos();

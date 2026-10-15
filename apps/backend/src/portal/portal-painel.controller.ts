@@ -19,7 +19,7 @@ import { PortalAcessoEmailService } from "./portal-acesso-email.service";
 import { PortalIdentidadeService } from "./portal-identidade.service";
 import { PortalPainelService } from "./portal-painel.service";
 import {
-  COLUNAS_RELATORIO_PORTAL,
+  colunasDoRelatorioPortal,
   montarLinhaRelatorioPortal,
   precisaResolverLink,
 } from "./portal-relatorio";
@@ -215,6 +215,9 @@ export class PortalPainelController {
     @Query("ultimoAcessoAte") ultimoAcessoAte?: string | string[],
     @Query("dataAdmissaoDe") dataAdmissaoDe?: string | string[],
     @Query("dataAdmissaoAte") dataAdmissaoAte?: string | string[],
+    // Onda 3.1: colunas escolhidas pelo usuário (CSV). Vazio = conjunto completo. As obrigatórias
+    // (Nome, Telefone, E-mail) e o link entram sempre, pela régua de `colunasDoRelatorioPortal`.
+    @Query("colunas") colunas?: string | string[],
   ): Promise<StreamableFile> {
     const linhas = await this.painel.todasAsLinhasParaRelatorio({
       aba: umSo(aba),
@@ -232,6 +235,9 @@ export class PortalPainelController {
       dataAdmissaoAte: umSo(dataAdmissaoAte),
     });
 
+    // Contato (telefone/e-mail) por admissão, só para as colunas obrigatórias do relatório.
+    const contatos = await this.painel.contatosPorAdmissao(linhas.map((l) => l.admissaoId));
+
     // LINK POR CANDIDATO: só para quem está VIVO, reaproveitando o link existente (não cunha nada).
     // Falha de emissão de uma linha não derruba o relatório: aquela célula fica sem link.
     const linhasXlsx: LinhaRelatorio[] = [];
@@ -247,12 +253,12 @@ export class PortalPainelController {
           // deixa a célula sem link; o consultor gera na tela pelo botão de copiar.
         }
       }
-      linhasXlsx.push(montarLinhaRelatorioPortal(l, url));
+      linhasXlsx.push(montarLinhaRelatorioPortal(l, url, contatos.get(l.admissaoId) ?? null));
     }
 
     const buffer = await gerarXlsxGenerico(
       "Gerenciador do Portal",
-      COLUNAS_RELATORIO_PORTAL,
+      colunasDoRelatorioPortal(parseMulti(umSo(colunas))),
       linhasXlsx,
     );
     const a = new Date();

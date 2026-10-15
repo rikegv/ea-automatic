@@ -161,6 +161,27 @@ const CATALOGO_VAZIO: CatalogoDeFiltrosDoPainelPortal = {
   origens: [],
 };
 
+/**
+ * Colunas do Excel do Gerenciador do Portal (Onda 3.1). Espelha `portal-relatorio.ts` do backend.
+ * `obrigatoria` = sempre presente (Nome, Telefone, E-mail e o Link de Acesso, que é o motivo desta
+ * exportação existir): ficam marcadas e travadas. As demais começam desmarcadas.
+ */
+const COLUNAS_EXPORT_PORTAL: { chave: string; rotulo: string; obrigatoria?: boolean }[] = [
+  { chave: "candidato", rotulo: "Nome Completo", obrigatoria: true },
+  { chave: "telefone", rotulo: "Telefone", obrigatoria: true },
+  { chave: "email", rotulo: "E-mail", obrigatoria: true },
+  { chave: "cargo", rotulo: "Cargo" },
+  { chave: "cliente", rotulo: "Cliente" },
+  { chave: "dataAdmissao", rotulo: "Data de Admissão" },
+  { chave: "documentoAtual", rotulo: "Documento Atual" },
+  { chave: "progresso", rotulo: "Aceitos / Obrigatórios" },
+  { chave: "noTime", rotulo: "No Time" },
+  { chave: "ultimoAcesso", rotulo: "Último Acesso" },
+  { chave: "estadoLink", rotulo: "Estado do Link" },
+  { chave: "origem", rotulo: "Origem do Envio" },
+  { chave: "link", rotulo: "Link de Acesso", obrigatoria: true },
+];
+
 /** O que a emissão devolve. A URL volta UMA vez e não é persistida em claro (§A.6). */
 export default function PortalLinksPage() {
   const { token } = useAuth();
@@ -175,6 +196,10 @@ export default function PortalLinksPage() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [exportando, setExportando] = useState(false);
+  // Onda 3.1: seletor de colunas do Excel. Começa vazio (tudo desmarcado); obrigatórias e o link
+  // entram sempre, no servidor. A lista espelha as colunas de `portal-relatorio.ts` do backend.
+  const [exportAberto, setExportAberto] = useState(false);
+  const [colunasSel, setColunasSel] = useState<Set<string>>(new Set());
 
   // ── Filtros, TODOS múltiplos (§A.28) ─────────────────────────────────────────────────────────
   const [busca, setBusca] = useState("");
@@ -247,16 +272,32 @@ export default function PortalLinksPage() {
     try {
       const q = queryDoPainel(filtros);
       const hoje = new Date().toISOString().slice(0, 10);
+      // Onda 3.1: manda as colunas OPCIONAIS marcadas. As obrigatórias e o link o servidor garante.
+      const colunasQs = colunasSel.size > 0 ? `&colunas=${[...colunasSel].join(",")}` : "";
       await apiDownload(
-        `${ROTA_CANDIDATOS}/relatorio?${q}`,
+        `${ROTA_CANDIDATOS}/relatorio?${q}${colunasQs}`,
         `gerenciador-portal-${hoje}.xlsx`,
         token,
       );
+      setExportAberto(false);
     } catch {
       // O browser já mostra a falha de rede; não deixa estado sujo.
     } finally {
       setExportando(false);
     }
+  }
+
+  const opcionaisPortal = COLUNAS_EXPORT_PORTAL.filter((c) => !c.obrigatoria);
+  const todasOpcionaisPortalMarcadas =
+    opcionaisPortal.length > 0 && opcionaisPortal.every((c) => colunasSel.has(c.chave));
+
+  function alternarColunaPortal(chave: string) {
+    setColunasSel((cur) => {
+      const prox = new Set(cur);
+      if (prox.has(chave)) prox.delete(chave);
+      else prox.add(chave);
+      return prox;
+    });
   }
 
   function limparFiltros() {
@@ -987,7 +1028,7 @@ export default function PortalLinksPage() {
               candidato para envio em massa por WhatsApp. O link é SEMPRE o vivo, nunca gerado à toa. */}
           <Button
             variant="secondary"
-            onClick={() => void exportarExcel()}
+            onClick={() => setExportAberto(true)}
             disabled={exportando}
             className="px-3 py-2"
             title="Exportar a lista atual em Excel, com o link de acesso vivo de cada candidato"
@@ -1871,6 +1912,70 @@ export default function PortalLinksPage() {
 
           §A.35: o seletor é o do design system, nunca o `<select>` cru. §A.41: o modal não fecha por
           clique fora, e tem "Cancelar" e a ação no rodapé. */}
+      {/* Seletor de colunas do Excel (Onda 3.1): desmarcadas por padrão, com "Marcar Todas".
+          Nome, Telefone, E-mail e o Link entram sempre (travados). */}
+      {exportAberto && (
+        <Modal
+          onClose={() => setExportAberto(false)}
+          className="max-w-md"
+          ariaLabel="Escolher as colunas do Excel"
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="text-[17px] font-extrabold">Exportar Excel</h3>
+              <p className="psub !mb-0 mt-1">
+                Escolha as colunas. Nome, telefone, e-mail e o link entram sempre.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="text-[13px] text-accent underline-offset-2 hover:underline"
+              onClick={() =>
+                setColunasSel(
+                  todasOpcionaisPortalMarcadas
+                    ? new Set()
+                    : new Set(opcionaisPortal.map((c) => c.chave)),
+                )
+              }
+            >
+              {todasOpcionaisPortalMarcadas ? "Desmarcar todas" : "Marcar todas"}
+            </button>
+          </div>
+
+          <div className="ea-scroll max-h-[46vh] overflow-auto rounded-xl border border-[var(--border)]">
+            {COLUNAS_EXPORT_PORTAL.map((c) => {
+              const marcada = c.obrigatoria || colunasSel.has(c.chave);
+              return (
+                <label
+                  key={c.chave}
+                  className="flex cursor-pointer items-center gap-3 border-b border-[var(--border)] px-3 py-2 last:border-b-0 hover:bg-[var(--surface-2)]"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                    checked={marcada}
+                    disabled={c.obrigatoria}
+                    onChange={() => alternarColunaPortal(c.chave)}
+                  />
+                  <span className="text-[13px]">{c.rotulo}</span>
+                  {c.obrigatoria && <span className="text-[11.5px] text-faint">sempre</span>}
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setExportAberto(false)} disabled={exportando}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void exportarExcel()} disabled={exportando}>
+              <ExcelLogo className="h-[18px] w-[18px]" />
+              {exportando ? "Exportando..." : "Exportar"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
       {travaAlvo && (
         <Modal
           onClose={() => {

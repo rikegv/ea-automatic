@@ -257,6 +257,10 @@ describe("CONDIÇÃO 3: o teto da página é do servidor", () => {
       "aba",
       "cargos",
       "clientes",
+      // `colunas` (Onda 3.1): QUAIS colunas o Excel leva. É seleção de COLUNA, não de linha — não
+      // escolhe uma admissão nem recorta o universo, só formata o que o recorte do servidor já
+      // decidiu mostrar. Entra em ordem alfabética (entre `clientes` e `dataAdmissaoAte`).
+      "colunas",
       "dataAdmissaoAte",
       "dataAdmissaoDe",
       "documentos",

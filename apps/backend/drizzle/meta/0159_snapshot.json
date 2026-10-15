@@ -1,6 +1,6 @@
 {
-  "id": "a60a8590-777e-4adc-a172-01626b6359de",
-  "prevId": "30ec61ad-fb2b-4870-a115-f742fd6b6d4d",
+  "id": "5ebbefc1-360b-4a47-a189-6d8957eab25d",
+  "prevId": "a60a8590-777e-4adc-a172-01626b6359de",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7018,6 +7018,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "consultor_responsavel_id": {
+          "name": "consultor_responsavel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "data_inicio": {
           "name": "data_inicio",
           "type": "timestamp with time zone",
@@ -7078,6 +7084,19 @@
             "id"
           ],
           "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "frentes_admissao_consultor_responsavel_id_usuarios_id_fk": {
+          "name": "frentes_admissao_consultor_responsavel_id_usuarios_id_fk",
+          "tableFrom": "frentes_admissao",
+          "tableTo": "usuarios",
+          "columnsFrom": [
+            "consultor_responsavel_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

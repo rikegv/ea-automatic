@@ -1386,7 +1386,15 @@ export const frentesAdmissao = pgTable(
     // status é varchar + catálogo (frente_status_catalogo) porque cada frente tem um
     // conjunto próprio de status (§A.3); a integridade vem do catálogo/aplicação.
     status: varchar("status", { length: 40 }).notNull(),
+    // responsavelId = AUTOR AUTOMÁTICO (quem mexeu no status por último); é lido pelo relatório
+    // agregado do Gerenciador. NÃO confundir com o consultor atribuído à mão (abaixo).
     responsavelId: uuid("responsavel_id").references(() => usuarios.id),
+    // consultorResponsavelId = CONSULTOR RESPONSÁVEL atribuído MANUALMENTE (só pelo Master), por
+    // frente de trabalho. A mesma admissão pode ter consultores diferentes em Auditoria/Exame/
+    // Cadastro (uma linha de frente por tipo). Nullable: sem atribuição = coluna vazia na tela.
+    consultorResponsavelId: uuid("consultor_responsavel_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
     dataInicio: timestamp("data_inicio", { withTimezone: true }),
     dataConclusao: timestamp("data_conclusao", { withTimezone: true }),
     concluida: boolean("concluida").notNull().default(false),

@@ -98,6 +98,7 @@ import { nascerCadastroEIntegracao } from "./nascimento-cadastro";
 import type { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import type { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
 import type { AgendamentoExameDto, AgendamentoExameLoteDto } from "./dto/agendamento-exame.dto";
+import type { AtribuirConsultorLoteDto } from "./dto/atribuir-consultor.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 
@@ -221,6 +222,57 @@ export class EsteiraService {
       );
     }
     return tipo;
+  }
+
+  // ── Consultor responsável por frente (Onda 2) ──────────────────────────────────────────────
+  // Atribuição MANUAL, restrita ao Master (o @Roles mora no controller). Vale só nas três abas de
+  // trabalho; integração e ifractal não têm consultor responsável.
+  private tipoComConsultor(frente: string): FrenteTipo {
+    const tipo = this.resolverTipo(frente);
+    if (tipo !== "AUDITORIA" && tipo !== "EXAME" && tipo !== "CADASTRO_CONTRATO") {
+      throw new BadRequestException(
+        "Consultor responsável só nas frentes Auditoria, Exame e Cadastro.",
+      );
+    }
+    return tipo;
+  }
+
+  // O consultor precisa existir e estar ativo. A lista do seletor já restringe por acesso à tela;
+  // esta checagem é o cinto no servidor contra um id forjado.
+  private async validarConsultor(consultorId: string | null): Promise<void> {
+    if (!consultorId) return;
+    const [u] = await this.db
+      .select({ id: usuarios.id, ativo: usuarios.ativo })
+      .from(usuarios)
+      .where(eq(usuarios.id, consultorId))
+      .limit(1);
+    if (!u || !u.ativo) {
+      throw new BadRequestException("Consultor inválido ou inativo.");
+    }
+  }
+
+  /** Atribui (ou desatribui, com `null`) o consultor responsável de UMA frente de uma admissão. */
+  async atribuirConsultor(frente: string, admissaoId: string, consultorId: string | null) {
+    const tipo = this.tipoComConsultor(frente);
+    const alvo = consultorId ?? null;
+    await this.validarConsultor(alvo);
+    await this.db
+      .update(frentesAdmissao)
+      .set({ consultorResponsavelId: alvo, atualizadoEm: new Date() })
+      .where(and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, tipo)));
+    return { ok: true };
+  }
+
+  /** Atribui o MESMO consultor a várias admissões de uma frente, de uma vez (ação em massa). */
+  async atribuirConsultorEmLote(dto: AtribuirConsultorLoteDto) {
+    const tipo = this.tipoComConsultor(dto.frente);
+    const alvo = dto.consultorId ?? null;
+    await this.validarConsultor(alvo);
+    await this.db
+      .update(frentesAdmissao)
+      .set({ consultorResponsavelId: alvo, atualizadoEm: new Date() })
+      .where(and(inArray(frentesAdmissao.admissaoId, dto.admissaoIds), eq(frentesAdmissao.tipo, tipo)));
+    return { ok: true, total: dto.admissaoIds.length };
   }
 
   /**
@@ -479,16 +531,31 @@ export class EsteiraService {
       itensWhere.push(or(...conds)!);
     }
 
+    // Alias de `usuarios` só para o nome do consultor responsável da frente (Onda 2). Alias próprio
+    // porque outras partes do service também juntam `usuarios` por outros motivos.
+    const consultorResp = aliasedTable(usuarios, "consultor_resp");
+
     const rows = await this.db
       .select({
         admissaoId: admissoes.id,
         frenteId: frentesAdmissao.id,
         candidatoNome: candidatos.nome,
+        // Contato do candidato para as colunas selecionáveis do Excel (Onda 3.1): Telefone e E-mail
+        // são obrigatórios em todo export; CPF é opcional. §A.6: trafegam só para a TELA/Excel de
+        // quem já tem acesso à admissão, não entram em log algum no caminho (mesmo tratamento da
+        // senha do iFractal, logo abaixo).
+        candidatoCpf: candidatos.cpf,
+        candidatoEmail: candidatos.email,
+        candidatoTelefone: candidatos.telefone,
         codCliente: admissoes.codCliente,
         clienteRazao: clientes.razaoSocial,
         clienteOperacao: clientes.nomeOperacao,
         cargoNome: cargos.nome,
         status: frentesAdmissao.status,
+        // CONSULTOR RESPONSÁVEL atribuído à mão por frente (Onda 2): id para o seletor do Master e
+        // nome para a coluna. LEFT JOIN porque a maioria não tem consultor atribuído.
+        consultorResponsavelId: frentesAdmissao.consultorResponsavelId,
+        consultorResponsavelNome: consultorResp.nome,
         concluida: frentesAdmissao.concluida,
         dataInicio: frentesAdmissao.dataInicio,
         dataConclusao: frentesAdmissao.dataConclusao,
@@ -550,6 +617,7 @@ export class EsteiraService {
       // LEFT e não INNER: a esmagadora maioria das admissões não tem loja, e um inner join aqui
       // sumiria com elas da fila. Loja é dimensão de leitura, não recorte de quem existe.
       .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
+      .leftJoin(consultorResp, eq(consultorResp.id, frentesAdmissao.consultorResponsavelId))
       .where(and(...itensWhere))
       .orderBy(asc(admissoes.criadoEm));
 
@@ -610,6 +678,13 @@ export class EsteiraService {
         admissaoId: r.admissaoId,
         frenteId: r.frenteId,
         candidatoNome: r.candidatoNome,
+        // Contato + consultor responsável (Ondas 2 e 3.1): vão no BASE para as colunas do Excel e a
+        // coluna Consultor valerem em todas as abas que as exibem.
+        candidatoCpf: r.candidatoCpf,
+        candidatoEmail: r.candidatoEmail,
+        candidatoTelefone: r.candidatoTelefone,
+        consultorResponsavelId: r.consultorResponsavelId,
+        consultorResponsavelNome: r.consultorResponsavelNome,
         codCliente: r.codCliente,
         clienteRazao: r.clienteRazao,
         clienteOperacao: r.clienteOperacao,
