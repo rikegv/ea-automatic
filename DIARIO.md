@@ -22110,3 +22110,47 @@ origin/main (rebase limpo sobre 555a7cb; sem colisão com as sessões paralelas 
 coordenadas §A.49). `publicar-producao.sh`: produção servindo 41e35a8, health 3011=200/3010=200,
 backup `*.bak-20261014-215807`. Sem migration. Artefato servido confere `documento-selo.js` no dist;
 30 docs em produção passam a exibir "Reprovado" (eram 31; 1 mudou de estado no intervalo, churn normal).
+
+## 2026-10-15 — Reenviar o link do Portal por e-mail devolve o MESMO link vivo (COMMIT 6960590)
+
+OST do diretor: no Gerenciador, reenviar o link por e-mail para quem JÁ acessou ainda mostrava o
+pop-up "o candidato já tem o link e não pode reenviar" (`LINK_VIVO_EM_USO`), e dentro de 3 min
+`ENVIADO_HA_POUCO`. O RH perdia candidato. Correção: reenviar por e-mail passa a devolver SEMPRE o
+MESMO link vivo (preferindo o que o candidato já abriu), quantas vezes precisar; sem encerrar o
+acesso, sem gerar link novo, sem estender prazo. Fecha o resíduo "o envio por e-mail ficou de fora"
+da frente de copiar (f16c9f5).
+
+RECORTE BACKEND-ONLY (1 serviço + 1 serviço de envio + fakes/specs). `portal-identidade.service.ts`:
+`emitirLinkParaEnvio` agora chama `emitirComTrava(..., recusarSeJaAcessado=false, null, janela=true,
+devolverExistenteSeVivo=true)`, a MESMA lógica que o copiar já usa; o ramo devolve o link vivo
+re-cunhando o token Ed25519 do MESMO `jti` e MESMA janela (zero escrita, zero trilha, não revoga,
+não estende `expira_em`). Sem link vivo, emite o primeiro. O contrato `EmissaoParaEnvio.emitido`
+ganhou `reutilizado`: `portal-envio.service.ts` lê esse bit para, na FALHA do correio, revogar
+APENAS o link recém-nascido e órfão (`ENVIO_FALHOU`) e PRESERVAR o reutilizado (que o candidato pode
+estar usando). A trava S15 (não derrubar sessão de upload) segue inteira por outro mecanismo:
+devolver o mesmo link não reemite, logo não há sessão a derrubar.
+
+Gate: typecheck 0, lint 0, suíte portal 1527 verde (specs do caminho do e-mail reescritos para o
+novo contrato; spec novo `portal-reenvio-mesmo-link.tester.spec.ts` para o desfecho da falha). Suíte
+inteira do backend: 9741 verdes, 1 falha PRÉ-EXISTENTE em `as/vagas/vagas.liberar-vaga-completa.spec.ts`
+(lista de escritores da tabela `vagas`, fora do meu recorte portal) = 0 regressão minha.
+`seguranca` §A.38 = APROVADO (adversarial, 7 pontos: sem vazamento §A.6, reutilizado não revoga/não
+estende prazo, gate `!reutilizado` correto em todos os returns de `emitirComTrava`, concorrência sob
+advisory lock, TRAVA 1/auth/RBAC intactos, lote sem risco novo). `tester` independente: sem gap alto;
+3 gaps (2 médios + 1 baixo) FECHADOS pelo autor (reenviar 2x ponta a ponta no serviço de envio;
+preferir o JÁ ACESSADO entre vários vivos; prazo preservado no caminho do e-mail).
+
+§A.49: origin/main avançou de a77163f para c61f723 (frente GI do peer b3) durante a sessão; rebaseei
+limpo (recorte disjunto, só portal). Deploy `publicar-producao.sh` do origin/main pristino: produção
+servindo 6960590, health 3011=200/3010=200, backup `*.bak-20261015-011235`. Artefato servido confere
+(`emitirLinkParaEnvio` chama `...false, null, true, true` no dist; `reutilizado` no envio).
+
+§A.13 prod (read-only + 1 operação autorizada pela OST, sem PII): reenviei o link da **Brenda Belo**
+(adm `75406b6b`, link vivo JÁ ACESSADO `3f8338ca`) 2x pela rota viva
+(`POST api/esteira/portal/envio/admissao/:id`, token HS256 bounded 300s do SUPER_ADMIN 83f009a8).
+As duas: `status 201, enviado:true, motivo:null` (SEM pop-up), mesmo `expiraEm 2026-10-17 17:12` (prazo
+NÃO estendido). DEPOIS: único link vivo segue `3f8338ca` (mesmo jti, não revogado, acesso intocado);
+10 linhas totais / 1 vivo = IDÊNTICO ao antes (ZERO link novo, ZERO revogação). Só `enviado_em` e
+`envio_origem`→MANUAL mudaram (o carimbo do envio). População que o pop-up travava = as admissões com
+link vivo+acessado. Resíduo: o tooltip do botão no frontend ("o anterior deixa de valer") segue
+defasado (`page.tsx`, território da outra sessão do 081e9db), fora do meu recorte backend.
