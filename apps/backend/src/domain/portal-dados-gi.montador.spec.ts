@@ -66,7 +66,8 @@ describe("montarFuncionarioSelecao: formatos e telefone", () => {
 
   it("endereco: logradouro vai inteiro em enderecoResid (tipo concatenado por construcao)", () => {
     const f = montarFuncionarioSelecao({ logradouro: "Rua das Flores", numero: "100", uf: "SP" });
-    expect(f.enderecoResid).toBe("Rua das Flores");
+    // Endereco (campo de LUGAR) vai ao G.I em CAIXA ALTA (padrao do diretor, 15/10/2026).
+    expect(f.enderecoResid).toBe("RUA DAS FLORES");
     expect(f.nroEndereco).toBe(100);
     expect(f.ufResid).toBe("SP");
   });
@@ -81,7 +82,8 @@ describe("montarFuncionarioSelecao: de/para de codigo (nunca inventa)", () => {
 
   it("sem de/para: nome preenchido, codigo nulo", () => {
     const f = montarFuncionarioSelecao({ cidade: "Sao Paulo", uf: "SP", banco: "NUBANK" });
-    expect(f.cidadeResid).toBe("Sao Paulo");
+    // Cidade (campo de LUGAR) sobe em CAIXA ALTA; o CODIGO segue nulo sem de/para.
+    expect(f.cidadeResid).toBe("SAO PAULO");
     expect(f.codigoCidadeResid).toBeNull();
   });
 
@@ -203,7 +205,8 @@ describe("montarPessoaParaGi: junta candidatos + admissao_dados_gi, so dado de p
     expect(f.sexo).toBe("F");
     expect(f.rg).toBe("123");
     expect(f.pis).toBe("999");
-    expect(f.cidadeResid).toBe("Sao Paulo");
+    // Cidade (campo de LUGAR) sobe em CAIXA ALTA no payload do G.I.
+    expect(f.cidadeResid).toBe("SAO PAULO");
   });
 });
 
@@ -1518,9 +1521,11 @@ describe("as TRES cidades da pessoa: cada uma do SEU documento, e nenhuma trocad
 
   it("cada cidade sai no SEU campo do GI, sem troca entre RG, CTPS e nascimento", () => {
     const f = montarFuncionarioSelecao(PESSOA);
-    expect(f.cidadeNascimento).toBe("Recife");
-    expect(f.cidadeRG).toBe("Campinas");
-    expect(f.cidadeExpedicao).toBe("Santos");
+    // As tres cidades (campos de LUGAR) sobem em CAIXA ALTA; o que importa aqui e cada uma
+    // sair no SEU campo, sem troca, e isso a caixa nao altera.
+    expect(f.cidadeNascimento).toBe("RECIFE");
+    expect(f.cidadeRG).toBe("CAMPINAS");
+    expect(f.cidadeExpedicao).toBe("SANTOS");
     // E as UFs seguem nos campos delas: `naturalidade` é a UF de NASCIMENTO (maxLength 2), não a cidade.
     expect(f.naturalidade).toBe("PE");
     expect(f.ufrg).toBe("SP");
@@ -1549,8 +1554,9 @@ describe("as TRES cidades da pessoa: cada uma do SEU documento, e nenhuma trocad
     const f = montarFuncionarioSelecao({ cidadeNascimento: LONGO, rgCidade: LONGO, ctpsCidade: LONGO });
     for (const v of [f.cidadeNascimento, f.cidadeRG, f.cidadeExpedicao]) {
       expect(v).not.toBeNull();
+      // O truncamento em 30 nao muda com a caixa: corta no mesmo ponto, so sobe para CAIXA ALTA.
       expect(v).toHaveLength(30);
-      expect(v).toBe(LONGO.slice(0, 30));
+      expect(v).toBe(LONGO.slice(0, 30).toUpperCase());
     }
   });
 
@@ -1622,7 +1628,8 @@ describe("codMunicipioNascto: DOIS de/para SEPARADOS, um por espaco de codigo", 
 
   it("cidade de nascimento sem a UF nao resolve codigo (nao se chuta o municipio)", () => {
     const f = montarFuncionarioSelecao({ cidadeNascimento: "Recife" }, DEPARA);
-    expect(f.cidadeNascimento).toBe("Recife");
+    // Cidade (campo de LUGAR) sobe em CAIXA ALTA; sem a UF o CODIGO segue nulo (nao se chuta).
+    expect(f.cidadeNascimento).toBe("RECIFE");
     expect(f.codMunicipioNascto).toBeNull();
   });
 

@@ -1431,11 +1431,31 @@ function documentoNumerico(v: string | null): string | null {
  * número, então ele cai aqui.
  */
 function separarTelefone(telefone: unknown): { ddd: string | null; numero: string | null } {
-  const digitos = (typeof telefone === "string" ? telefone : "")
+  let digitos = (typeof telefone === "string" ? telefone : "")
     .replace(/\D/g, "")
     .replace(/^0+/, "");
+  // ⚠️ NORMALIZAÇÃO BR (decisão do diretor, 15/10/2026): o número significativo é DDD(2) + 8 (fixo) ou 9
+  // (celular) = 10 ou 11 dígitos. Telefone com CÓDIGO DO PAÍS (`55`) ou prefixo a mais fazia o `numero`
+  // (`smsNroCel`) sair com 11 dígitos, e a coluna do G.I só aceita 9: o POST volta "Out of range value
+  // for column 'SMSNroCel'" e a admissão NÃO entra. Mede-se o trecho significativo ao FINAL do número.
+  if (digitos.length > 11 && digitos.startsWith("55")) {
+    const semPais = digitos.slice(2);
+    if (semPais.length === 10 || semPais.length === 11) digitos = semPais;
+  }
+  // Ainda acima de 11 (prefixo desconhecido/lixo): fica com os ÚLTIMOS 11 dígitos, o trecho BR válido.
+  if (digitos.length > 11) digitos = digitos.slice(-11);
   if (digitos.length < 10) return { ddd: null, numero: digitos.length > 0 ? digitos : null };
   return { ddd: inteiroGi(digitos.slice(0, 2)), numero: digitos.slice(2) };
+}
+
+/**
+ * MAIÚSCULA (padrão do diretor, 15/10/2026): todo campo de NOME e de LUGAR vai ao G.I em CAIXA ALTA,
+ * mesmo que a plataforma tenha gravado em minúsculas. É padrão da casa para a folha. `null`/vazio
+ * passam intactos (não inventa texto). `toUpperCase` do JS já trata acento (ã->Ã, ç->Ç, é->É). Aplica-se
+ * SÓ a nome/lugar; código, documento, data, e-mail e número NÃO sobem por aqui.
+ */
+function maiuscula(s: string | null): string | null {
+  return typeof s === "string" ? s.toUpperCase() : s;
 }
 
 /**
@@ -1478,7 +1498,7 @@ export function montarFuncionarioSelecao(
   const o = opcoes ?? OPCOES_DE_ENVIO_GI_PADRAO;
   const { ddd, numero } = separarTelefone(p.telefone);
   return {
-    nome: cortarTexto(limpo(p.nome), 60),
+    nome: cortarTexto(maiuscula(limpo(p.nome)), 60),
     // DOCUMENTO: todos os dígitos, com o zero à esquerda. Ver `documentoNumerico`.
     cpf: documentoNumerico(limpo(p.cpf)),
     dataNascimento: limpo(p.nascimento),
@@ -1496,7 +1516,7 @@ export function montarFuncionarioSelecao(
     // nada de antes desta frente, calado, depois de toda a coleta ter sido construída para trazê-la.
     // Cidade é TEXTO: truncar perde o final do nome, anular perde a cidade. `codigoCurto` existe para
     // campo de CÓDIGO (`naturalidade`, `sexo`, `raca`), onde cortar INVENTARIA outro valor.
-    cidadeNascimento: cortarTexto(limpo(p.cidadeNascimento), 30),
+    cidadeNascimento: cortarTexto(maiuscula(limpo(p.cidadeNascimento)), 30),
     // O CÓDIGO IBGE do município de nascimento, pelo de/para **IBGE** (`GI_DEPARA_MUNICIPIOS_IBGE`), com
     // a UF vinda da `naturalidade` (que é a UF, não a cidade). De/para vazio: NULO, nunca inventado.
     //
@@ -1506,20 +1526,20 @@ export function montarFuncionarioSelecao(
     // Um mapa só servindo os dois faz o nascimento sair certo e a RESIDÊNCIA sair no espaço errado, em
     // silêncio, na folha de um terceiro.
     codMunicipioNascto: inteiroGi(depara.codigoMunicipioIbge(p.cidadeNascimento, p.naturalidade)),
-    filiacaoNomeMae: cortarTexto(limpo(p.nomeMae), 70),
-    filiacaoNomePai: cortarTexto(limpo(p.nomePai), 70),
+    filiacaoNomeMae: cortarTexto(maiuscula(limpo(p.nomeMae)), 70),
+    filiacaoNomePai: cortarTexto(maiuscula(limpo(p.nomePai)), 70),
     estadoCivil: codigoCurto(limpo(p.estadoCivil), 1),
     raca: codigoCurto(limpo(p.raca), 1),
     grauInstrucao: codigoCurto(limpo(p.grauInstrucao), 1),
     rg: cortarTexto(limpo(p.rg), 20),
-    orgaoRG: cortarTexto(limpo(p.rgOrgao), 15),
-    cidadeRG: cortarTexto(limpo(p.rgCidade), 30),
+    orgaoRG: cortarTexto(maiuscula(limpo(p.rgOrgao)), 15),
+    cidadeRG: cortarTexto(maiuscula(limpo(p.rgCidade)), 30),
     ufrg: codigoCurto(limpo(p.rgUf), 2),
     dtExpedicaoRG: limpo(p.rgDataEmissao),
     carteiraTrabalho: cortarTexto(limpo(p.ctpsNumero), 10),
     serie: cortarTexto(limpo(p.ctpsSerie), 7),
     ufExpedicao: codigoCurto(limpo(p.ctpsUf), 2),
-    cidadeExpedicao: cortarTexto(limpo(p.ctpsCidade), 30),
+    cidadeExpedicao: cortarTexto(maiuscula(limpo(p.ctpsCidade)), 30),
     dtExpedicaoCTPS: limpo(p.ctpsData),
     // DOCUMENTO, igual ao CPF: preserva o zero à esquerda (não é campo de contagem).
     pis: documentoNumerico(limpo(p.pis)),
@@ -1532,11 +1552,11 @@ export function montarFuncionarioSelecao(
     cnhDataEmissao: limpo(p.cnhDataEmissao),
     dataVectoHabilitacao: limpo(p.cnhDataValidade),
     cepResid: cortarTexto(limpo(p.cep), 9),
-    enderecoResid: cortarTexto(limpo(p.logradouro), 70),
+    enderecoResid: cortarTexto(maiuscula(limpo(p.logradouro)), 70),
     nroEndereco: numeroDoEndereco(p.numero),
-    cplEndereco: cortarTexto(limpo(p.complemento), 30),
-    bairroResid: cortarTexto(limpo(p.bairro), 60),
-    cidadeResid: cortarTexto(limpo(p.cidade), 60),
+    cplEndereco: cortarTexto(maiuscula(limpo(p.complemento)), 30),
+    bairroResid: cortarTexto(maiuscula(limpo(p.bairro)), 60),
+    cidadeResid: cortarTexto(maiuscula(limpo(p.cidade)), 60),
     ufResid: codigoCurto(limpo(p.uf), 2),
     // A cidade de RESIDÊNCIA, pelo catálogo do GI (`GI_DEPARA_CIDADES`), que é OUTRO espaço de código e
     // segue VAZIO até ser observável. Nunca o de/para IBGE: ver o aviso em `codMunicipioNascto`.

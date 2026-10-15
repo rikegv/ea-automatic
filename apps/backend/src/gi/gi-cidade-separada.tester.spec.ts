@@ -147,8 +147,10 @@ describe("A SEPARACAO: o mapa IBGE enche o NASCIMENTO e NAO enche a RESIDENCIA",
 
   it("a cidade por TEXTO continua saindo nos dois campos: a separacao e do CODIGO, nao do nome", () => {
     const f = payloadCom({ [ENV_IBGE]: IBGE_JSON });
-    expect(f.cidadeNascimento).toBe("Campinas");
-    expect(f.cidadeResid).toBe("Campinas");
+    // Cidade (campo de LUGAR) sobe em CAIXA ALTA; a separacao provada aqui e a do CODIGO, nao do nome,
+    // entao o nome continua saindo nos DOIS campos, so em caixa alta.
+    expect(f.cidadeNascimento).toBe("CAMPINAS");
+    expect(f.cidadeResid).toBe("CAMPINAS");
     expect(f.ufResid).toBe("SP");
   });
 });

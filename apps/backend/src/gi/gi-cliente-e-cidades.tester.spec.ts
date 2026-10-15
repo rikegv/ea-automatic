@@ -267,6 +267,9 @@ describe("as TRES cidades TRUNCAM em 30 e NUNCA ficam nulas: o caso e Vila Bela 
    */
   const CIDADE_LONGA = "Vila Bela da Santíssima Trindade";
   const TRINTA = "Vila Bela da Santíssima Trinda";
+  // A cidade (campo de LUGAR) sobe ao G.I em CAIXA ALTA (padrao do diretor, 15/10/2026). O TRUNCAMENTO
+  // em 30 nao muda com a caixa: corta no mesmo ponto, so sobe para maiuscula. O payload traz TRINTA_GI.
+  const TRINTA_GI = TRINTA.toUpperCase();
 
   it("a fixture e o caso real: 32 caracteres, 2 acima do maxLength do GI", () => {
     // Guarda da própria fixture: um nome com menos de 31 caracteres faria todo este describe passar
@@ -290,16 +293,16 @@ describe("as TRES cidades TRUNCAM em 30 e NUNCA ficam nulas: o caso e Vila Bela 
     ] as const) {
       expect(valor, `${campo} veio NULO: passou por codigoCurto em vez de cortarTexto`).not.toBeNull();
       expect(valor, `${campo} nao foi truncado em 30: o GI derruba o envio inteiro com 400`).toHaveLength(30);
-      expect(valor, `${campo} truncado no lugar errado`).toBe(TRINTA);
+      expect(valor, `${campo} truncado no lugar errado`).toBe(TRINTA_GI);
     }
   });
 
   it("CADA UMA das tres sozinha: o helper errado em UMA delas nao se esconde atras das outras duas", () => {
     // Medir as três juntas deixaria passar o caso em que só uma usa o helper errado, porque a asserção
     // agregada ainda falharia "por alguma". Uma a uma, a falha NOMEIA o campo.
-    expect(payloadDe(contratacao(), { ...PESSOA, cidadeNascimento: CIDADE_LONGA }).cidadeNascimento).toBe(TRINTA);
-    expect(payloadDe(contratacao(), { ...PESSOA, rgCidade: CIDADE_LONGA }).cidadeRG).toBe(TRINTA);
-    expect(payloadDe(contratacao(), { ...PESSOA, ctpsCidade: CIDADE_LONGA }).cidadeExpedicao).toBe(TRINTA);
+    expect(payloadDe(contratacao(), { ...PESSOA, cidadeNascimento: CIDADE_LONGA }).cidadeNascimento).toBe(TRINTA_GI);
+    expect(payloadDe(contratacao(), { ...PESSOA, rgCidade: CIDADE_LONGA }).cidadeRG).toBe(TRINTA_GI);
+    expect(payloadDe(contratacao(), { ...PESSOA, ctpsCidade: CIDADE_LONGA }).cidadeExpedicao).toBe(TRINTA_GI);
   });
 
   it("cidade que JA CABE atravessa inteira, sem corte e sem nulo", () => {
@@ -309,9 +312,10 @@ describe("as TRES cidades TRUNCAM em 30 e NUNCA ficam nulas: o caso e Vila Bela 
       rgCidade: "Cuiabá",
       ctpsCidade: "Várzea Grande",
     });
-    expect(f.cidadeNascimento).toBe("Sao Paulo");
-    expect(f.cidadeRG).toBe("Cuiabá");
-    expect(f.cidadeExpedicao).toBe("Várzea Grande");
+    // Cabe inteira (sem corte, sem nulo), e sobe em CAIXA ALTA (campo de LUGAR).
+    expect(f.cidadeNascimento).toBe("SAO PAULO");
+    expect(f.cidadeRG).toBe("CUIABÁ");
+    expect(f.cidadeExpedicao).toBe("VÁRZEA GRANDE");
   });
 
   it("cidade de EXATAMENTE 30 atravessa inteira (a fronteira, nao o meio da faixa)", () => {
@@ -346,7 +350,7 @@ describe("as TRES cidades TRUNCAM em 30 e NUNCA ficam nulas: o caso e Vila Bela 
       cidadeNascimento: CIDADE_LONGA,
       naturalidade: "MT",
     });
-    expect(f.cidadeNascimento).toBe(TRINTA);
+    expect(f.cidadeNascimento).toBe(TRINTA_GI);
     expect(f.naturalidade).toBe("MT");
     // E a UF por extenso NÃO é cortada em 2: seria inventar outro código.
     expect(payloadDe(contratacao(), { ...PESSOA, naturalidade: "Mato Grosso" }).naturalidade).toBeNull();
@@ -382,7 +386,8 @@ describe("codMunicipioNascto: CODIGO pelo de/para, nulo quando nao resolve, nunc
       DE_PARA_MT,
     );
     expect(f.codMunicipioNascto).toBe("5105150");
-    expect(f.cidadeNascimento).toBe("Vila Bela da Santíssima Trinda");
+    // O CODIGO (IBGE) e o NOME sao campos diferentes; o nome sai truncado (30) e em CAIXA ALTA, nao vira o codigo.
+    expect(f.cidadeNascimento).toBe("VILA BELA DA SANTÍSSIMA TRINDA");
   });
 
   it("DE/PARA VAZIO (o estado de hoje): o codigo sai NULO, nunca 0 nem chutado", () => {
