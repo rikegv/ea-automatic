@@ -22897,3 +22897,53 @@ prop desconhecida ainda **400**. Sem preview pesado de frontend (OOM, por instru
 **REVERSÃO DE REGRA GRAVADA:** a regra de [[frente-liberar-edicao-cliente-vaga]] fica REVERTIDA para o cliente: SUPER_ADMIN pode trocar o cliente de vaga liberada mesmo com gente encaminhada. NÃO voltar a travar o `codCliente` para o SUPER_ADMIN.
 
 **ABERTO:** (1) prova na vaga REAL do SouTalente que estava com cliente errado, ação do Rike como SUPERADMIN na tela (= validação visual §A.13; a fábrica não tem sessão de superadmin e não muta dado real do cliente por conta própria); (2) decisão do Rike sobre estender o mesmo gate à rota `corrigir-revisao` (ressalva do `seguranca`).
+---
+
+## 2026-10-16 — Portal porta de e-mail: TETO ganha mensagem própria (deixa de mentir "e-mail não identificado") + teto 3→5/hora
+
+**Pedido (Rike, aprovado e urgente).** Caso real: candidato com e-mail NO cadastro recebia "E-mail
+não identificado. Confira o e-mail digitado ou fale com o RH" no Portal público, com o e-mail certo.
+
+**Causa (investigada, medida, NÃO deduzida).** A hipótese do pedido (maiúscula/espaço no casamento do
+e-mail) era FALSA: a porta (`PortalAcessoEmailService.solicitar` → `AdmissoesService.candidatosDeFunilPorEmailDaFichaDeAdmissao`)
+já comparava `lower(trim(candidatos.email)) = lower(trim(digitado))` nos dois lados, e a resolução do
+caso real devolvia 1 candidato (sem ambiguidade, sem trava). O candidato inclusive emitiu e CONFIRMOU
+código 9 vezes. A causa REAL: `solicitar` devolve `identificado:false` em QUATRO situações
+(e-mail não resolveu, TETO de códigos estourado, ambíguo, trava anterior) e a tela colapsava TODAS em
+"E-mail não identificado". `portal_eventos` (4 dias): **346 recusas por `ACESSO_EMAIL_TETO`** (a maior
+causa de recusa), contra 44 `EMAIL_NAO_RESOLVEU` de verdade. Com o teto em 3/hora, candidato legítimo
+que erra/reemite batia o teto e via a mensagem errada.
+
+**Correção (backend + front, aditiva).**
+- `SolicitacaoDeCodigoResposta` (shared-types) ganhou `limiteAtingido: boolean` (booleano puro, sem
+  PII). `solicitar` o marca TRUE nos dois ramos do teto (balde da hora + contagem durável hora/dia),
+  ambos ANTES da resolução de identidade, então a flag sobe IDÊNTICA para e-mail que existe e que não
+  existe: **não vira oráculo de enumeração**. Nenhuma recusa não-teto marca a flag.
+- Tela (`AcessoPorEmail.tsx`): no teto, mensagem própria "Você pediu muitos códigos em pouco tempo.
+  Aguarde alguns minutos e tente novamente, ou fale com o RH." + botão Fale com o RH, sem abrir o
+  campo do código. "E-mail não identificado" fica só para e-mail que realmente não resolve.
+- **Teto por hora 3→5** (`SOLICITACOES_POR_HORA`, `domain/portal-acesso-email.ts`); diário segue 10.
+  Sem conflito (5 < 10). Cada emissão invalida o código anterior (um código vivo por vez), então subir
+  a rajada da hora não cria janela de múltiplos códigos: a força-bruta segue limitada pelo diário 10 ×
+  `CODIGO_TENTATIVAS_LIMITE` 5, inalterados.
+- **ALTERA a decisão validada de 14/10** (contrato `identificado` + mensagem): registrado aqui por
+  decisão do Rike. Testes de contrato (§A.38) atualizados: a interface agora aceita `limiteAtingido`,
+  e um teste novo trava por POSIÇÃO que as duas marcações de teto ficam antes da resolução (anti-oráculo
+  por código). Teste de tela novo prova teto→"muitos códigos" (não "não identificado") + RH + sem campo
+  de código.
+
+**Gate.** backend typecheck ✓, frontend typecheck ✓, `shared-types build` ✓, specs de acesso-email
+backend ✓ (136) e o teste novo de tela ✓. `seguranca` (auditoria adversarial independente): **APROVADO**
+(anti-oráculo intacto — as duas marcações antes da resolução; TRAVA 1 intacta — sem import de
+`candidatos`/`candidato_cpf`, zero CPF do corpo; sem novo log de PII; teto 3→5 não enfraquece
+força-bruta). Falha pré-existente e ALHEIA no gate do front (`AcessoPorEmail.spec.tsx` espera
+"Confirme Seus Dados" mas o componente diz "Criar Cadastro", divergência de cópia de outra frente,
+presente no origin/main antes desta frente): NÃO corrigida (§A.14/§A.26), só registrada.
+
+**Prova na tela (§A.13, navegador real, porta isolada mockando as 3 respostas):** teto → "Você pediu
+muitos códigos..."; e-mail inexistente → "E-mail não identificado"; e-mail válido no limite → avança
+para o campo do código. Screenshots enviados ao diretor.
+
+**§A.49:** worktree pristino `ea-portal-email` off origin/main; peers (henrique-6a, henrique-77)
+liberaram; zero toque em `src/gi/*`. Deploy: backend+front pelo `publicar-producao.sh` + rebuild
+manual do `portal-app` (a página do Portal público está fora do script). Commit: 4b3598d.
