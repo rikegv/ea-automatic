@@ -180,6 +180,7 @@ function candidatura(over: Partial<AsCandidaturaItem> = {}): AsCandidaturaItem {
 function montar(selecionadas: AsCandidaturaItem[]) {
   const onFeito = vi.fn();
   const onLimpar = vi.fn();
+  const onMovidasParaEntrevista = vi.fn();
   render(
     <AcoesEmMassaDaVaga
       vaga={VAGA}
@@ -187,9 +188,10 @@ function montar(selecionadas: AsCandidaturaItem[]) {
       token="t"
       onLimpar={onLimpar}
       onFeito={onFeito}
+      onMovidasParaEntrevista={onMovidasParaEntrevista}
     />,
   );
-  return { onFeito, onLimpar };
+  return { onFeito, onLimpar, onMovidasParaEntrevista };
 }
 
 afterEach(() => {
@@ -455,6 +457,75 @@ describe("agendar entrevista em massa (ITEM 4)", () => {
     expect(typeof agendadaEm).toBe("string");
     expect(agendadaEm.length).toBeGreaterThan(0);
     expect(token).toBe("t");
+  });
+});
+
+/**
+ * ─ MOVEU VÁRIOS PARA UMA ETAPA DE ENTREVISTA: segura a seleção e oferece o agendamento (OST) ──────
+ *
+ * A régua mora no JSX: ao confirmar o "Mover no funil", se o destino aceita entrevista e MAIS DE UM
+ * de fato se moveu, a barra avisa o pai por `onMovidasParaEntrevista` (que NÃO limpa a seleção) em vez
+ * do `onFeito` (que limpa). É esse desvio que deixa "Agendar entrevista em massa" aparecer na hora,
+ * sobre a mesma seleção, sem marcar tudo de novo. Quem segura a seleção de fato é o pai (`VagaPainelModal`);
+ * aqui se afirma só que o gatilho sai no momento certo, com os ids MOVIDOS e a etapa de destino.
+ */
+describe("moveu vários para entrevista", () => {
+  async function moverPara(rotuloDestino: string, barraNome: RegExp) {
+    fireEvent.click(screen.getByRole("button", { name: barraNome }));
+    fireEvent.click(screen.getByRole("button", { name: /etapa de destino/i }));
+    fireEvent.click(screen.getByText(rotuloDestino));
+    fireEvent.click(screen.getAllByRole("button", { name: "Mover no funil" }).at(-1) as HTMLElement);
+  }
+
+  it("avisa o pai com os ids e a etapa, SEM cair no onFeito, quando o destino é entrevista e há mais de um", async () => {
+    const { onFeito, onMovidasParaEntrevista } = montar([
+      candidatura({ id: "cand-1", etapa: "TRIAGEM" }),
+      candidatura({ id: "cand-2", candidatoNome: "Beltrana De Tal", etapa: "TRIAGEM" }),
+    ]);
+    await moverPara("Entrevista Soulan", /mover no funil \(2\)/i);
+
+    await waitFor(() => expect(onMovidasParaEntrevista).toHaveBeenCalledTimes(1));
+    const [idsMovidas, etapa] = onMovidasParaEntrevista.mock.calls[0] as unknown as [string[], string];
+    expect([...idsMovidas].sort()).toEqual(["cand-1", "cand-2"]);
+    expect(etapa).toBe("ENTREVISTA_SOULAN");
+    expect(onFeito).not.toHaveBeenCalled();
+  });
+
+  it("deixa só quem DE FATO se moveu, tirando os que falharam, e ainda assim avisa se sobrou mais de um", async () => {
+    moverEtapaEmLote.mockResolvedValueOnce({
+      aplicadas: 2,
+      falhas: [{ alvoId: "cand-2", motivo: "Esta candidatura já está em Entrevista Soulan." }],
+    } as never);
+    const { onFeito, onMovidasParaEntrevista } = montar([
+      candidatura({ id: "cand-1", etapa: "TRIAGEM" }),
+      candidatura({ id: "cand-2", candidatoNome: "Beltrana De Tal", etapa: "TRIAGEM" }),
+      candidatura({ id: "cand-3", candidatoNome: "Cicrano De Tal", etapa: "TRIAGEM" }),
+    ]);
+    await moverPara("Entrevista Soulan", /mover no funil \(3\)/i);
+
+    await waitFor(() => expect(onMovidasParaEntrevista).toHaveBeenCalledTimes(1));
+    const [idsMovidas] = onMovidasParaEntrevista.mock.calls[0] as unknown as [string[], string];
+    expect([...idsMovidas].sort()).toEqual(["cand-1", "cand-3"]);
+    expect(onFeito).not.toHaveBeenCalled();
+  });
+
+  it("cai no onFeito de sempre quando o destino NÃO é etapa de entrevista", async () => {
+    const { onFeito, onMovidasParaEntrevista } = montar([
+      candidatura({ id: "cand-1", etapa: "CAPTACAO" }),
+      candidatura({ id: "cand-2", candidatoNome: "Beltrana De Tal", etapa: "CAPTACAO" }),
+    ]);
+    await moverPara("Triagem", /mover no funil \(2\)/i);
+
+    await waitFor(() => expect(onFeito).toHaveBeenCalledTimes(1));
+    expect(onMovidasParaEntrevista).not.toHaveBeenCalled();
+  });
+
+  it("cai no onFeito de sempre quando só UM se moveu (em massa não se aplica a um)", async () => {
+    const { onFeito, onMovidasParaEntrevista } = montar([candidatura({ id: "cand-1", etapa: "TRIAGEM" })]);
+    await moverPara("Entrevista Soulan", /mover no funil \(1\)/i);
+
+    await waitFor(() => expect(onFeito).toHaveBeenCalledTimes(1));
+    expect(onMovidasParaEntrevista).not.toHaveBeenCalled();
   });
 });
 

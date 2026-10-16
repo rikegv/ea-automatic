@@ -83,6 +83,21 @@ vi.mock("@/lib/as-etapas", async () => {
   };
 });
 
+/**
+ * O CATÁLOGO DE ETAPAS COM ENTREVISTA, por um holder MUTÁVEL, e começa VAZIO de propósito. Vazio é o
+ * estado dos testes que não falam de entrevista (o "Mover no funil" deles cai no `onFeito` de sempre,
+ * que limpa a seleção, exatamente como antes). O teste do "moveu para entrevista" liga o catálogo só
+ * para ele, provando que ali a seleção fica e o "Agendar entrevista" aparece. `afterEach` zera de volta.
+ */
+const { entrevistaCatalogo } = vi.hoisted(() => ({ entrevistaCatalogo: { codigos: [] as string[] } }));
+vi.mock("@/lib/as-entrevistas", async () => {
+  const real = await vi.importActual<typeof import("@/lib/as-entrevistas")>("@/lib/as-entrevistas");
+  return {
+    ...real,
+    useEtapasComEntrevista: () => ({ codigos: entrevistaCatalogo.codigos, carregando: false, erro: null }),
+  };
+});
+
 vi.mock("@/lib/as-status-vaga", async () => {
   const real = await vi.importActual<typeof import("@/lib/as-status-vaga")>("@/lib/as-status-vaga");
   return {
@@ -234,6 +249,7 @@ async function montar(abaInicial: "candidatos" | "alocados" = "candidatos") {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  entrevistaCatalogo.codigos = [];
 });
 
 // ── OS OLHOS DO TESTE ─────────────────────────────────────────────────────────
@@ -525,6 +541,46 @@ describe("a ação em massa recebe a seleção acumulada, inclusive quem saiu do
 
     // Depois da ação, a seleção acumulada é zerada (aposAcao -> limparSelecao).
     await waitFor(() => expect(contadorDaBarra()).toBe(0));
+  });
+
+  /**
+   * ─ A PROVA DA OST: moveu VÁRIOS para Entrevista Soulan, a seleção FICA e o Agendar aparece ───────
+   *
+   * Com o catálogo de entrevista LIGADO, mover dois selecionados para uma etapa de entrevista NÃO
+   * limpa a seleção (ao contrário do caso acima): o contador continua em 2 e o "Agendar entrevista
+   * (2)" aparece na mesma barra, sobre a mesma seleção, sem soltar nem reselecionar. É o fluxo de um
+   * passo que a OST pede, no lugar dos dois (mover, soltar, marcar de novo).
+   */
+  it("moveu DOIS para Entrevista Soulan: a seleção FICA e o Agendar entrevista aparece na hora (OST)", async () => {
+    entrevistaCatalogo.codigos = ["ENTREVISTA_SOULAN", "ENTREVISTA_CLIENTE"];
+    moverEtapaEmLote.mockResolvedValue({ aplicadas: 2, falhas: [] });
+    await montar();
+
+    // Dois vivos fora de etapa de entrevista: Cláudia (CAPTACAO) e Ana Paula (TRIAGEM).
+    marcar("Cláudia Nogueira");
+    marcar("Ana Paula Ribeiro");
+    expect(contadorDaBarra()).toBe(2);
+    // Antes de mover, o Agendar entrevista NÃO existe (ninguém da seleção está em etapa de entrevista).
+    expect(botaoDaBarra(/^Agendar entrevista/)).toBeUndefined();
+
+    const botaoMover = botaoDaBarra(/^Mover no funil \(2\)$/)!;
+    fireEvent.click(botaoMover);
+    const gatilhoEtapa = gatilhoDoFiltro(/etapa de destino/i, "ETAPA DE DESTINO");
+    fireEvent.click(gatilhoEtapa);
+    const opcao = within(screen.getByRole("listbox"))
+      .getAllByRole("option")
+      .find((el) => (el.textContent ?? "").trim() === "Entrevista Soulan")!;
+    fireEvent.click(opcao);
+    const confirmar = screen
+      .getAllByRole("button")
+      .find((b) => (b.textContent ?? "").trim() === "Mover no funil")!;
+    fireEvent.click(confirmar);
+
+    await waitFor(() => expect(moverEtapaEmLote).toHaveBeenCalledTimes(1));
+    // A SELEÇÃO NÃO FOI LIMPA: continua 2, sem reselecionar.
+    await waitFor(() => expect(contadorDaBarra()).toBe(2));
+    // E O AGENDAR ENTREVISTA EM MASSA aparece na hora, sobre a mesma seleção.
+    expect(botaoDaBarra(/^Agendar entrevista \(2\)$/)).toBeTruthy();
   });
 });
 

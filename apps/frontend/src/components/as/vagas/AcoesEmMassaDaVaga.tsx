@@ -125,6 +125,7 @@ export function AcoesEmMassaDaVaga({
   token,
   onLimpar,
   onFeito,
+  onMovidasParaEntrevista,
 }: {
   vaga: VagaListItem;
   /** Em qual aba a barra está: decide se "Finalizar posição" faz sentido no modo "todos do filtro". */
@@ -148,6 +149,17 @@ export function AcoesEmMassaDaVaga({
   onLimpar: () => void;
   /** Relê a lista da vaga, avisa a Central de Vagas e limpa a seleção. */
   onFeito: () => void;
+  /**
+   * ─ MOVEU VÁRIOS PARA UMA ETAPA DE ENTREVISTA: segura a seleção e oferece o agendamento ──────────
+   *
+   * Sem isto, mover em massa cai no `onFeito`, que LIMPA a seleção (é o desenho dele): para agendar a
+   * entrevista de quem acabou de mover, o consultor tinha de marcar tudo de novo e só então o botão
+   * "Agendar entrevista" aparecia. Quando o destino do "Mover no funil" é uma etapa de entrevista e
+   * há MAIS DE UM na seleção que de fato se moveu, a barra avisa o pai por AQUI, com os ids movidos e
+   * a etapa de destino, para o pai MANTER a seleção e já oferecer o agendamento sobre ela, sem
+   * reselecionar. Ausente, o comportamento é o de sempre (cai no `onFeito`).
+   */
+  onMovidasParaEntrevista?: (idsMovidas: string[], etapaDestino: CandidaturaEtapa) => void;
 }) {
   const [acao, setAcao] = useState<Acao | null>(null);
   const [processando, setProcessando] = useState(false);
@@ -202,7 +214,13 @@ export function AcoesEmMassaDaVaga({
    * a seleção, então montar o mapa depois da resposta encontraria uma seleção já vazia e a lista de
    * falhas sairia inteira como "não informado". §A.6: o nome vem da memória da tela, nunca de busca.
    */
-  async function executar(titulo: string, chamada: () => Promise<AsResultadoEmMassa>) {
+  async function executar(
+    titulo: string,
+    chamada: () => Promise<AsResultadoEmMassa>,
+    // O QUE FAZER AO FIM, quando NÃO é o `onFeito` padrão (que limpa a seleção). Só o "Mover no
+    // funil" usa isto, para segurar a seleção quando o destino é entrevista; as demais ações omitem.
+    aoConcluir?: (dados: AsResultadoEmMassa) => void,
+  ) {
     const nomes = new Map(selecionadas.map((c) => [c.id, c.candidatoNome]));
     setErro(null);
     setProcessando(true);
@@ -210,7 +228,8 @@ export function AcoesEmMassaDaVaga({
       const dados = await chamada();
       setAcao(null);
       setResultado({ titulo, dados, nomes });
-      onFeito();
+      if (aoConcluir) aoConcluir(dados);
+      else onFeito();
     } catch (err) {
       // A RECUSA DO LOTE INTEIRO (vaga encerrada, teto estourado) não é resultado, é erro: ela não
       // tem `aplicadas` nem `falhas`, e mostrá-la na caixa de resultado desenharia zero aplicadas
@@ -399,7 +418,29 @@ export function AcoesEmMassaDaVaga({
           bloqueado={acimaDoTeto}
           onCancelar={() => setAcao(null)}
           onConfirmar={(etapa) =>
-            void executar("Mover Etapa Em Massa", () => moverEtapaEmLote(ids, etapa, token))
+            void executar(
+              "Mover Etapa Em Massa",
+              () => moverEtapaEmLote(ids, etapa, token),
+              (dados) => {
+                // MOVEU VÁRIOS PARA UMA ETAPA DE ENTREVISTA: em vez de limpar a seleção (o que
+                // obrigava a marcar tudo de novo para agendar), segura-a e deixa o "Agendar
+                // entrevista" disponível na hora, sobre quem DE FATO se moveu. Fora deste caso, é o
+                // `onFeito` de sempre. "De fato": tira os que falharam (voltam em `falhas`), e exige
+                // MAIS DE UM movido, porque "em massa" com um só não faz sentido (OST).
+                const idsMovidas = ids.filter(
+                  (id) => !dados.falhas.some((f) => f.alvoId === id),
+                );
+                if (
+                  onMovidasParaEntrevista &&
+                  idsMovidas.length > 1 &&
+                  etapaAceitaEntrevista(etapa, codigosComEntrevista)
+                ) {
+                  onMovidasParaEntrevista(idsMovidas, etapa);
+                } else {
+                  onFeito();
+                }
+              },
+            )
           }
         />
       )}

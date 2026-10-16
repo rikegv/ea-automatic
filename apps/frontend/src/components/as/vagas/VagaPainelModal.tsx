@@ -48,6 +48,7 @@ import {
   type AsCandidaturaItem,
   type AsEtapaFunil,
   type AsOcupacaoVaga,
+  type CandidaturaEtapa,
   type CandidaturaSituacao,
   type VagaListItem,
 } from "@ea/shared-types";
@@ -586,6 +587,28 @@ function ListaDeCandidaturasDaVaga({
     onMudou();
   }
 
+  /**
+   * ─ MOVEU VÁRIOS PARA UMA ETAPA DE ENTREVISTA (OST da Central das Vagas) ─────────────────────────
+   *
+   * Como `aposAcao`, relê o fundo e avisa a Central, MAS NÃO limpa a seleção: é o que deixa "Agendar
+   * entrevista em massa" aparecer na hora, sobre quem acabou de ser movido, sem marcar tudo de novo.
+   * A memória da seleção carrega o OBJETO de cada marcada (ITEM 5), e é da etapa guardada nesse objeto
+   * que o botão de agendar decide; então, para os que de fato se moveram, essa etapa passa a ser a de
+   * destino. O Set de ids do hook NÃO se toca: a seleção continua inteira, e os dois seguem juntos.
+   */
+  function aposMoverParaEntrevista(idsMovidas: string[], etapaDestino: CandidaturaEtapa) {
+    setMarcadas((atual) => {
+      const proximo = new Map(atual);
+      for (const id of idsMovidas) {
+        const obj = proximo.get(id);
+        if (obj) proximo.set(id, { ...obj, etapa: etapaDestino });
+      }
+      return proximo;
+    });
+    pag.setFiltro({});
+    onMudou();
+  }
+
   // O RECORTE, VINDO DA BARRA, VIRA FILTRO SERVER-SIDE. A SELEÇÃO MANUAL PERSISTE entre recortes
   // (ITEM 5): marcar, limpar a busca e marcar de novo acumula. Só o modo "todos do filtro" cai aqui,
   // porque ele é do recorte que acabou de mudar; o acúmulo um a um não é.
@@ -693,6 +716,7 @@ function ListaDeCandidaturasDaVaga({
         token={token}
         onLimpar={limparSelecao}
         onFeito={aposAcao}
+        onMovidasParaEntrevista={aposMoverParaEntrevista}
       />
 
       {/* A BARRA DO RECORTE: buscar, filtrar, e só então agir. */}
