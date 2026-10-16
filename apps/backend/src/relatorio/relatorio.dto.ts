@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsNumber,
   IsOptional,
   IsString,
@@ -22,6 +23,19 @@ export class ColunaXlsxDto {
   @IsOptional()
   @IsNumber()
   largura?: number;
+
+  /**
+   * Marca de coluna OBRIGATÓRIA (Onda 3.1: Nome, Telefone, E-mail entram sempre). O frontend monta
+   * as colunas com este campo (`ColunaExport`) e manda o objeto INTEIRO neste corpo; o backend só
+   * usa `chave`/`rotulo`/`largura` para formatar, mas PRECISA aceitar `obrigatoria` aqui: o
+   * `ValidationPipe` global roda com `forbidNonWhitelisted: true` (`main.ts`) e, sem este campo
+   * declarado, rejeitava o payload com 400 ("property obrigatoria should not exist"), derrubando a
+   * exportação das abas da Esteira (Auditoria/Exame/Cadastro/Integração, que marcam essas três
+   * colunas). O IFractal não marcava nenhuma coluna como obrigatória, por isso seguia funcionando.
+   */
+  @IsOptional()
+  @IsBoolean()
+  obrigatoria?: boolean;
 }
 
 /**
