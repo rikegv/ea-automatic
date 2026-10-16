@@ -70,3 +70,16 @@ export class DefinirMembrosDto {
   @IsString({ each: true })
   codClientes!: string[];
 }
+
+/**
+ * META DE UM CARGO NO GRUPO (ajuste 5). `meta` nulo (ou ausente) REMOVE a meta daquele cargo, que é
+ * o "sem meta" dele; valor presente tem de ser inteiro >= 1, a MESMA régua do total do grupo (grupo
+ * com meta zero não é meta, é alvo nenhum). `@IsOptional` deixa o nulo passar para o caminho de
+ * remoção; o número, quando vem, é validado.
+ */
+export class DefinirMetaCargoDto {
+  @IsOptional()
+  @IsInt({ message: "A meta precisa ser um número inteiro." })
+  @Min(1, { message: "A meta precisa ser de pelo menos 1." })
+  meta?: number | null;
+}

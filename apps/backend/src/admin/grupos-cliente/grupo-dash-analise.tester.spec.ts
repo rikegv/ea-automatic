@@ -45,18 +45,25 @@ function montar(opts: { grupo?: Row | null; counts?: Row } = {}) {
   const wheres: unknown[] = [];
   const linha = opts.counts ?? {};
 
-  const chain: Record<string, unknown> = {};
-  chain.from = () => chain;
-  // A consulta por cargo acrescenta leftJoin/groupBy/orderBy à mesma cadeia; o fake só precisa
-  // devolver a cadeia para elas (a resolução canned continua em `then`).
-  chain.leftJoin = () => chain;
-  chain.groupBy = () => chain;
-  chain.orderBy = () => chain;
-  chain.where = (c: unknown) => {
-    wheres.push(c);
+  // Cada select cria sua própria cadeia, porque agora são TRÊS consultas (totais, por cargo e a META
+  // POR CARGO do ajuste 5), e a META POR CARGO resolve VAZIO aqui: estes testes exercem o legado (meta
+  // única do grupo), então nenhuma meta por cargo, e a `then` dela devolve []. As demais devolvem a
+  // linha de contagem do cenário. A META POR CARGO se reconhece pela coluna `meta` sem `naEsteira`.
+  const mkChain = (cols: Record<string, unknown>) => {
+    const ehMetasCargo = "meta" in cols && !("naEsteira" in cols);
+    const chain: Record<string, unknown> = {};
+    chain.from = () => chain;
+    chain.leftJoin = () => chain;
+    chain.innerJoin = () => chain;
+    chain.groupBy = () => chain;
+    chain.orderBy = () => chain;
+    chain.where = (c: unknown) => {
+      wheres.push(c);
+      return chain;
+    };
+    chain.then = (resolve: (v: unknown) => unknown) => resolve(ehMetasCargo ? [] : [linha]);
     return chain;
   };
-  chain.then = (resolve: (v: unknown) => unknown) => resolve([linha]);
 
   const db = {
     query: {
@@ -66,7 +73,7 @@ function montar(opts: { grupo?: Row | null; counts?: Row } = {}) {
     },
     select: vi.fn((cols: Record<string, unknown>) => {
       colunas.push(cols);
-      return chain;
+      return mkChain(cols);
     }),
   };
 

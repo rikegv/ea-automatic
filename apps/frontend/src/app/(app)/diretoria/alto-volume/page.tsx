@@ -133,11 +133,15 @@ interface AnaliseGrupo {
   porCargo: {
     cargoId: string | null;
     cargoNome: string;
+    /** Meta de vagas do cargo neste grupo (ajuste 5); null quando o cargo não tem meta cadastrada. */
+    vagas: number | null;
     naEsteira: number;
     concluidas: number;
     emAndamento: number;
     pausadas: number;
     declinios: number;
+    /** `vagas - naEsteira`, null quando o cargo não tem meta. */
+    faltam: number | null;
   }[];
 }
 
@@ -227,16 +231,17 @@ function totalCargoDoProjeto(dados: Analise): TotalCargoTabela {
   };
 }
 function linhasCargoDoGrupo(a: AnaliseGrupo): LinhaCargoTabela[] {
-  // O grupo NÃO tem meta por cargo: Vagas e Faltam por linha ficam nulos ("não informado"), e a meta
-  // aparece só no Total, que é do grupo inteiro.
+  // AJUSTE 5: o grupo pode ter meta POR CARGO. Quando o cargo tem meta, Vagas e Faltam vêm por
+  // linha; quando não tem, ficam nulos ("não informado"). O Total do grupo é a soma das metas por
+  // cargo (ou o total único do legado), calculado no backend.
   return a.porCargo.map((l) => ({
     cargoId: l.cargoId,
     cargoNome: l.cargoNome,
-    vagas: null,
+    vagas: l.vagas,
     naEsteira: l.naEsteira,
     concluidas: l.concluidas,
     emAndamento: l.emAndamento,
-    faltam: null,
+    faltam: l.faltam,
     pausadas: l.pausadas,
     declinios: l.declinios,
   }));
@@ -1608,8 +1613,8 @@ export default function AltoVolumeAnalisePage() {
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 pb-2 pt-1">
                       <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">Por Cargo</h3>
                       <span className="text-sm text-dim">
-                        {a.grupo.nome}. Vagas e Faltam não existem por cargo no grupo: a meta é do grupo
-                        inteiro e aparece só no Total.
+                        {a.grupo.nome}. Vagas e Faltam por cargo vêm da meta cadastrada no grupo; cargo
+                        sem meta fica como não informado.
                       </span>
                     </div>
                     <TabelaPorCargo linhas={linhasCargoDoGrupo(a)} total={totalCargoDoGrupo(a)} />

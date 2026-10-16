@@ -1,1126 +1,1133 @@
 {
-  "version": "7",
-  "dialect": "postgresql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1782328717503,
-      "tag": "0000_overconfident_lightspeed",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1782435481587,
-      "tag": "0001_icy_hawkeye",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1782440889185,
-      "tag": "0002_lame_owl",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1782472770929,
-      "tag": "0003_massive_shatterstar",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1782506348698,
-      "tag": "0004_whole_union_jack",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1782506474947,
-      "tag": "0005_lively_kingpin",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1782507014989,
-      "tag": "0006_lowly_sabretooth",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1782510552213,
-      "tag": "0007_loving_warstar",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1782608594261,
-      "tag": "0008_icy_skaar",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1782750802075,
-      "tag": "0009_cultured_molten_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1782766765228,
-      "tag": "0010_blushing_silhouette",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "7",
-      "when": 1782824076727,
-      "tag": "0011_tricky_marvex",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "7",
-      "when": 1782833212519,
-      "tag": "0012_bent_rawhide_kid",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "7",
-      "when": 1782915191993,
-      "tag": "0013_jazzy_shadow_king",
-      "breakpoints": true
-    },
-    {
-      "idx": 14,
-      "version": "7",
-      "when": 1782924618242,
-      "tag": "0014_bent_vampiro",
-      "breakpoints": true
-    },
-    {
-      "idx": 15,
-      "version": "7",
-      "when": 1783456928271,
-      "tag": "0015_living_nextwave",
-      "breakpoints": true
-    },
-    {
-      "idx": 16,
-      "version": "7",
-      "when": 1783479322411,
-      "tag": "0016_abnormal_tony_stark",
-      "breakpoints": true
-    },
-    {
-      "idx": 17,
-      "version": "7",
-      "when": 1783527797202,
-      "tag": "0017_greedy_sunset_bain",
-      "breakpoints": true
-    },
-    {
-      "idx": 18,
-      "version": "7",
-      "when": 1783561302028,
-      "tag": "0018_lowly_freak",
-      "breakpoints": true
-    },
-    {
-      "idx": 19,
-      "version": "7",
-      "when": 1783690331736,
-      "tag": "0019_petite_beast",
-      "breakpoints": true
-    },
-    {
-      "idx": 20,
-      "version": "7",
-      "when": 1783693496004,
-      "tag": "0020_simple_eternity",
-      "breakpoints": true
-    },
-    {
-      "idx": 21,
-      "version": "7",
-      "when": 1783695767815,
-      "tag": "0021_flat_harry_osborn",
-      "breakpoints": true
-    },
-    {
-      "idx": 22,
-      "version": "7",
-      "when": 1784057671698,
-      "tag": "0022_worthless_shiva",
-      "breakpoints": true
-    },
-    {
-      "idx": 23,
-      "version": "7",
-      "when": 1784083296006,
-      "tag": "0023_clean_albert_cleary",
-      "breakpoints": true
-    },
-    {
-      "idx": 24,
-      "version": "7",
-      "when": 1784120746995,
-      "tag": "0024_aspiring_gressill",
-      "breakpoints": true
-    },
-    {
-      "idx": 25,
-      "version": "7",
-      "when": 1784143430280,
-      "tag": "0025_ambitious_thundra",
-      "breakpoints": true
-    },
-    {
-      "idx": 26,
-      "version": "7",
-      "when": 1784205000000,
-      "tag": "0026_reorganiza_status_cadastro",
-      "breakpoints": true
-    },
-    {
-      "idx": 27,
-      "version": "7",
-      "when": 1784227970418,
-      "tag": "0027_add_valor_previsao_aso_exame",
-      "breakpoints": true
-    },
-    {
-      "idx": 28,
-      "version": "7",
-      "when": 1784309748298,
-      "tag": "0028_liberacao_admissional",
-      "breakpoints": true
-    },
-    {
-      "idx": 29,
-      "version": "7",
-      "when": 1784317530675,
-      "tag": "0029_dedup_pandape",
-      "breakpoints": true
-    },
-    {
-      "idx": 30,
-      "version": "7",
-      "when": 1784328643077,
-      "tag": "0030_liberacao_recusada",
-      "breakpoints": true
-    },
-    {
-      "idx": 31,
-      "version": "7",
-      "when": 1784681381537,
-      "tag": "0031_third_shooting_star",
-      "breakpoints": true
-    },
-    {
-      "idx": 32,
-      "version": "7",
-      "when": 1784717727450,
-      "tag": "0032_needy_gressill",
-      "breakpoints": true
-    },
-    {
-      "idx": 33,
-      "version": "7",
-      "when": 1784719035319,
-      "tag": "0033_omniscient_boomerang",
-      "breakpoints": true
-    },
-    {
-      "idx": 34,
-      "version": "7",
-      "when": 1784728202264,
-      "tag": "0034_naive_boom_boom",
-      "breakpoints": true
-    },
-    {
-      "idx": 35,
-      "version": "7",
-      "when": 1784770650395,
-      "tag": "0035_purple_rachel_grey",
-      "breakpoints": true
-    },
-    {
-      "idx": 36,
-      "version": "7",
-      "when": 1784828377632,
-      "tag": "0036_menus_permissao",
-      "breakpoints": true
-    },
-    {
-      "idx": 37,
-      "version": "7",
-      "when": 1784855128645,
-      "tag": "0037_tricky_amphibian",
-      "breakpoints": true
-    },
-    {
-      "idx": 38,
-      "version": "7",
-      "when": 1784927166500,
-      "tag": "0038_vt_coleta_gcs",
-      "breakpoints": true
-    },
-    {
-      "idx": 39,
-      "version": "7",
-      "when": 1784927400111,
-      "tag": "0039_premium_wild_pack",
-      "breakpoints": true
-    },
-    {
-      "idx": 40,
-      "version": "7",
-      "when": 1785155157963,
-      "tag": "0040_wet_captain_stacy",
-      "breakpoints": true
-    },
-    {
-      "idx": 41,
-      "version": "7",
-      "when": 1785166165274,
-      "tag": "0041_luxuriant_fantastic_four",
-      "breakpoints": true
-    },
-    {
-      "idx": 42,
-      "version": "7",
-      "when": 1785178420997,
-      "tag": "0042_small_lenny_balinger",
-      "breakpoints": true
-    },
-    {
-      "idx": 43,
-      "version": "7",
-      "when": 1785239675992,
-      "tag": "0043_watery_lucky_pierre",
-      "breakpoints": true
-    },
-    {
-      "idx": 44,
-      "version": "7",
-      "when": 1785246230874,
-      "tag": "0044_bent_shocker",
-      "breakpoints": true
-    },
-    {
-      "idx": 45,
-      "version": "7",
-      "when": 1785252450793,
-      "tag": "0045_round_magik",
-      "breakpoints": true
-    },
-    {
-      "idx": 46,
-      "version": "7",
-      "when": 1785266217907,
-      "tag": "0046_wild_james_howlett",
-      "breakpoints": true
-    },
-    {
-      "idx": 47,
-      "version": "7",
-      "when": 1785320305851,
-      "tag": "0047_luxuriant_the_spike",
-      "breakpoints": true
-    },
-    {
-      "idx": 48,
-      "version": "7",
-      "when": 1785342564192,
-      "tag": "0048_windy_goblin_queen",
-      "breakpoints": true
-    },
-    {
-      "idx": 49,
-      "version": "7",
-      "when": 1785346019636,
-      "tag": "0049_thankful_betty_brant",
-      "breakpoints": true
-    },
-    {
-      "idx": 50,
-      "version": "7",
-      "when": 1785350306970,
-      "tag": "0050_secret_mimic",
-      "breakpoints": true
-    },
-    {
-      "idx": 51,
-      "version": "7",
-      "when": 1785353105863,
-      "tag": "0051_steep_energizer",
-      "breakpoints": true
-    },
-    {
-      "idx": 52,
-      "version": "7",
-      "when": 1785354922632,
-      "tag": "0052_woozy_apocalypse",
-      "breakpoints": true
-    },
-    {
-      "idx": 53,
-      "version": "7",
-      "when": 1785376029199,
-      "tag": "0053_light_bill_hollister",
-      "breakpoints": true
-    },
-    {
-      "idx": 54,
-      "version": "7",
-      "when": 1785377962946,
-      "tag": "0054_dusty_talon",
-      "breakpoints": true
-    },
-    {
-      "idx": 55,
-      "version": "7",
-      "when": 1785412647905,
-      "tag": "0055_bored_the_renegades",
-      "breakpoints": true
-    },
-    {
-      "idx": 56,
-      "version": "7",
-      "when": 1785416833159,
-      "tag": "0056_real_sinister_six",
-      "breakpoints": true
-    },
-    {
-      "idx": 57,
-      "version": "7",
-      "when": 1785427383722,
-      "tag": "0057_clear_smiling_tiger",
-      "breakpoints": true
-    },
-    {
-      "idx": 58,
-      "version": "7",
-      "when": 1785528334395,
-      "tag": "0058_exotic_overlord",
-      "breakpoints": true
-    },
-    {
-      "idx": 59,
-      "version": "7",
-      "when": 1785877909987,
-      "tag": "0059_aromatic_grandmaster",
-      "breakpoints": true
-    },
-    {
-      "idx": 60,
-      "version": "7",
-      "when": 1785943488566,
-      "tag": "0060_glossy_tombstone",
-      "breakpoints": true
-    },
-    {
-      "idx": 61,
-      "version": "7",
-      "when": 1785978455413,
-      "tag": "0061_powerful_prodigy",
-      "breakpoints": true
-    },
-    {
-      "idx": 62,
-      "version": "7",
-      "when": 1785981368885,
-      "tag": "0062_smiling_retro_girl",
-      "breakpoints": true
-    },
-    {
-      "idx": 63,
-      "version": "7",
-      "when": 1786366802227,
-      "tag": "0063_bouncy_silver_centurion",
-      "breakpoints": true
-    },
-    {
-      "idx": 64,
-      "version": "7",
-      "when": 1786497300747,
-      "tag": "0064_goofy_magus",
-      "breakpoints": true
-    },
-    {
-      "idx": 65,
-      "version": "7",
-      "when": 1786546158316,
-      "tag": "0065_flowery_tomorrow_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 66,
-      "version": "7",
-      "when": 1786571316685,
-      "tag": "0066_status_beneficio_valores",
-      "breakpoints": true
-    },
-    {
-      "idx": 67,
-      "version": "7",
-      "when": 1786571337728,
-      "tag": "0067_status_beneficio_migra_linhas",
-      "breakpoints": true
-    },
-    {
-      "idx": 68,
-      "version": "7",
-      "when": 1786571337729,
-      "tag": "0068_beneficio_dois_estagios",
-      "breakpoints": true
-    },
-    {
-      "idx": 69,
-      "version": "7",
-      "when": 1786665416412,
-      "tag": "0069_camada_pagamento_beneficio",
-      "breakpoints": true
-    },
-    {
-      "idx": 70,
-      "version": "7",
-      "when": 1786717530710,
-      "tag": "0070_regras_beneficio_cliente",
-      "breakpoints": true
-    },
-    {
-      "idx": 71,
-      "version": "7",
-      "when": 1786993328775,
-      "tag": "0071_dados_bancarios_digitados",
-      "breakpoints": true
-    },
-    {
-      "idx": 72,
-      "version": "7",
-      "when": 1786993637223,
-      "tag": "0072_divergencia_bancaria",
-      "breakpoints": true
-    },
-    {
-      "idx": 73,
-      "version": "7",
-      "when": 1787067519767,
-      "tag": "0073_segmentacao_area_usuario",
-      "breakpoints": true
-    },
-    {
-      "idx": 74,
-      "version": "7",
-      "when": 1787082281775,
-      "tag": "0074_area_do_menu_na_tabela",
-      "breakpoints": true
-    },
-    {
-      "idx": 75,
-      "version": "7",
-      "when": 1787261725289,
-      "tag": "0075_url_do_vt_no_drive",
-      "breakpoints": true
-    },
-    {
-      "idx": 76,
-      "version": "7",
-      "when": 1787316124706,
-      "tag": "0076_vt_multiversao",
-      "breakpoints": true
-    },
-    {
-      "idx": 77,
-      "version": "7",
-      "when": 1787316183358,
-      "tag": "0077_solicitacoes_vt",
-      "breakpoints": true
-    },
-    {
-      "idx": 78,
-      "version": "7",
-      "when": 1787317323299,
-      "tag": "0078_url_por_versao_do_vt",
-      "breakpoints": true
-    },
-    {
-      "idx": 79,
-      "version": "7",
-      "when": 1787321658926,
-      "tag": "0079_dispensar_sinal_vt_orfao",
-      "breakpoints": true
-    },
-    {
-      "idx": 80,
-      "version": "7",
-      "when": 1787321659926,
-      "tag": "0080_carimbo_da_notificacao_clicksign",
-      "breakpoints": true
-    },
-    {
-      "idx": 81,
-      "version": "7",
-      "when": 1787321660926,
-      "tag": "0081_panorama_de_assinatura_no_ea",
-      "breakpoints": true
-    },
-    {
-      "idx": 82,
-      "version": "7",
-      "when": 1787321660927,
-      "tag": "0082_as_central_de_vagas",
-      "breakpoints": true
-    },
-    {
-      "idx": 83,
-      "version": "7",
-      "when": 1787321661927,
-      "tag": "0083_as_central_de_candidatos",
-      "breakpoints": true
-    },
-    {
-      "idx": 84,
-      "version": "7",
-      "when": 1787321662927,
-      "tag": "0084_as_ultimo_contato_na_candidatura",
-      "breakpoints": true
-    },
-    {
-      "idx": 85,
-      "version": "7",
-      "when": 1787321663927,
-      "tag": "0085_as_reentrada_em_vaga_encerrada",
-      "breakpoints": true
-    },
-    {
-      "idx": 86,
-      "version": "7",
-      "when": 1787321660928,
-      "tag": "0086_frente_ifractal",
-      "breakpoints": true
-    },
-    {
-      "idx": 87,
-      "version": "7",
-      "when": 1787500000000,
-      "tag": "0087_exame_liberado_sem_aso",
-      "breakpoints": true
-    },
-    {
-      "idx": 88,
-      "version": "7",
-      "when": 1787931350975,
-      "tag": "0088_as_historico_de_etapas",
-      "breakpoints": true
-    },
-    {
-      "idx": 89,
-      "version": "7",
-      "when": 1787945891611,
-      "tag": "0089_as_troca_de_vaga_no_historico",
-      "breakpoints": true
-    },
-    {
-      "idx": 90,
-      "version": "7",
-      "when": 1788032291611,
-      "tag": "0090_lojas_unidades",
-      "breakpoints": true
-    },
-    {
-      "idx": 91,
-      "version": "7",
-      "when": 1788035891611,
-      "tag": "0091_admissao_loja",
-      "breakpoints": true
-    },
-    {
-      "idx": 92,
-      "version": "7",
-      "when": 1788039491611,
-      "tag": "0092_meta_por_loja",
-      "breakpoints": true
-    },
-    {
-      "idx": 93,
-      "version": "7",
-      "when": 1788043091611,
-      "tag": "0093_grupo_cliente",
-      "breakpoints": true
-    },
-    {
-      "idx": 94,
-      "version": "7",
-      "when": 1788046691611,
-      "tag": "0094_as_vaga_listas",
-      "breakpoints": true
-    },
-    {
-      "idx": 95,
-      "version": "7",
-      "when": 1788050291611,
-      "tag": "0095_as_situacao_alocado",
-      "breakpoints": true
-    },
-    {
-      "idx": 96,
-      "version": "7",
-      "when": 1788053891611,
-      "tag": "0096_as_candidatura_posicao_lado",
-      "breakpoints": true
-    },
-    {
-      "idx": 97,
-      "version": "7",
-      "when": 1788057491611,
-      "tag": "0097_as_log_do_aceite_no_historico",
-      "breakpoints": true
-    },
-    {
-      "idx": 98,
-      "version": "7",
-      "when": 1788061091611,
-      "tag": "0098_as_trilha_do_fechamento_forcado",
-      "breakpoints": true
-    },
-    {
-      "idx": 99,
-      "version": "7",
-      "when": 1788064691611,
-      "tag": "0099_as_rastro_da_reducao_de_meta",
-      "breakpoints": true
-    },
-    {
-      "idx": 100,
-      "version": "7",
-      "when": 1788068291611,
-      "tag": "0100_as_etapas_funil",
-      "breakpoints": true
-    },
-    {
-      "idx": 101,
-      "version": "7",
-      "when": 1788071891611,
-      "tag": "0101_as_cancelamento_de_vaga",
-      "breakpoints": true
-    },
-    {
-      "idx": 102,
-      "version": "7",
-      "when": 1788075491611,
-      "tag": "0102_as_status_da_vaga",
-      "breakpoints": true
-    },
-    {
-      "idx": 103,
-      "version": "7",
-      "when": 1788079091611,
-      "tag": "0103_as_encerramento_da_vaga",
-      "breakpoints": true
-    },
-    {
-      "idx": 104,
-      "version": "7",
-      "when": 1788082691611,
-      "tag": "0104_as_reabertura_de_vaga",
-      "breakpoints": true
-    },
-    {
-      "idx": 105,
-      "version": "7",
-      "when": 1788086291611,
-      "tag": "0105_as_aceite_da_reabertura_sem_origem",
-      "breakpoints": true
-    },
-    {
-      "idx": 106,
-      "version": "7",
-      "when": 1788089891611,
-      "tag": "0106_as_linha_de_servico_cidade_idioma",
-      "breakpoints": true
-    },
-    {
-      "idx": 107,
-      "version": "7",
-      "when": 1788093491611,
-      "tag": "0107_as_segmento_e_comercial",
-      "breakpoints": true
-    },
-    {
-      "idx": 108,
-      "version": "7",
-      "when": 1788097091611,
-      "tag": "0108_fila_entradas_pandape",
-      "breakpoints": true
-    },
-    {
-      "idx": 109,
-      "version": "7",
-      "when": 1788100691611,
-      "tag": "0109_as_identidades_externas",
-      "breakpoints": true
-    },
-    {
-      "idx": 110,
-      "version": "7",
-      "when": 1788104291611,
-      "tag": "0110_as_depara_etapa_externa",
-      "breakpoints": true
-    },
-    {
-      "idx": 111,
-      "version": "7",
-      "when": 1788107891611,
-      "tag": "0111_as_depara_motivo_e_stand_by",
-      "breakpoints": true
-    },
-    {
-      "idx": 112,
-      "version": "7",
-      "when": 1788111491611,
-      "tag": "0112_as_retencao_campo_proprio",
-      "breakpoints": true
-    },
-    {
-      "idx": 113,
-      "version": "7",
-      "when": 1788115091611,
-      "tag": "0113_as_ingestao_pandape_varredura",
-      "breakpoints": true
-    },
-    {
-      "idx": 114,
-      "version": "7",
-      "when": 1788118691611,
-      "tag": "0114_as_depara_etapas_decididas_e_propostas",
-      "breakpoints": true
-    },
-    {
-      "idx": 115,
-      "version": "7",
-      "when": 1788122291611,
-      "tag": "0115_as_vaga_status_pendente_revisao",
-      "breakpoints": true
-    },
-    {
-      "idx": 116,
-      "version": "7",
-      "when": 1788125891611,
-      "tag": "0116_portal_caminho_do_arquivo",
-      "breakpoints": true
-    },
-    {
-      "idx": 117,
-      "version": "7",
-      "when": 1788129491611,
-      "tag": "0117_as_varredura_status_antes_do_encerramento",
-      "breakpoints": true
-    },
-    {
-      "idx": 118,
-      "version": "7",
-      "when": 1788133091611,
-      "tag": "0118_as_troca_de_cliente_da_vaga",
-      "breakpoints": true
-    },
-    {
-      "idx": 119,
-      "version": "7",
-      "when": 1788136691611,
-      "tag": "0119_portal_links_identidade",
-      "breakpoints": true
-    },
-    {
-      "idx": 120,
-      "version": "7",
-      "when": 1788140291611,
-      "tag": "0120_portal_links_acesso",
-      "breakpoints": true
-    },
-    {
-      "idx": 121,
-      "version": "7",
-      "when": 1788143891611,
-      "tag": "0121_portal_links_bloqueio_manual",
-      "breakpoints": true
-    },
-    {
-      "idx": 122,
-      "version": "7",
-      "when": 1788147491611,
-      "tag": "0122_portal_links_envio",
-      "breakpoints": true
-    },
-    {
-      "idx": 123,
-      "version": "7",
-      "when": 1788151091611,
-      "tag": "0123_dicas_documento",
-      "breakpoints": true
-    },
-    {
-      "idx": 124,
-      "version": "7",
-      "when": 1788154691611,
-      "tag": "0124_liberacao_override_aceites",
-      "breakpoints": true
-    },
-    {
-      "idx": 125,
-      "version": "7",
-      "when": 1788158291611,
-      "tag": "0125_admissao_dados_gi",
-      "breakpoints": true
-    },
-    {
-      "idx": 126,
-      "version": "7",
-      "when": 1788158292611,
-      "tag": "0126_portal_conferencia",
-      "breakpoints": true
-    },
-    {
-      "idx": 127,
-      "version": "7",
-      "when": 1788158293611,
-      "tag": "0127_admissao_dados_gi_envio",
-      "breakpoints": true
-    },
-    {
-      "idx": 128,
-      "version": "7",
-      "when": 1788244693611,
-      "tag": "0128_as_candidato_origem_importacao",
-      "breakpoints": true
-    },
-    {
-      "idx": 129,
-      "version": "7",
-      "when": 1788331093611,
-      "tag": "0129_as_motivos_descarte",
-      "breakpoints": true
-    },
-    {
-      "idx": 130,
-      "version": "7",
-      "when": 1788417493611,
-      "tag": "0130_as_vaga_status_derivado",
-      "breakpoints": true
-    },
-    {
-      "idx": 131,
-      "version": "7",
-      "when": 1788503893611,
-      "tag": "0131_as_frente_e",
-      "breakpoints": true
-    },
-    {
-      "idx": 132,
-      "version": "7",
-      "when": 1788590293611,
-      "tag": "0132_as_motivos_reenvio_shortlist",
-      "breakpoints": true
-    },
-    {
-      "idx": 133,
-      "version": "7",
-      "when": 1788676693611,
-      "tag": "0133_as_depara_etapa_externa_digai",
-      "breakpoints": true
-    },
-    {
-      "idx": 134,
-      "version": "7",
-      "when": 1790646010719,
-      "tag": "0134_portal_acesso_email",
-      "breakpoints": true
-    },
-    {
-      "idx": 135,
-      "version": "7",
-      "when": 1790646001719,
-      "tag": "0135_as_digai_screening_cursor",
-      "breakpoints": true
-    },
-    {
-      "idx": 136,
-      "version": "7",
-      "when": 1790646002719,
-      "tag": "0136_as_ingestao_divergencias",
-      "breakpoints": true
-    },
-    {
-      "idx": 137,
-      "version": "7",
-      "when": 1790646003719,
-      "tag": "0137_vaga_consultor_transferencias",
-      "breakpoints": true
-    },
-    {
-      "idx": 138,
-      "version": "7",
-      "when": 1790646004719,
-      "tag": "0138_as_vaga_reabertura_realinhamento",
-      "breakpoints": true
-    },
-    {
-      "idx": 139,
-      "version": "7",
-      "when": 1790646005719,
-      "tag": "0139_as_depara_cliente_vaga",
-      "breakpoints": true
-    },
-    {
-      "idx": 140,
-      "version": "7",
-      "when": 1790646006719,
-      "tag": "0140_dados_vaga_folha_salario_unidade",
-      "breakpoints": true
-    },
-    {
-      "idx": 141,
-      "version": "7",
-      "when": 1790646007719,
-      "tag": "0141_admissao_dados_gi_cidades",
-      "breakpoints": true
-    },
-    {
-      "idx": 142,
-      "version": "7",
-      "when": 1790646008719,
-      "tag": "0142_autenticidade_documento",
-      "breakpoints": true
-    },
-    {
-      "idx": 143,
-      "version": "7",
-      "when": 1790646009719,
-      "tag": "0143_vaga_edicoes_exclusoes",
-      "breakpoints": true
-    },
-    {
-      "idx": 144,
-      "version": "7",
-      "when": 1790646011719,
-      "tag": "0144_as_planilha_status_e_vaga_recusa",
-      "breakpoints": true
-    },
-    {
-      "idx": 145,
-      "version": "7",
-      "when": 1790646012719,
-      "tag": "0145_vaga_natureza_reposicao_temporaria",
-      "breakpoints": true
-    },
-    {
-      "idx": 146,
-      "version": "7",
-      "when": 1790646013719,
-      "tag": "0146_as_planilha_prepreenchimento",
-      "breakpoints": true
-    },
-    {
-      "idx": 147,
-      "version": "7",
-      "when": 1790646014719,
-      "tag": "0147_envio_admissao_retrato_da_procedencia",
-      "breakpoints": true
-    },
-    {
-      "idx": 148,
-      "version": "7",
-      "when": 1790646015719,
-      "tag": "0148_idx_as_candidaturas_situacao_etapa",
-      "breakpoints": true
-    },
-    {
-      "idx": 150,
-      "version": "7",
-      "when": 1790646017719,
-      "tag": "0150_uq_vagas_id_vacancy_pandape",
-      "breakpoints": true
-    },
-    {
-      "idx": 151,
-      "version": "7",
-      "when": 1790646018719,
-      "tag": "0151_uq_vagas_id_vacancy_pandape_coluna_crua",
-      "breakpoints": true
-    },
-    {
-      "idx": 152,
-      "version": "7",
-      "when": 1790646019719,
-      "tag": "0152_vagas_status_pandape",
-      "breakpoints": true
-    },
-    {
-      "idx": 153,
-      "version": "7",
-      "when": 1790646020719,
-      "tag": "0153_as_candidato_telefones",
-      "breakpoints": true
-    },
-    {
-      "idx": 154,
-      "version": "7",
-      "when": 1790646021719,
-      "tag": "0154_portal_reabertura_auditoria",
-      "breakpoints": true
-    },
-    {
-      "idx": 155,
-      "version": "7",
-      "when": 1790646022719,
-      "tag": "0155_portal_link_emissao_falha",
-      "breakpoints": true
-    },
-    {
-      "idx": 156,
-      "version": "7",
-      "when": 1790646023719,
-      "tag": "0158_grupo_cliente_meta",
-      "breakpoints": true
-    },
-    {
-      "idx": 157,
-      "version": "7",
-      "when": 1792000276612,
-      "tag": "0159_portal_intervencao_resolvida",
-      "breakpoints": true
-    },
-    {
-      "idx": 158,
-      "version": "7",
-      "when": 1792001276612,
-      "tag": "0160_exame_solicitado",
-      "breakpoints": true
-    },
-    {
-      "idx": 159,
-      "version": "7",
-      "when": 1792101353255,
-      "tag": "0161_consultor_responsavel_frente",
-      "breakpoints": true
-    },
-    {
-      "idx": 160,
-      "version": "7",
-      "when": 1792188000000,
-      "tag": "0162_consultor_da_entrevista",
-      "breakpoints": true
-    }
-  ]
+	"version": "7",
+	"dialect": "postgresql",
+	"entries": [
+		{
+			"idx": 0,
+			"version": "7",
+			"when": 1782328717503,
+			"tag": "0000_overconfident_lightspeed",
+			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1782435481587,
+			"tag": "0001_icy_hawkeye",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1782440889185,
+			"tag": "0002_lame_owl",
+			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1782472770929,
+			"tag": "0003_massive_shatterstar",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1782506348698,
+			"tag": "0004_whole_union_jack",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "7",
+			"when": 1782506474947,
+			"tag": "0005_lively_kingpin",
+			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "7",
+			"when": 1782507014989,
+			"tag": "0006_lowly_sabretooth",
+			"breakpoints": true
+		},
+		{
+			"idx": 7,
+			"version": "7",
+			"when": 1782510552213,
+			"tag": "0007_loving_warstar",
+			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1782608594261,
+			"tag": "0008_icy_skaar",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1782750802075,
+			"tag": "0009_cultured_molten_man",
+			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "7",
+			"when": 1782766765228,
+			"tag": "0010_blushing_silhouette",
+			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "7",
+			"when": 1782824076727,
+			"tag": "0011_tricky_marvex",
+			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "7",
+			"when": 1782833212519,
+			"tag": "0012_bent_rawhide_kid",
+			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "7",
+			"when": 1782915191993,
+			"tag": "0013_jazzy_shadow_king",
+			"breakpoints": true
+		},
+		{
+			"idx": 14,
+			"version": "7",
+			"when": 1782924618242,
+			"tag": "0014_bent_vampiro",
+			"breakpoints": true
+		},
+		{
+			"idx": 15,
+			"version": "7",
+			"when": 1783456928271,
+			"tag": "0015_living_nextwave",
+			"breakpoints": true
+		},
+		{
+			"idx": 16,
+			"version": "7",
+			"when": 1783479322411,
+			"tag": "0016_abnormal_tony_stark",
+			"breakpoints": true
+		},
+		{
+			"idx": 17,
+			"version": "7",
+			"when": 1783527797202,
+			"tag": "0017_greedy_sunset_bain",
+			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "7",
+			"when": 1783561302028,
+			"tag": "0018_lowly_freak",
+			"breakpoints": true
+		},
+		{
+			"idx": 19,
+			"version": "7",
+			"when": 1783690331736,
+			"tag": "0019_petite_beast",
+			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "7",
+			"when": 1783693496004,
+			"tag": "0020_simple_eternity",
+			"breakpoints": true
+		},
+		{
+			"idx": 21,
+			"version": "7",
+			"when": 1783695767815,
+			"tag": "0021_flat_harry_osborn",
+			"breakpoints": true
+		},
+		{
+			"idx": 22,
+			"version": "7",
+			"when": 1784057671698,
+			"tag": "0022_worthless_shiva",
+			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "7",
+			"when": 1784083296006,
+			"tag": "0023_clean_albert_cleary",
+			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1784120746995,
+			"tag": "0024_aspiring_gressill",
+			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "7",
+			"when": 1784143430280,
+			"tag": "0025_ambitious_thundra",
+			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "7",
+			"when": 1784205000000,
+			"tag": "0026_reorganiza_status_cadastro",
+			"breakpoints": true
+		},
+		{
+			"idx": 27,
+			"version": "7",
+			"when": 1784227970418,
+			"tag": "0027_add_valor_previsao_aso_exame",
+			"breakpoints": true
+		},
+		{
+			"idx": 28,
+			"version": "7",
+			"when": 1784309748298,
+			"tag": "0028_liberacao_admissional",
+			"breakpoints": true
+		},
+		{
+			"idx": 29,
+			"version": "7",
+			"when": 1784317530675,
+			"tag": "0029_dedup_pandape",
+			"breakpoints": true
+		},
+		{
+			"idx": 30,
+			"version": "7",
+			"when": 1784328643077,
+			"tag": "0030_liberacao_recusada",
+			"breakpoints": true
+		},
+		{
+			"idx": 31,
+			"version": "7",
+			"when": 1784681381537,
+			"tag": "0031_third_shooting_star",
+			"breakpoints": true
+		},
+		{
+			"idx": 32,
+			"version": "7",
+			"when": 1784717727450,
+			"tag": "0032_needy_gressill",
+			"breakpoints": true
+		},
+		{
+			"idx": 33,
+			"version": "7",
+			"when": 1784719035319,
+			"tag": "0033_omniscient_boomerang",
+			"breakpoints": true
+		},
+		{
+			"idx": 34,
+			"version": "7",
+			"when": 1784728202264,
+			"tag": "0034_naive_boom_boom",
+			"breakpoints": true
+		},
+		{
+			"idx": 35,
+			"version": "7",
+			"when": 1784770650395,
+			"tag": "0035_purple_rachel_grey",
+			"breakpoints": true
+		},
+		{
+			"idx": 36,
+			"version": "7",
+			"when": 1784828377632,
+			"tag": "0036_menus_permissao",
+			"breakpoints": true
+		},
+		{
+			"idx": 37,
+			"version": "7",
+			"when": 1784855128645,
+			"tag": "0037_tricky_amphibian",
+			"breakpoints": true
+		},
+		{
+			"idx": 38,
+			"version": "7",
+			"when": 1784927166500,
+			"tag": "0038_vt_coleta_gcs",
+			"breakpoints": true
+		},
+		{
+			"idx": 39,
+			"version": "7",
+			"when": 1784927400111,
+			"tag": "0039_premium_wild_pack",
+			"breakpoints": true
+		},
+		{
+			"idx": 40,
+			"version": "7",
+			"when": 1785155157963,
+			"tag": "0040_wet_captain_stacy",
+			"breakpoints": true
+		},
+		{
+			"idx": 41,
+			"version": "7",
+			"when": 1785166165274,
+			"tag": "0041_luxuriant_fantastic_four",
+			"breakpoints": true
+		},
+		{
+			"idx": 42,
+			"version": "7",
+			"when": 1785178420997,
+			"tag": "0042_small_lenny_balinger",
+			"breakpoints": true
+		},
+		{
+			"idx": 43,
+			"version": "7",
+			"when": 1785239675992,
+			"tag": "0043_watery_lucky_pierre",
+			"breakpoints": true
+		},
+		{
+			"idx": 44,
+			"version": "7",
+			"when": 1785246230874,
+			"tag": "0044_bent_shocker",
+			"breakpoints": true
+		},
+		{
+			"idx": 45,
+			"version": "7",
+			"when": 1785252450793,
+			"tag": "0045_round_magik",
+			"breakpoints": true
+		},
+		{
+			"idx": 46,
+			"version": "7",
+			"when": 1785266217907,
+			"tag": "0046_wild_james_howlett",
+			"breakpoints": true
+		},
+		{
+			"idx": 47,
+			"version": "7",
+			"when": 1785320305851,
+			"tag": "0047_luxuriant_the_spike",
+			"breakpoints": true
+		},
+		{
+			"idx": 48,
+			"version": "7",
+			"when": 1785342564192,
+			"tag": "0048_windy_goblin_queen",
+			"breakpoints": true
+		},
+		{
+			"idx": 49,
+			"version": "7",
+			"when": 1785346019636,
+			"tag": "0049_thankful_betty_brant",
+			"breakpoints": true
+		},
+		{
+			"idx": 50,
+			"version": "7",
+			"when": 1785350306970,
+			"tag": "0050_secret_mimic",
+			"breakpoints": true
+		},
+		{
+			"idx": 51,
+			"version": "7",
+			"when": 1785353105863,
+			"tag": "0051_steep_energizer",
+			"breakpoints": true
+		},
+		{
+			"idx": 52,
+			"version": "7",
+			"when": 1785354922632,
+			"tag": "0052_woozy_apocalypse",
+			"breakpoints": true
+		},
+		{
+			"idx": 53,
+			"version": "7",
+			"when": 1785376029199,
+			"tag": "0053_light_bill_hollister",
+			"breakpoints": true
+		},
+		{
+			"idx": 54,
+			"version": "7",
+			"when": 1785377962946,
+			"tag": "0054_dusty_talon",
+			"breakpoints": true
+		},
+		{
+			"idx": 55,
+			"version": "7",
+			"when": 1785412647905,
+			"tag": "0055_bored_the_renegades",
+			"breakpoints": true
+		},
+		{
+			"idx": 56,
+			"version": "7",
+			"when": 1785416833159,
+			"tag": "0056_real_sinister_six",
+			"breakpoints": true
+		},
+		{
+			"idx": 57,
+			"version": "7",
+			"when": 1785427383722,
+			"tag": "0057_clear_smiling_tiger",
+			"breakpoints": true
+		},
+		{
+			"idx": 58,
+			"version": "7",
+			"when": 1785528334395,
+			"tag": "0058_exotic_overlord",
+			"breakpoints": true
+		},
+		{
+			"idx": 59,
+			"version": "7",
+			"when": 1785877909987,
+			"tag": "0059_aromatic_grandmaster",
+			"breakpoints": true
+		},
+		{
+			"idx": 60,
+			"version": "7",
+			"when": 1785943488566,
+			"tag": "0060_glossy_tombstone",
+			"breakpoints": true
+		},
+		{
+			"idx": 61,
+			"version": "7",
+			"when": 1785978455413,
+			"tag": "0061_powerful_prodigy",
+			"breakpoints": true
+		},
+		{
+			"idx": 62,
+			"version": "7",
+			"when": 1785981368885,
+			"tag": "0062_smiling_retro_girl",
+			"breakpoints": true
+		},
+		{
+			"idx": 63,
+			"version": "7",
+			"when": 1786366802227,
+			"tag": "0063_bouncy_silver_centurion",
+			"breakpoints": true
+		},
+		{
+			"idx": 64,
+			"version": "7",
+			"when": 1786497300747,
+			"tag": "0064_goofy_magus",
+			"breakpoints": true
+		},
+		{
+			"idx": 65,
+			"version": "7",
+			"when": 1786546158316,
+			"tag": "0065_flowery_tomorrow_man",
+			"breakpoints": true
+		},
+		{
+			"idx": 66,
+			"version": "7",
+			"when": 1786571316685,
+			"tag": "0066_status_beneficio_valores",
+			"breakpoints": true
+		},
+		{
+			"idx": 67,
+			"version": "7",
+			"when": 1786571337728,
+			"tag": "0067_status_beneficio_migra_linhas",
+			"breakpoints": true
+		},
+		{
+			"idx": 68,
+			"version": "7",
+			"when": 1786571337729,
+			"tag": "0068_beneficio_dois_estagios",
+			"breakpoints": true
+		},
+		{
+			"idx": 69,
+			"version": "7",
+			"when": 1786665416412,
+			"tag": "0069_camada_pagamento_beneficio",
+			"breakpoints": true
+		},
+		{
+			"idx": 70,
+			"version": "7",
+			"when": 1786717530710,
+			"tag": "0070_regras_beneficio_cliente",
+			"breakpoints": true
+		},
+		{
+			"idx": 71,
+			"version": "7",
+			"when": 1786993328775,
+			"tag": "0071_dados_bancarios_digitados",
+			"breakpoints": true
+		},
+		{
+			"idx": 72,
+			"version": "7",
+			"when": 1786993637223,
+			"tag": "0072_divergencia_bancaria",
+			"breakpoints": true
+		},
+		{
+			"idx": 73,
+			"version": "7",
+			"when": 1787067519767,
+			"tag": "0073_segmentacao_area_usuario",
+			"breakpoints": true
+		},
+		{
+			"idx": 74,
+			"version": "7",
+			"when": 1787082281775,
+			"tag": "0074_area_do_menu_na_tabela",
+			"breakpoints": true
+		},
+		{
+			"idx": 75,
+			"version": "7",
+			"when": 1787261725289,
+			"tag": "0075_url_do_vt_no_drive",
+			"breakpoints": true
+		},
+		{
+			"idx": 76,
+			"version": "7",
+			"when": 1787316124706,
+			"tag": "0076_vt_multiversao",
+			"breakpoints": true
+		},
+		{
+			"idx": 77,
+			"version": "7",
+			"when": 1787316183358,
+			"tag": "0077_solicitacoes_vt",
+			"breakpoints": true
+		},
+		{
+			"idx": 78,
+			"version": "7",
+			"when": 1787317323299,
+			"tag": "0078_url_por_versao_do_vt",
+			"breakpoints": true
+		},
+		{
+			"idx": 79,
+			"version": "7",
+			"when": 1787321658926,
+			"tag": "0079_dispensar_sinal_vt_orfao",
+			"breakpoints": true
+		},
+		{
+			"idx": 80,
+			"version": "7",
+			"when": 1787321659926,
+			"tag": "0080_carimbo_da_notificacao_clicksign",
+			"breakpoints": true
+		},
+		{
+			"idx": 81,
+			"version": "7",
+			"when": 1787321660926,
+			"tag": "0081_panorama_de_assinatura_no_ea",
+			"breakpoints": true
+		},
+		{
+			"idx": 82,
+			"version": "7",
+			"when": 1787321660927,
+			"tag": "0082_as_central_de_vagas",
+			"breakpoints": true
+		},
+		{
+			"idx": 83,
+			"version": "7",
+			"when": 1787321661927,
+			"tag": "0083_as_central_de_candidatos",
+			"breakpoints": true
+		},
+		{
+			"idx": 84,
+			"version": "7",
+			"when": 1787321662927,
+			"tag": "0084_as_ultimo_contato_na_candidatura",
+			"breakpoints": true
+		},
+		{
+			"idx": 85,
+			"version": "7",
+			"when": 1787321663927,
+			"tag": "0085_as_reentrada_em_vaga_encerrada",
+			"breakpoints": true
+		},
+		{
+			"idx": 86,
+			"version": "7",
+			"when": 1787321660928,
+			"tag": "0086_frente_ifractal",
+			"breakpoints": true
+		},
+		{
+			"idx": 87,
+			"version": "7",
+			"when": 1787500000000,
+			"tag": "0087_exame_liberado_sem_aso",
+			"breakpoints": true
+		},
+		{
+			"idx": 88,
+			"version": "7",
+			"when": 1787931350975,
+			"tag": "0088_as_historico_de_etapas",
+			"breakpoints": true
+		},
+		{
+			"idx": 89,
+			"version": "7",
+			"when": 1787945891611,
+			"tag": "0089_as_troca_de_vaga_no_historico",
+			"breakpoints": true
+		},
+		{
+			"idx": 90,
+			"version": "7",
+			"when": 1788032291611,
+			"tag": "0090_lojas_unidades",
+			"breakpoints": true
+		},
+		{
+			"idx": 91,
+			"version": "7",
+			"when": 1788035891611,
+			"tag": "0091_admissao_loja",
+			"breakpoints": true
+		},
+		{
+			"idx": 92,
+			"version": "7",
+			"when": 1788039491611,
+			"tag": "0092_meta_por_loja",
+			"breakpoints": true
+		},
+		{
+			"idx": 93,
+			"version": "7",
+			"when": 1788043091611,
+			"tag": "0093_grupo_cliente",
+			"breakpoints": true
+		},
+		{
+			"idx": 94,
+			"version": "7",
+			"when": 1788046691611,
+			"tag": "0094_as_vaga_listas",
+			"breakpoints": true
+		},
+		{
+			"idx": 95,
+			"version": "7",
+			"when": 1788050291611,
+			"tag": "0095_as_situacao_alocado",
+			"breakpoints": true
+		},
+		{
+			"idx": 96,
+			"version": "7",
+			"when": 1788053891611,
+			"tag": "0096_as_candidatura_posicao_lado",
+			"breakpoints": true
+		},
+		{
+			"idx": 97,
+			"version": "7",
+			"when": 1788057491611,
+			"tag": "0097_as_log_do_aceite_no_historico",
+			"breakpoints": true
+		},
+		{
+			"idx": 98,
+			"version": "7",
+			"when": 1788061091611,
+			"tag": "0098_as_trilha_do_fechamento_forcado",
+			"breakpoints": true
+		},
+		{
+			"idx": 99,
+			"version": "7",
+			"when": 1788064691611,
+			"tag": "0099_as_rastro_da_reducao_de_meta",
+			"breakpoints": true
+		},
+		{
+			"idx": 100,
+			"version": "7",
+			"when": 1788068291611,
+			"tag": "0100_as_etapas_funil",
+			"breakpoints": true
+		},
+		{
+			"idx": 101,
+			"version": "7",
+			"when": 1788071891611,
+			"tag": "0101_as_cancelamento_de_vaga",
+			"breakpoints": true
+		},
+		{
+			"idx": 102,
+			"version": "7",
+			"when": 1788075491611,
+			"tag": "0102_as_status_da_vaga",
+			"breakpoints": true
+		},
+		{
+			"idx": 103,
+			"version": "7",
+			"when": 1788079091611,
+			"tag": "0103_as_encerramento_da_vaga",
+			"breakpoints": true
+		},
+		{
+			"idx": 104,
+			"version": "7",
+			"when": 1788082691611,
+			"tag": "0104_as_reabertura_de_vaga",
+			"breakpoints": true
+		},
+		{
+			"idx": 105,
+			"version": "7",
+			"when": 1788086291611,
+			"tag": "0105_as_aceite_da_reabertura_sem_origem",
+			"breakpoints": true
+		},
+		{
+			"idx": 106,
+			"version": "7",
+			"when": 1788089891611,
+			"tag": "0106_as_linha_de_servico_cidade_idioma",
+			"breakpoints": true
+		},
+		{
+			"idx": 107,
+			"version": "7",
+			"when": 1788093491611,
+			"tag": "0107_as_segmento_e_comercial",
+			"breakpoints": true
+		},
+		{
+			"idx": 108,
+			"version": "7",
+			"when": 1788097091611,
+			"tag": "0108_fila_entradas_pandape",
+			"breakpoints": true
+		},
+		{
+			"idx": 109,
+			"version": "7",
+			"when": 1788100691611,
+			"tag": "0109_as_identidades_externas",
+			"breakpoints": true
+		},
+		{
+			"idx": 110,
+			"version": "7",
+			"when": 1788104291611,
+			"tag": "0110_as_depara_etapa_externa",
+			"breakpoints": true
+		},
+		{
+			"idx": 111,
+			"version": "7",
+			"when": 1788107891611,
+			"tag": "0111_as_depara_motivo_e_stand_by",
+			"breakpoints": true
+		},
+		{
+			"idx": 112,
+			"version": "7",
+			"when": 1788111491611,
+			"tag": "0112_as_retencao_campo_proprio",
+			"breakpoints": true
+		},
+		{
+			"idx": 113,
+			"version": "7",
+			"when": 1788115091611,
+			"tag": "0113_as_ingestao_pandape_varredura",
+			"breakpoints": true
+		},
+		{
+			"idx": 114,
+			"version": "7",
+			"when": 1788118691611,
+			"tag": "0114_as_depara_etapas_decididas_e_propostas",
+			"breakpoints": true
+		},
+		{
+			"idx": 115,
+			"version": "7",
+			"when": 1788122291611,
+			"tag": "0115_as_vaga_status_pendente_revisao",
+			"breakpoints": true
+		},
+		{
+			"idx": 116,
+			"version": "7",
+			"when": 1788125891611,
+			"tag": "0116_portal_caminho_do_arquivo",
+			"breakpoints": true
+		},
+		{
+			"idx": 117,
+			"version": "7",
+			"when": 1788129491611,
+			"tag": "0117_as_varredura_status_antes_do_encerramento",
+			"breakpoints": true
+		},
+		{
+			"idx": 118,
+			"version": "7",
+			"when": 1788133091611,
+			"tag": "0118_as_troca_de_cliente_da_vaga",
+			"breakpoints": true
+		},
+		{
+			"idx": 119,
+			"version": "7",
+			"when": 1788136691611,
+			"tag": "0119_portal_links_identidade",
+			"breakpoints": true
+		},
+		{
+			"idx": 120,
+			"version": "7",
+			"when": 1788140291611,
+			"tag": "0120_portal_links_acesso",
+			"breakpoints": true
+		},
+		{
+			"idx": 121,
+			"version": "7",
+			"when": 1788143891611,
+			"tag": "0121_portal_links_bloqueio_manual",
+			"breakpoints": true
+		},
+		{
+			"idx": 122,
+			"version": "7",
+			"when": 1788147491611,
+			"tag": "0122_portal_links_envio",
+			"breakpoints": true
+		},
+		{
+			"idx": 123,
+			"version": "7",
+			"when": 1788151091611,
+			"tag": "0123_dicas_documento",
+			"breakpoints": true
+		},
+		{
+			"idx": 124,
+			"version": "7",
+			"when": 1788154691611,
+			"tag": "0124_liberacao_override_aceites",
+			"breakpoints": true
+		},
+		{
+			"idx": 125,
+			"version": "7",
+			"when": 1788158291611,
+			"tag": "0125_admissao_dados_gi",
+			"breakpoints": true
+		},
+		{
+			"idx": 126,
+			"version": "7",
+			"when": 1788158292611,
+			"tag": "0126_portal_conferencia",
+			"breakpoints": true
+		},
+		{
+			"idx": 127,
+			"version": "7",
+			"when": 1788158293611,
+			"tag": "0127_admissao_dados_gi_envio",
+			"breakpoints": true
+		},
+		{
+			"idx": 128,
+			"version": "7",
+			"when": 1788244693611,
+			"tag": "0128_as_candidato_origem_importacao",
+			"breakpoints": true
+		},
+		{
+			"idx": 129,
+			"version": "7",
+			"when": 1788331093611,
+			"tag": "0129_as_motivos_descarte",
+			"breakpoints": true
+		},
+		{
+			"idx": 130,
+			"version": "7",
+			"when": 1788417493611,
+			"tag": "0130_as_vaga_status_derivado",
+			"breakpoints": true
+		},
+		{
+			"idx": 131,
+			"version": "7",
+			"when": 1788503893611,
+			"tag": "0131_as_frente_e",
+			"breakpoints": true
+		},
+		{
+			"idx": 132,
+			"version": "7",
+			"when": 1788590293611,
+			"tag": "0132_as_motivos_reenvio_shortlist",
+			"breakpoints": true
+		},
+		{
+			"idx": 133,
+			"version": "7",
+			"when": 1788676693611,
+			"tag": "0133_as_depara_etapa_externa_digai",
+			"breakpoints": true
+		},
+		{
+			"idx": 134,
+			"version": "7",
+			"when": 1790646010719,
+			"tag": "0134_portal_acesso_email",
+			"breakpoints": true
+		},
+		{
+			"idx": 135,
+			"version": "7",
+			"when": 1790646001719,
+			"tag": "0135_as_digai_screening_cursor",
+			"breakpoints": true
+		},
+		{
+			"idx": 136,
+			"version": "7",
+			"when": 1790646002719,
+			"tag": "0136_as_ingestao_divergencias",
+			"breakpoints": true
+		},
+		{
+			"idx": 137,
+			"version": "7",
+			"when": 1790646003719,
+			"tag": "0137_vaga_consultor_transferencias",
+			"breakpoints": true
+		},
+		{
+			"idx": 138,
+			"version": "7",
+			"when": 1790646004719,
+			"tag": "0138_as_vaga_reabertura_realinhamento",
+			"breakpoints": true
+		},
+		{
+			"idx": 139,
+			"version": "7",
+			"when": 1790646005719,
+			"tag": "0139_as_depara_cliente_vaga",
+			"breakpoints": true
+		},
+		{
+			"idx": 140,
+			"version": "7",
+			"when": 1790646006719,
+			"tag": "0140_dados_vaga_folha_salario_unidade",
+			"breakpoints": true
+		},
+		{
+			"idx": 141,
+			"version": "7",
+			"when": 1790646007719,
+			"tag": "0141_admissao_dados_gi_cidades",
+			"breakpoints": true
+		},
+		{
+			"idx": 142,
+			"version": "7",
+			"when": 1790646008719,
+			"tag": "0142_autenticidade_documento",
+			"breakpoints": true
+		},
+		{
+			"idx": 143,
+			"version": "7",
+			"when": 1790646009719,
+			"tag": "0143_vaga_edicoes_exclusoes",
+			"breakpoints": true
+		},
+		{
+			"idx": 144,
+			"version": "7",
+			"when": 1790646011719,
+			"tag": "0144_as_planilha_status_e_vaga_recusa",
+			"breakpoints": true
+		},
+		{
+			"idx": 145,
+			"version": "7",
+			"when": 1790646012719,
+			"tag": "0145_vaga_natureza_reposicao_temporaria",
+			"breakpoints": true
+		},
+		{
+			"idx": 146,
+			"version": "7",
+			"when": 1790646013719,
+			"tag": "0146_as_planilha_prepreenchimento",
+			"breakpoints": true
+		},
+		{
+			"idx": 147,
+			"version": "7",
+			"when": 1790646014719,
+			"tag": "0147_envio_admissao_retrato_da_procedencia",
+			"breakpoints": true
+		},
+		{
+			"idx": 148,
+			"version": "7",
+			"when": 1790646015719,
+			"tag": "0148_idx_as_candidaturas_situacao_etapa",
+			"breakpoints": true
+		},
+		{
+			"idx": 150,
+			"version": "7",
+			"when": 1790646017719,
+			"tag": "0150_uq_vagas_id_vacancy_pandape",
+			"breakpoints": true
+		},
+		{
+			"idx": 151,
+			"version": "7",
+			"when": 1790646018719,
+			"tag": "0151_uq_vagas_id_vacancy_pandape_coluna_crua",
+			"breakpoints": true
+		},
+		{
+			"idx": 152,
+			"version": "7",
+			"when": 1790646019719,
+			"tag": "0152_vagas_status_pandape",
+			"breakpoints": true
+		},
+		{
+			"idx": 153,
+			"version": "7",
+			"when": 1790646020719,
+			"tag": "0153_as_candidato_telefones",
+			"breakpoints": true
+		},
+		{
+			"idx": 154,
+			"version": "7",
+			"when": 1790646021719,
+			"tag": "0154_portal_reabertura_auditoria",
+			"breakpoints": true
+		},
+		{
+			"idx": 155,
+			"version": "7",
+			"when": 1790646022719,
+			"tag": "0155_portal_link_emissao_falha",
+			"breakpoints": true
+		},
+		{
+			"idx": 156,
+			"version": "7",
+			"when": 1790646023719,
+			"tag": "0158_grupo_cliente_meta",
+			"breakpoints": true
+		},
+		{
+			"idx": 157,
+			"version": "7",
+			"when": 1792000276612,
+			"tag": "0159_portal_intervencao_resolvida",
+			"breakpoints": true
+		},
+		{
+			"idx": 158,
+			"version": "7",
+			"when": 1792001276612,
+			"tag": "0160_exame_solicitado",
+			"breakpoints": true
+		},
+		{
+			"idx": 159,
+			"version": "7",
+			"when": 1792101353255,
+			"tag": "0161_consultor_responsavel_frente",
+			"breakpoints": true
+		},
+		{
+			"idx": 160,
+			"version": "7",
+			"when": 1792188000000,
+			"tag": "0162_consultor_da_entrevista",
+			"breakpoints": true
+		},
+		{
+			"idx": 161,
+			"version": "7",
+			"when": 1792274400000,
+			"tag": "0163_grupo_cliente_cargo_meta",
+			"breakpoints": true
+		}
+	]
 }

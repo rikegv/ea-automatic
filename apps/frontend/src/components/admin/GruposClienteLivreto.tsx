@@ -76,6 +76,176 @@ interface Previa {
 const rotulo = (c: { codCliente: string; nomeOperacao: string | null; razaoSocial: string }) =>
   `${c.codCliente} · ${c.nomeOperacao?.trim() || c.razaoSocial}`;
 
+/** Um cargo do catálogo (`admin/cargos`), do jeito que a meta por cargo precisa. */
+interface CargoCatalogo {
+  id: string;
+  nome: string;
+  ativo: boolean;
+}
+
+/** A meta de um cargo num grupo (ajuste 5). */
+interface MetaCargo {
+  cargoId: string;
+  cargoNome: string;
+  meta: number;
+}
+
+/**
+ * MODAL "VAGAS POR CARGO" (ajuste 5): a meta de cada cargo no grupo. O Total do grupo passa a ser a
+ * SOMA das metas por cargo cadastradas aqui (decisão do diretor). Lista o catálogo de cargos com
+ * busca (§A.35), cada um com um campo de meta; vazio é "sem meta" para aquele cargo, e salvar é no
+ * blur quando o valor mudou. Não fecha ao clicar fora (§A.41); sai pelo "Concluir".
+ */
+function MetasPorCargoModal({
+  grupoId,
+  grupoNome,
+  cargos,
+  metasIniciais,
+  onFechar,
+}: {
+  grupoId: string;
+  grupoNome: string;
+  cargos: CargoCatalogo[];
+  metasIniciais: MetaCargo[];
+  onFechar: () => void;
+}) {
+  const [draft, setDraft] = useState<Record<string, string>>(() =>
+    Object.fromEntries(metasIniciais.map((m) => [m.cargoId, String(m.meta)])),
+  );
+  const [busca, setBusca] = useState("");
+  const [erro, setErro] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState<string | null>(null);
+
+  const ativos = useMemo(() => cargos.filter((c) => c.ativo), [cargos]);
+  const visiveis = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return q ? ativos.filter((c) => c.nome.toLowerCase().includes(q)) : ativos;
+  }, [ativos, busca]);
+
+  // A soma só conta valores válidos (inteiro >= 1). É o total do grupo que o painel vai mostrar.
+  const soma = useMemo(
+    () =>
+      Object.values(draft).reduce((acc, v) => {
+        const n = Number(v);
+        return Number.isInteger(n) && n >= 1 ? acc + n : acc;
+      }, 0),
+    [draft],
+  );
+  const qtdComMeta = useMemo(
+    () => Object.values(draft).filter((v) => Number.isInteger(Number(v)) && Number(v) >= 1).length,
+    [draft],
+  );
+
+  /**
+   * Salva a meta de um cargo no blur, só quando mudou. Vazio remove (meta nula); valor presente tem
+   * de ser inteiro >= 1. Valor inválido não grava e não polui a soma (ela já ignora inválido).
+   */
+  async function salvar(cargoId: string, valor: string) {
+    const bruto = valor.trim();
+    const inicial = metasIniciais.find((m) => m.cargoId === cargoId)?.meta ?? null;
+    const n = bruto === "" ? null : Number(bruto);
+    if (n !== null && (!Number.isInteger(n) || n < 1)) {
+      setErro("A meta de um cargo precisa ser um número inteiro de pelo menos 1.");
+      return;
+    }
+    if (n === inicial) return;
+    setSalvando(cargoId);
+    setErro(null);
+    try {
+      await apiFetch(`/admin/grupos-cliente/${grupoId}/metas-cargo/${cargoId}`, {
+        method: "PUT",
+        body: { meta: n },
+      });
+      // Reflete o salvo na lista inicial em memória, para o "mudou" do próximo blur comparar certo.
+      const idx = metasIniciais.findIndex((m) => m.cargoId === cargoId);
+      if (n === null) {
+        if (idx >= 0) metasIniciais.splice(idx, 1);
+      } else if (idx >= 0) metasIniciais[idx].meta = n;
+      else metasIniciais.push({ cargoId, cargoNome: "", meta: n });
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não foi possível salvar a meta do cargo.");
+    } finally {
+      setSalvando(null);
+    }
+  }
+
+  return (
+    <Modal onClose={onFechar} ariaLabel="Vagas por cargo do grupo" className="max-w-lg p-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-[17px] font-semibold text-text">Vagas Por Cargo</h2>
+        <span className="text-[12px] text-faint">{grupoNome}</span>
+      </div>
+      <p className="mb-3 mt-1 text-[12.5px] text-dim">
+        A meta de cada cargo. O total do grupo passa a ser a soma das metas por cargo. Cargo sem valor
+        fica sem meta.
+      </p>
+
+      {erro && (
+        <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-[12.5px] text-danger" role="alert">
+          {erro}
+        </p>
+      )}
+
+      <div className="mb-3 flex items-center gap-3">
+        <input
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar cargo"
+          aria-label="Buscar cargo"
+          className="ds-input min-w-0 flex-1 py-1.5"
+        />
+        <span className="shrink-0 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[12.5px] text-dim">
+          Total{" "}
+          <span className="font-semibold tabular-nums text-text">{soma}</span>{" "}
+          <span className="text-faint">
+            em {qtdComMeta} {qtdComMeta === 1 ? "cargo" : "cargos"}
+          </span>
+        </span>
+      </div>
+
+      <div className="max-h-[52vh] overflow-auto rounded-xl border border-[var(--border)]">
+        {visiveis.length === 0 ? (
+          <p className="py-8 text-center text-faint">Nenhum cargo nesta busca.</p>
+        ) : (
+          visiveis.map((c) => {
+            const valor = draft[c.id] ?? "";
+            const temMeta = Number.isInteger(Number(valor)) && Number(valor) >= 1;
+            return (
+              <div
+                key={c.id}
+                className={
+                  "flex items-center gap-3 border-b border-[var(--border)] px-3 py-2 transition last:border-b-0 " +
+                  (temMeta ? "bg-[rgba(45,138,86,0.06)]" : "")
+                }
+              >
+                <span className="min-w-0 flex-1 truncate text-[13.5px] text-text" title={c.nome}>
+                  {c.nome}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={valor}
+                  onChange={(e) => setDraft((d) => ({ ...d, [c.id]: e.target.value }))}
+                  onBlur={(e) => void salvar(c.id, e.target.value)}
+                  disabled={salvando === c.id}
+                  placeholder="Vagas"
+                  aria-label={`Meta de vagas do cargo ${c.nome}`}
+                  className="ds-input w-[92px] py-1 tabular-nums"
+                />
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="mt-5 flex justify-end">
+        <Button onClick={onFechar}>Concluir</Button>
+      </div>
+    </Modal>
+  );
+}
+
 export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
   const [grupos, setGrupos] = useState<GrupoResumo[]>([]);
   const [catalogo, setCatalogo] = useState<ClienteDoCatalogo[]>([]);
@@ -93,19 +263,39 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
   const [aviso, setAviso] = useState<string | null>(null);
   const [previa, setPrevia] = useState<Previa | null>(null);
   const [ocupado, setOcupado] = useState(false);
+  // AJUSTE 5: catálogo de cargos (uma vez) e as metas por cargo do grupo escolhido.
+  const [cargosCatalogo, setCargosCatalogo] = useState<CargoCatalogo[]>([]);
+  const [metasCargo, setMetasCargo] = useState<MetaCargo[]>([]);
+  const [metasModalAberto, setMetasModalAberto] = useState(false);
 
   const carregar = useCallback(async () => {
-    const [gs, cs] = await Promise.all([
+    const [gs, cs, cg] = await Promise.all([
       apiFetch<GrupoResumo[]>("/admin/grupos-cliente"),
       apiFetch<ClienteDoCatalogo[]>("/admin/grupos-cliente/clientes"),
+      apiFetch<CargoCatalogo[]>("/admin/cargos"),
     ]);
     setGrupos(gs);
     setCatalogo(cs);
+    setCargosCatalogo(cg);
+  }, []);
+
+  const carregarMetasCargo = useCallback(async (id: string) => {
+    try {
+      setMetasCargo(await apiFetch<MetaCargo[]>(`/admin/grupos-cliente/${id}/metas-cargo`));
+    } catch {
+      setMetasCargo([]);
+    }
   }, []);
 
   useEffect(() => {
     void carregar().catch(() => setErro("Não foi possível carregar os grupos."));
   }, [carregar]);
+
+  // As metas por cargo acompanham o grupo escolhido: abrir outro grupo traz as metas dele.
+  useEffect(() => {
+    if (!grupoId) return setMetasCargo([]);
+    void carregarMetasCargo(grupoId);
+  }, [grupoId, carregarMetasCargo]);
 
   // Trocar de grupo recarrega a marcação a partir do catálogo, que já sabe de quem é cada CNPJ.
   useEffect(() => {
@@ -389,28 +579,51 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
             <div className="mt-3 flex flex-col gap-3 text-[12px] text-dim">
               {/* EDIÇÃO DA META do grupo escolhido, no mesmo bloco que já edita o estado (ativo): é o
                   "fluxo que edita o grupo" ganhando a meta. Salva no blur quando o valor mudou e é
-                  inteiro >= 1. Grupo legado sem meta começa em branco, convidando a definir. */}
+                  inteiro >= 1. Grupo legado sem meta começa em branco, convidando a definir.
+
+                  AJUSTE 5: quando o grupo tem meta POR CARGO, o total único deixa de ser digitado e
+                  passa a MOSTRAR a soma das metas por cargo (só leitura), para não haver dois totais
+                  divergentes. A edição do total, aí, é por cargo, no botão abaixo. */}
               <label className="flex flex-wrap items-center gap-2">
                 <span className="whitespace-nowrap font-semibold text-text">Meta De Vagas</span>
                 <input
                   type="number"
                   min={1}
                   step={1}
-                  value={metaEditada}
+                  value={metasCargo.length > 0 ? String(grupo.meta ?? "") : metaEditada}
                   onChange={(e) => setMetaEditada(e.target.value)}
                   onBlur={() => void salvarMeta()}
-                  disabled={ocupado || salvandoMeta}
+                  readOnly={metasCargo.length > 0}
+                  disabled={ocupado || salvandoMeta || metasCargo.length > 0}
                   aria-label={`Meta de vagas do grupo ${grupo.nome}`}
                   className="ds-input w-[96px] py-1 tabular-nums"
                 />
                 <span className="text-faint">
-                  {salvandoMeta
-                    ? "salvando…"
-                    : grupo.meta == null
-                      ? "defina a meta deste grupo, obrigatória"
-                      : "quantidade de vagas a fechar"}
+                  {metasCargo.length > 0
+                    ? "soma das vagas por cargo"
+                    : salvandoMeta
+                      ? "salvando…"
+                      : grupo.meta == null
+                        ? "defina a meta deste grupo, obrigatória"
+                        : "quantidade de vagas a fechar"}
                 </span>
               </label>
+              {/* O EDITOR DE VAGAS POR CARGO (ajuste 5), no mesmo bloco de edição do grupo. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setMetasModalAberto(true)}
+                  disabled={ocupado}
+                  className="px-3.5 py-1.5 text-[12.5px] text-accent"
+                >
+                  Vagas Por Cargo
+                </Button>
+                <span className="text-faint">
+                  {metasCargo.length > 0
+                    ? `${metasCargo.length} ${metasCargo.length === 1 ? "cargo" : "cargos"} com meta`
+                    : "defina a meta de cada cargo deste grupo"}
+                </span>
+              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button
                   variant="secondary"
@@ -639,6 +852,22 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
             </Button>
           </div>
         </Modal>
+      )}
+
+      {/* AJUSTE 5: o editor de vagas por cargo. Ao fechar, recarrega a lista (o total único do grupo
+          já foi sincronizado com a soma no backend) e as metas por cargo. */}
+      {metasModalAberto && grupo && (
+        <MetasPorCargoModal
+          grupoId={grupo.id}
+          grupoNome={grupo.nome}
+          cargos={cargosCatalogo}
+          metasIniciais={metasCargo.map((m) => ({ ...m }))}
+          onFechar={() => {
+            setMetasModalAberto(false);
+            void carregar().catch(() => setErro("Não foi possível recarregar os grupos."));
+            void carregarMetasCargo(grupo.id);
+          }}
+        />
       )}
     </Modal>
   );

@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Put } from "@nestjs/common";
 import {
   AtualizarGrupoClienteDto,
   CriarGrupoClienteDto,
   DefinirMembrosDto,
+  DefinirMetaCargoDto,
 } from "./grupos-cliente.dto";
 import { GruposClienteService } from "./grupos-cliente.service";
 
@@ -57,6 +58,26 @@ export class GruposClienteController {
   @Get(":id/analise")
   analise(@Param("id") id: string) {
     return this.grupos.analise(id);
+  }
+
+  /**
+   * META POR CARGO (ajuste 5). A LEITURA fica aberta no mesmo regime dos outros GETs do cadastro (o
+   * livreto de grupos mostra as metas). A ESCRITA é reivindicada pelo menu `clientes`, como o resto
+   * do cadastro de grupo (quem administra cliente administra grupo). São dois segmentos
+   * (`:id/metas-cargo`), então não colidem com `@Get(":id")` nem com `@Patch(":id")`.
+   */
+  @Get(":id/metas-cargo")
+  listarMetasCargo(@Param("id") id: string) {
+    return this.grupos.listarMetasCargo(id);
+  }
+
+  @Put(":id/metas-cargo/:cargoId")
+  definirMetaCargo(
+    @Param("id") id: string,
+    @Param("cargoId") cargoId: string,
+    @Body() dto: DefinirMetaCargoDto,
+  ) {
+    return this.grupos.definirMetaCargo(id, cargoId, dto);
   }
 
   @Post()

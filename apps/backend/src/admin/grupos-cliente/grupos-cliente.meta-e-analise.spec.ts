@@ -42,13 +42,26 @@ function fakeDb(opts: {
   grupo: unknown;
   totais: Record<string, number> | null;
   porCargo?: Record<string, unknown>[];
+  /** Metas por cargo do grupo (ajuste 5); vazio é o grupo sem meta por cargo, o legado. */
+  metasCargo?: Record<string, unknown>[];
 }) {
   const select = vi.fn((cols: Record<string, unknown> | undefined) => {
-    const ehPorCargo = Boolean(cols && "cargoId" in cols);
-    const resultado = ehPorCargo ? (opts.porCargo ?? []) : opts.totais ? [opts.totais] : [];
+    // A META POR CARGO tem `meta` sem `naEsteira`; o POR CARGO de admissões tem `naEsteira`; o TOTAL
+    // não tem `cargoId`. Três formas distintas, resolvidas pela presença das colunas.
+    const temCargoId = Boolean(cols && "cargoId" in cols);
+    const ehMetasCargo = temCargoId && Boolean(cols && "meta" in cols) && !(cols && "naEsteira" in cols);
+    const ehPorCargo = temCargoId && Boolean(cols && "naEsteira" in cols);
+    const resultado = ehMetasCargo
+      ? (opts.metasCargo ?? [])
+      : ehPorCargo
+        ? (opts.porCargo ?? [])
+        : opts.totais
+          ? [opts.totais]
+          : [];
     const b: Record<string, unknown> = {};
     b.from = () => b;
     b.leftJoin = () => b;
+    b.innerJoin = () => b;
     b.where = () => b;
     b.groupBy = () => b;
     b.orderBy = () => b;
@@ -217,7 +230,7 @@ describe("analise(): meta contra o que o grupo tem na esteira", () => {
 describe("analise(): porCargo", () => {
   const CARGO_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
-  it("agrega por cargo, mapeia null para Sem Cargo e NÃO traz vagas/faltam", async () => {
+  it("agrega por cargo, mapeia null para Sem Cargo e traz vagas/faltam nulos sem meta por cargo", async () => {
     const { db } = fakeDb({
       grupo: { id: GRUPO, nome: "CAGC Corifeu", meta: 200 },
       totais: { naEsteira: 164, emBanco: 14, concluidas: 120, emAndamento: 30, pausadas: 4, declinios: 23 },
@@ -232,20 +245,23 @@ describe("analise(): porCargo", () => {
     expect(r.porCargo[0]).toEqual({
       cargoId: CARGO_A,
       cargoNome: "Atendente",
+      vagas: null,
       naEsteira: 100,
       concluidas: 80,
       emAndamento: 18,
       pausadas: 2,
       declinios: 10,
+      faltam: null,
     });
     // cargoId null vira "Sem Cargo".
     expect(r.porCargo[1].cargoId).toBeNull();
     expect(r.porCargo[1].cargoNome).toBe("Sem Cargo");
     expect(r.porCargo[1].naEsteira).toBe(64);
-    // NÃO há meta por cargo: nenhum item carrega vagas nem faltam.
+    // AJUSTE 5: os itens carregam vagas e faltam SEMPRE; sem meta por cargo cadastrada (este grupo),
+    // ambos ficam NULOS ("não informado" na tela), nunca zero.
     for (const item of r.porCargo) {
-      expect(item).not.toHaveProperty("vagas");
-      expect(item).not.toHaveProperty("faltam");
+      expect(item.vagas).toBeNull();
+      expect(item.faltam).toBeNull();
     }
   });
 

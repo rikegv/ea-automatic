@@ -8,11 +8,19 @@ import {
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
-import { admissoes, cargos, clientes, grupoClienteMembros, gruposCliente } from "../../db/schema";
+import {
+  admissoes,
+  cargos,
+  clientes,
+  grupoClienteCargoMeta,
+  grupoClienteMembros,
+  gruposCliente,
+} from "../../db/schema";
 import type {
   AtualizarGrupoClienteDto,
   CriarGrupoClienteDto,
   DefinirMembrosDto,
+  DefinirMetaCargoDto,
 } from "./grupos-cliente.dto";
 import { carimboDoGrupo } from "../../admissoes/grupo-da-admissao";
 import {
@@ -26,8 +34,9 @@ import { efeitosDaGravacao, nomeGrupoNormalizado, resumoDosEfeitos } from "./gru
  *
  * O grupo é EIXO DE LEITURA: serve para filtrar, agrupar e analisar. E AGORA TAMBÉM CARREGA META
  * (decisão do diretor, Alto Volume por grupo): a meta é o alvo de admissões do grupo na esteira, e o
- * painel por grupo responde `faltam = meta - naEsteira`. Fora o carimbo (etapa 3) e a própria meta
- * (campo do grupo, não da admissão), nada aqui escreve em admissão.
+ * painel por grupo responde `faltam = meta - naEsteira`. A meta pode ser cadastrada POR CARGO (ajuste
+ * 5, tabela `grupo_cliente_cargo_meta`), e aí o total do grupo é a SOMA das metas por cargo. Fora o
+ * carimbo (etapa 3) e a meta (do grupo e por cargo, nunca da admissão), nada aqui escreve em admissão.
  */
 @Injectable()
 export class GruposClienteService {
@@ -136,9 +145,9 @@ export class GruposClienteService {
   }
 
   /**
-   * O PAINEL DO GRUPO: a meta contra o que o grupo tem na esteira, num total só (Alto Volume por
-   * grupo). É a pergunta "das N admissões que este grupo deve ter, quantas já estão na esteira e
-   * quantas faltam".
+   * O PAINEL DO GRUPO: a meta contra o que o grupo tem na esteira (Alto Volume por grupo). É a
+   * pergunta "das N admissões que este grupo deve ter, quantas já estão na esteira e quantas faltam",
+   * no total e, quando há meta por cargo (ajuste 5), também por cargo.
    *
    * É LEITURA PARALELA, zero escrita (§A.26), e as contagens saem das MESMAS expressões
    * compartilhadas do Painel e do Alto Volume (`admissaoConcluidaSql`,
@@ -193,7 +202,6 @@ export class GruposClienteService {
       .from(admissoes)
       .where(eq(admissoes.grupoClienteId, id));
 
-    const meta = grupo.meta ?? null;
     const naEsteira = Number(c?.naEsteira ?? 0);
 
     /*
@@ -201,11 +209,6 @@ export class GruposClienteService {
      * farol do `totais` (as MESMAS expressões compartilhadas e os MESMOS recortes literais, não uma
      * segunda régua para divergir), agora agregada por `cargo_id`. Left join em `cargos` só para o
      * nome; `cargoId` null vira "Sem Cargo".
-     *
-     * NÃO HÁ META POR CARGO, DE PROPÓSITO: a meta é um total do grupo (`grupos_cliente.meta`), não um
-     * alvo por cargo. Por isso `porCargo` NÃO traz `vagas` nem `faltam` (a tela mostra "não informado"
-     * nessas colunas por cargo, e o `faltam` total fica no card). Dar um `faltam` por cargo exigiria
-     * ratear uma meta que não existe nesse nível, e isso mentiria.
      *
      * §A.6: contagem + id/nome do cargo. Nenhum CPF, candidato ou CNPJ.
      */
@@ -229,19 +232,86 @@ export class GruposClienteService {
       .from(admissoes)
       .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
       .where(eq(admissoes.grupoClienteId, id))
-      .groupBy(admissoes.cargoId, cargos.nome)
-      // "Sem Cargo" (nome null) por último; o resto alfabético.
-      .orderBy(sql`${cargos.nome} asc nulls last`);
+      .groupBy(admissoes.cargoId, cargos.nome);
 
-    const porCargo = linhasPorCargo.map((l) => ({
-      cargoId: l.cargoId ?? null,
-      cargoNome: l.cargoNome ?? "Sem Cargo",
-      naEsteira: Number(l.naEsteira ?? 0),
-      concluidas: Number(l.concluidas ?? 0),
-      emAndamento: Number(l.emAndamento ?? 0),
-      pausadas: Number(l.pausadas ?? 0),
-      declinios: Number(l.declinios ?? 0),
-    }));
+    /*
+     * A META POR CARGO (ajuste 5): quantas vagas o grupo quer em cada cargo. O cargo com meta mas sem
+     * ninguém na esteira TEM de aparecer na tabela (vagas = meta, naEsteira = 0, faltam = meta), então
+     * não basta somar à agregação de admissões: é uma UNIÃO dos cargos das duas fontes. Só cargo real
+     * (`cargo_id`), nunca o "Sem Cargo", recebe meta.
+     */
+    const metasCargo = await this.db
+      .select({ cargoId: grupoClienteCargoMeta.cargoId, cargoNome: cargos.nome, meta: grupoClienteCargoMeta.meta })
+      .from(grupoClienteCargoMeta)
+      .innerJoin(cargos, eq(cargos.id, grupoClienteCargoMeta.cargoId))
+      .where(eq(grupoClienteCargoMeta.grupoId, id));
+
+    const metaPorCargo = new Map<string, { cargoNome: string; meta: number }>();
+    for (const m of metasCargo) {
+      metaPorCargo.set(m.cargoId, { cargoNome: m.cargoNome, meta: Number(m.meta) });
+    }
+
+    // União dos cargos: os que têm admissão e os que têm meta. Chave "sem-cargo" para o `cargoId` null,
+    // que nunca tem meta.
+    type LinhaCargo = {
+      cargoId: string | null;
+      cargoNome: string;
+      vagas: number | null;
+      naEsteira: number;
+      concluidas: number;
+      emAndamento: number;
+      pausadas: number;
+      declinios: number;
+      faltam: number | null;
+    };
+    const porCargoMapa = new Map<string, LinhaCargo>();
+    for (const l of linhasPorCargo) {
+      const chave = l.cargoId ?? "__sem-cargo";
+      porCargoMapa.set(chave, {
+        cargoId: l.cargoId ?? null,
+        cargoNome: l.cargoNome ?? "Sem Cargo",
+        vagas: null,
+        naEsteira: Number(l.naEsteira ?? 0),
+        concluidas: Number(l.concluidas ?? 0),
+        emAndamento: Number(l.emAndamento ?? 0),
+        pausadas: Number(l.pausadas ?? 0),
+        declinios: Number(l.declinios ?? 0),
+        faltam: null,
+      });
+    }
+    // Aplica a meta por cargo, criando a linha se o cargo não tem admissão ainda (vagas sem gente).
+    for (const [cargoId, { cargoNome, meta: metaDoCargo }] of metaPorCargo) {
+      const linha = porCargoMapa.get(cargoId) ?? {
+        cargoId,
+        cargoNome,
+        vagas: null,
+        naEsteira: 0,
+        concluidas: 0,
+        emAndamento: 0,
+        pausadas: 0,
+        declinios: 0,
+        faltam: null,
+      };
+      linha.vagas = metaDoCargo;
+      linha.faltam = metaDoCargo - linha.naEsteira;
+      porCargoMapa.set(cargoId, linha);
+    }
+
+    const porCargo = [...porCargoMapa.values()].sort((a, b) => {
+      // "Sem Cargo" (cargoId null) por último; o resto alfabético.
+      if (a.cargoId === null) return 1;
+      if (b.cargoId === null) return -1;
+      return a.cargoNome.localeCompare(b.cargoNome, "pt-BR");
+    });
+
+    /*
+     * O TOTAL DO GRUPO passa a ser a SOMA das metas por cargo quando elas existem (decisão do
+     * diretor, ajuste 5); sem nenhuma meta por cargo, cai no total único do grupo
+     * (`grupos_cliente.meta`), que é o legado. Nenhuma meta em lugar nenhum => null, e o `faltam`
+     * também, nunca zero.
+     */
+    const somaMetasCargo = metasCargo.reduce((a, m) => a + Number(m.meta), 0);
+    const meta = metaPorCargo.size > 0 ? somaMetasCargo : (grupo.meta ?? null);
 
     return {
       grupo: { id: grupo.id, nome: grupo.nome, meta },
@@ -260,6 +330,85 @@ export class GruposClienteService {
       },
       porCargo,
     };
+  }
+
+  /**
+   * AS METAS POR CARGO DO GRUPO (ajuste 5): a lista que o livreto edita, só os cargos que já têm
+   * meta definida neste grupo. O catálogo completo de cargos a tela busca à parte (`admin/cargos`);
+   * aqui vem só o que foi cadastrado, para a tela saber quais já têm valor. §A.6: id/nome de cargo e
+   * número, sem PII.
+   */
+  async listarMetasCargo(grupoId: string) {
+    const grupo = await this.db.query.gruposCliente.findFirst({ where: eq(gruposCliente.id, grupoId) });
+    if (!grupo) throw new NotFoundException("Grupo não encontrado.");
+    return this.db
+      .select({
+        cargoId: grupoClienteCargoMeta.cargoId,
+        cargoNome: cargos.nome,
+        meta: grupoClienteCargoMeta.meta,
+      })
+      .from(grupoClienteCargoMeta)
+      .innerJoin(cargos, eq(cargos.id, grupoClienteCargoMeta.cargoId))
+      .where(eq(grupoClienteCargoMeta.grupoId, grupoId))
+      .orderBy(asc(cargos.nome));
+  }
+
+  /**
+   * DEFINE (upsert) ou REMOVE a meta de um cargo no grupo. `meta` nulo (ou ausente) apaga a linha,
+   * que é o "sem meta" daquele cargo; `meta >= 1` grava. A trava do inteiro >= 1 fica no DTO, a mesma
+   * régua do total do grupo. Upsert na chave `(grupo_id, cargo_id)`, garantida pelo índice único.
+   */
+  async definirMetaCargo(grupoId: string, cargoId: string, dto: DefinirMetaCargoDto) {
+    const grupo = await this.db.query.gruposCliente.findFirst({ where: eq(gruposCliente.id, grupoId) });
+    if (!grupo) throw new NotFoundException("Grupo não encontrado.");
+    const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, cargoId) });
+    if (!cargo) throw new NotFoundException("Cargo não encontrado.");
+
+    if (dto.meta == null) {
+      await this.db
+        .delete(grupoClienteCargoMeta)
+        .where(
+          and(
+            eq(grupoClienteCargoMeta.grupoId, grupoId),
+            eq(grupoClienteCargoMeta.cargoId, cargoId),
+          ),
+        );
+    } else {
+      await this.db
+        .insert(grupoClienteCargoMeta)
+        .values({ grupoId, cargoId, meta: dto.meta })
+        .onConflictDoUpdate({
+          target: [grupoClienteCargoMeta.grupoId, grupoClienteCargoMeta.cargoId],
+          set: { meta: dto.meta, atualizadoEm: new Date() },
+        });
+    }
+
+    /*
+     * O TOTAL ÚNICO DO GRUPO ACOMPANHA A SOMA (decisão do diretor: o total do grupo é a soma das
+     * metas por cargo). Assim o livreto, a lista e o Gerenciador leem o mesmo total sem precisar
+     * recalcular. Quando a ÚLTIMA meta por cargo é removida, o total único fica no último valor
+     * (o legado), em vez de cair para zero, que a régua "meta >= 1" não aceitaria.
+     */
+    const totalPorCargo = await this.somaMetasCargo(grupoId);
+    if (totalPorCargo !== null) {
+      await this.db
+        .update(gruposCliente)
+        .set({ meta: totalPorCargo, atualizadoEm: new Date() })
+        .where(eq(gruposCliente.id, grupoId));
+    }
+    return { grupoId, cargoId, meta: dto.meta ?? null, totalDoGrupo: totalPorCargo ?? grupo.meta ?? null };
+  }
+
+  /** A SOMA das metas por cargo de um grupo, ou null quando ele não tem nenhuma meta por cargo. */
+  private async somaMetasCargo(grupoId: string): Promise<number | null> {
+    const [linha] = await this.db
+      .select({
+        soma: sql<number | null>`sum(${grupoClienteCargoMeta.meta})::int`,
+        qtd: sql<number>`count(*)::int`,
+      })
+      .from(grupoClienteCargoMeta)
+      .where(eq(grupoClienteCargoMeta.grupoId, grupoId));
+    return Number(linha?.qtd ?? 0) > 0 ? Number(linha?.soma ?? 0) : null;
   }
 
   async criar(dto: CriarGrupoClienteDto) {

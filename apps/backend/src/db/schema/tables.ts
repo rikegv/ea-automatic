@@ -634,6 +634,38 @@ export const grupoClienteMembros = pgTable("grupo_cliente_membros", {
   criadoEm,
 });
 
+/**
+ * META POR CARGO DO GRUPO (Alto Volume por grupo, ajuste 5: coluna Vagas por cargo).
+ *
+ * A meta do grupo deixa de ser só um total único e passa a poder ser cadastrada POR CARGO, no
+ * livreto de grupos (decisão do diretor). O TOTAL do grupo passa a ser a SOMA das metas por cargo
+ * quando elas existem; o campo `grupos_cliente.meta` fica como o total do legado (grupo sem meta por
+ * cargo) e como ponto de partida. A tabela por cargo do Controle Gerencial lê daqui para mostrar
+ * Vagas e `faltam = vagas - naEsteira` por linha, no lugar do "não informado" de antes.
+ *
+ * `UNIQUE(grupo_id, cargo_id)`: uma meta por cargo em cada grupo, igual a régua "um valor só" das
+ * outras metas. `meta` é inteiro >= 1 (a trava fica no DTO, como no total do grupo); não existir
+ * linha é o "sem meta" daquele cargo. Tudo apaga em cascata com o grupo e com o cargo.
+ */
+export const grupoClienteCargoMeta = pgTable(
+  "grupo_cliente_cargo_meta",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    grupoId: uuid("grupo_id")
+      .notNull()
+      .references(() => gruposCliente.id, { onDelete: "cascade" }),
+    cargoId: uuid("cargo_id")
+      .notNull()
+      .references(() => cargos.id, { onDelete: "cascade" }),
+    meta: integer("meta").notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqGrupoCargo: uniqueIndex("uq_grupo_cliente_cargo_meta").on(t.grupoId, t.cargoId),
+  }),
+);
+
 export const clienteLojas = pgTable(
   "cliente_lojas",
   {
