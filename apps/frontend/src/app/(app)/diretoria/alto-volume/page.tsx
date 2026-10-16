@@ -1,24 +1,23 @@
 "use client";
 
 /**
- * CONTROLE GERENCIAL, visão ALTO VOLUME: a ANÁLISE por grupo de cliente e por projeto.
+ * CONTROLE GERENCIAL, visão ALTO VOLUME: a ANÁLISE por grupo de cliente.
  *
- * A tela tem DUAS visões (pílula Grupo/Projeto) e, em cada uma, DUAS opções de layout para a área de
- * resultados (alternador Opção 1 / Opção 2):
- *  - OPÇÃO 1 (empilhado): cada grupo ou projeto selecionado mostra o próprio card de indicadores e a
- *    própria tabela por cargo logo abaixo, e o próximo repete.
- *  - OPÇÃO 2 (consolidado): primeiro os cards de todos os selecionados, e embaixo UMA tabela por cargo
- *    somando todos os selecionados.
+ * A tela mostra a análise POR GRUPO (um ou mais grupos de cliente, multiselect). O grupo não tem
+ * período, então não há termômetro, e não tem meta por cargo: a coluna Vagas e a coluna Faltam da
+ * tabela por cargo ficam "não informado" por linha, e a meta aparece só no Total (a meta é do grupo
+ * inteiro).
  *
- * A VISÃO GRUPO seleciona um ou MAIS grupos de cliente (multiselect). O grupo não tem período, então
- * não há termômetro, e não tem meta por cargo: a coluna Vagas e a coluna Faltam da tabela por cargo
- * ficam "não informado" por linha, e a meta aparece só no Total (a meta é do grupo inteiro).
+ * DESENHO ATUAL (OST Controle Gerencial, 5 ajustes):
+ *  - Seletor de grupos em CARD PEQUENO que abre um MODAL de seleção (ajuste 4).
+ *  - Bloco de TOTAIS CONSOLIDADOS somando os grupos selecionados, no topo, antes do detalhe por
+ *    grupo (ajuste 1). O detalhe por grupo (card + tabela por cargo) continua empilhado embaixo.
+ *  - Visualização PERMANENTE empilhada: o alternador Opção 1 / Opção 2 saiu (ajuste 2).
+ *  - A visão por PROJETO está DESATIVADA na interface (ajuste 3): a pílula Grupo/Projeto saiu e o
+ *    código da visão de projeto fica dormente, não apagado, para um retorno futuro.
  *
- * A VISÃO PROJETO seleciona UM cliente (seletor único) e um ou MAIS projetos daquele cliente
- * (multiselect). Cada projeto tem meta por cargo, termômetro e preenchimento por cargo.
- *
- * §A.26: a tela é LEITURA. Um GET agregado por item (`/analise`), nenhuma escrita, nenhum botão que
- * mude estado. Trocar a seleção recarrega as análises dos itens escolhidos.
+ * §A.26: a tela é LEITURA. Um GET agregado por grupo (`/analise`), nenhuma escrita, nenhum botão que
+ * mude estado. Trocar a seleção recarrega as análises dos grupos escolhidos.
  *
  * §A.12/§A.20 nas tabelas, §A.24 title case em título e tag, §A.11 sem travessão, §A.28/§A.35
  * multiselect pelo componente compartilhado com busca, §A.29 ordenação clicável.
@@ -27,6 +26,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
+import { consolidarTotaisGrupos, type TotaisConsolidados } from "@/lib/alto-volume";
 import { useAuth } from "@/lib/auth-context";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { cn } from "@/lib/cn";
@@ -38,6 +38,7 @@ import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { NavDiretoria } from "@/components/diretoria/NavDiretoria";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { Icon } from "@/components/ui/Icon";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Projeto {
@@ -305,54 +306,6 @@ function consolidarProjetos(lista: Analise[]): { linhas: LinhaCargoTabela[]; tot
       faltam: vagas - naEsteira,
       pausadas: soma((d) => d.totais.pausadas),
       declinios: soma((d) => d.totais.declinios),
-    },
-  };
-}
-
-function consolidarGrupos(lista: AnaliseGrupo[]): { linhas: LinhaCargoTabela[]; total: TotalCargoTabela } {
-  const mapa = new Map<string, LinhaCargoTabela>();
-  for (const a of lista) {
-    for (const l of a.porCargo) {
-      const k = chaveCargo(l.cargoId, l.cargoNome);
-      const cur =
-        mapa.get(k) ??
-        ({
-          cargoId: l.cargoId,
-          cargoNome: l.cargoNome,
-          vagas: null,
-          naEsteira: 0,
-          concluidas: 0,
-          emAndamento: 0,
-          faltam: null,
-          pausadas: 0,
-          declinios: 0,
-        } as LinhaCargoTabela);
-      cur.naEsteira += l.naEsteira;
-      cur.concluidas += l.concluidas;
-      cur.emAndamento += l.emAndamento;
-      cur.pausadas += l.pausadas;
-      cur.declinios += l.declinios;
-      mapa.set(k, cur);
-    }
-  }
-  const linhas = [...mapa.values()];
-  const soma = (f: (a: AnaliseGrupo) => number) => lista.reduce((acc, a) => acc + f(a), 0);
-  // META total: soma só as metas que existem. Nenhum grupo com meta deixa o total nulo (não zero).
-  let metaTotal: number | null = null;
-  for (const a of lista) {
-    if (a.totais.meta !== null) metaTotal = (metaTotal ?? 0) + a.totais.meta;
-  }
-  const naEsteira = soma((a) => a.totais.naEsteira);
-  return {
-    linhas,
-    total: {
-      vagas: metaTotal,
-      naEsteira,
-      concluidas: soma((a) => a.totais.concluidas),
-      emAndamento: soma((a) => a.totais.emAndamento),
-      faltam: metaTotal === null ? null : metaTotal - naEsteira,
-      pausadas: soma((a) => a.totais.pausadas),
-      declinios: soma((a) => a.totais.declinios),
     },
   };
 }
@@ -1139,33 +1092,274 @@ function BlocoBarrasProjeto({ dados }: { dados: Analise }) {
   );
 }
 
-/* ─ ALTERNADOR DE LAYOUT (Opção 1 / Opção 2) ──────────────────────────────────────────────────── */
+/* ─ TOTAIS CONSOLIDADOS DOS GRUPOS SELECIONADOS (resumo no topo) ───────────────────────────────── */
 
-function AlternadorLayout({ layout, setLayout }: { layout: "1" | "2"; setLayout: (v: "1" | "2") => void }) {
+/**
+ * O BLOCO DE RESUMO que soma os grupos selecionados, no topo da tela, antes do detalhe por grupo
+ * (ajuste 1). Mesmos indicadores do card por grupo, agora somados. A soma respeita a régua da meta
+ * (`consolidarTotaisGrupos`): grupo sem meta entra com as contagens e fica fora do alvo, e sem nenhuma
+ * meta a meta/faltam/percentual ficam "não informado", nunca zero. §A.6: tudo contagem, sem PII.
+ */
+function CardConsolidado({ totais, qtdGrupos }: { totais: TotaisConsolidados; qtdGrupos: number }) {
+  const temMeta = totais.meta != null && totais.meta > 0;
+  const pct = totais.percentual ?? 0;
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-3">
-      <div className="inline-flex rounded-full border border-[var(--border)] bg-[var(--surface-2)] p-1">
-        {(["1", "2"] as const).map((op) => (
-          <button
-            key={op}
-            type="button"
-            onClick={() => setLayout(op)}
-            aria-pressed={layout === op}
-            className={cn(
-              "rounded-full px-5 py-1.5 text-sm font-semibold transition",
-              layout === op ? "bg-[var(--accent)] text-white" : "text-dim hover:text-text",
-            )}
-          >
-            {op === "1" ? "Opção 1" : "Opção 2"}
-          </button>
-        ))}
-      </div>
-      <span className="text-sm text-dim">
-        {layout === "1"
-          ? "Empilhado: cada selecionado com o próprio card e a própria tabela por cargo."
-          : "Consolidado: os cards de todos os selecionados e uma tabela por cargo somando todos."}
-      </span>
+    <div className="mb-8 grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <GlassCard className="p-4">
+        <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="text-[17px] font-semibold text-text">Totais Consolidados</h2>
+          <span className="text-sm text-dim">
+            soma dos {qtdGrupos} {qtdGrupos === 1 ? "grupo selecionado" : "grupos selecionados"}
+          </span>
+        </div>
+
+        {totais.gruposSemMeta > 0 && (
+          <p className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs text-faint">
+            {totais.gruposSemMeta}{" "}
+            {totais.gruposSemMeta === 1
+              ? "grupo selecionado não tem meta definida, então ele entra na soma das admissões mas fica fora do alvo."
+              : "grupos selecionados não têm meta definida, então eles entram na soma das admissões mas ficam fora do alvo."}
+          </p>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-6">
+          {totais.meta == null ? (
+            <Balde rotulo="Total De Vagas Da Meta" valor={0} textoValor="não informado" />
+          ) : (
+            <Balde rotulo="Total De Vagas Da Meta" valor={totais.meta} />
+          )}
+          <Balde
+            rotulo="Total De Vagas Na Esteira"
+            valor={totais.naEsteira}
+            quebra={`${totais.ativos} ativos, ${totais.emBanco} em banco`}
+            dica="Admissões vivas somadas dos grupos. O banco fica visível mas fora da conta da meta"
+          />
+          <Balde
+            rotulo="Total De Admissões Concluídas"
+            valor={totais.concluidas}
+            cor="var(--ok)"
+            dica="Cadastro concluído e sem integração pendente, a mesma régua do Gerenciador"
+          />
+          <Balde
+            rotulo="Total Em Andamento"
+            valor={totais.emAndamento}
+            cor="var(--accent)"
+            dica="Admissões dos grupos em processo vivo que ainda não concluíram"
+          />
+          {totais.faltam == null ? (
+            <Balde rotulo="Total De Vagas Que Faltam" valor={0} textoValor="não informado" cor="var(--warn)" />
+          ) : (
+            <Balde
+              rotulo="Total De Vagas Que Faltam"
+              valor={totais.faltam}
+              cor="var(--warn)"
+              dica="Meta somada dos grupos menos o que já está na esteira"
+            />
+          )}
+          <BaldeDividido
+            cima={{ rotulo: "Declínios", valor: totais.declinios, cor: "var(--danger)" }}
+            baixo={{ rotulo: "Em Banco", valor: totais.emBanco, cor: "var(--warn)" }}
+          />
+        </div>
+      </GlassCard>
+
+      <GlassCard className="flex flex-col justify-between p-4">
+        <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">% Total Entregue</h3>
+        {!temMeta ? (
+          <div className="my-3">
+            <span className="text-[15px] font-semibold leading-tight text-faint">não informado</span>
+            <p className="mt-1.5 text-xs text-faint">
+              Defina a meta dos grupos para acompanhar o percentual entregue consolidado.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="my-3">
+              <span
+                className="text-[34px] font-semibold leading-none tabular-nums"
+                style={{ color: corDoPreenchimento(pct) }}
+              >
+                {pct}%
+              </span>
+            </div>
+            <div>
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${Math.min(100, pct)}%`, background: corDoPreenchimento(pct) }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-faint">
+                {totais.naEsteira} de {totais.meta} vagas da meta somada
+              </p>
+            </div>
+          </>
+        )}
+      </GlassCard>
     </div>
+  );
+}
+
+/* ─ SELETOR DE GRUPOS: CARD PEQUENO PREMIUM + MODAL (ajuste 4) ─────────────────────────────────── */
+
+/**
+ * O CARD do seletor: pequeno, premium, no padrão do sistema. Quando nada está selecionado, mostra
+ * "Selecione o Grupo" e respira de leve (classe `seletor-grupo-respira`, com guarda de reduced-motion)
+ * para convidar o clique. Com seleção, mostra a contagem e os grupos escolhidos. Clicar abre o modal.
+ */
+function SeletorGruposCard({
+  selecionados,
+  onAbrir,
+}: {
+  selecionados: GrupoDaDash[];
+  onAbrir: () => void;
+}) {
+  const vazio = selecionados.length === 0;
+  return (
+    <button
+      type="button"
+      onClick={onAbrir}
+      aria-label="Selecionar grupos de cliente"
+      className={cn(
+        "glass group mb-5 flex w-full max-w-md items-center gap-3 rounded-2xl border border-[var(--border)] px-4 py-3 text-left transition hover:border-[var(--accent)] hover:bg-[var(--surface)]",
+        vazio && "seletor-grupo-respira",
+      )}
+    >
+      <span
+        aria-hidden
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[18px]"
+        style={{ background: "color-mix(in srgb, var(--accent) 14%, transparent)", color: "var(--accent)" }}
+      >
+        <Icon name="layers" className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        {vazio ? (
+          <>
+            <span className="block text-[15px] font-semibold text-text">Selecione o Grupo</span>
+            <span className="block text-xs text-dim">Toque para escolher um ou mais grupos de cliente.</span>
+          </>
+        ) : (
+          <>
+            <span className="block text-[15px] font-semibold text-text">
+              {selecionados.length === 1 ? "1 Grupo Selecionado" : `${selecionados.length} Grupos Selecionados`}
+            </span>
+            <span className="block truncate text-xs text-dim" title={selecionados.map((g) => g.nome).join(", ")}>
+              {selecionados.map((g) => g.nome).join(", ")}
+            </span>
+          </>
+        )}
+      </span>
+      <span
+        aria-hidden
+        className="shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs font-semibold text-dim transition group-hover:border-[var(--accent)] group-hover:text-accent"
+      >
+        Alterar
+      </span>
+    </button>
+  );
+}
+
+/**
+ * O MODAL de seleção. Lista os grupos com busca (§A.35), seleção múltipla por clique, atalhos de
+ * selecionar todos e limpar, e "Concluir" no rodapé. A seleção aplica na hora (o estado da tela é a
+ * fonte), então "Concluir" apenas fecha. Não fecha ao clicar fora (§A.41, garantido pelo `Modal`).
+ */
+function ModalSeletorGrupos({
+  grupos,
+  selecionadosIds,
+  onChange,
+  onClose,
+}: {
+  grupos: GrupoDaDash[];
+  selecionadosIds: string[];
+  onChange: (ids: string[]) => void;
+  onClose: () => void;
+}) {
+  const [busca, setBusca] = useState("");
+  const sel = useMemo(() => new Set(selecionadosIds), [selecionadosIds]);
+  const filtrados = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return q ? grupos.filter((g) => g.nome.toLowerCase().includes(q)) : grupos;
+  }, [grupos, busca]);
+
+  function alternar(id: string) {
+    onChange(sel.has(id) ? selecionadosIds.filter((x) => x !== id) : [...selecionadosIds, id]);
+  }
+
+  return (
+    <Modal onClose={onClose} className="max-w-lg" ariaLabel="Selecionar Grupos">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-[19px] font-semibold text-text">Selecionar Grupos</h2>
+        <span className="text-sm text-dim tabular-nums">
+          {selecionadosIds.length} de {grupos.length}
+        </span>
+      </div>
+      <p className="mb-3 mt-1 text-sm text-dim">Escolha um ou mais grupos de cliente para analisar.</p>
+
+      <input
+        type="text"
+        value={busca}
+        onChange={(e) => setBusca(e.target.value)}
+        placeholder="Buscar grupo"
+        aria-label="Buscar grupo"
+        className="mb-3 w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm text-text outline-none placeholder:text-faint focus:border-[var(--accent)]"
+      />
+
+      <div className="mb-3 flex items-center gap-4 text-xs">
+        <button
+          type="button"
+          onClick={() => onChange(grupos.map((g) => g.id))}
+          className="font-semibold text-accent hover:underline"
+        >
+          Selecionar Todos
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className="font-semibold text-dim hover:text-text hover:underline"
+        >
+          Limpar
+        </button>
+      </div>
+
+      <div className="max-h-[46vh] overflow-auto rounded-xl border border-[var(--border)]">
+        {filtrados.length === 0 ? (
+          <p className="py-8 text-center text-sm text-faint">Nenhum grupo encontrado.</p>
+        ) : (
+          filtrados.map((g) => {
+            const marcado = sel.has(g.id);
+            return (
+              <button
+                key={g.id}
+                type="button"
+                onClick={() => alternar(g.id)}
+                aria-pressed={marcado}
+                className="flex w-full items-center gap-3 border-b border-[var(--border)] px-3 py-2.5 text-left transition last:border-b-0 hover:bg-[var(--surface)]"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "grid h-5 w-5 shrink-0 place-items-center rounded-md border transition",
+                    marcado ? "border-transparent text-white" : "border-[var(--border)] text-transparent",
+                  )}
+                  style={marcado ? { background: "var(--accent)" } : undefined}
+                >
+                  <Icon name="check" className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm text-text" title={g.nome}>
+                  {g.nome}
+                </span>
+                {g.meta == null && <span className="shrink-0 text-[11px] text-faint">sem meta</span>}
+              </button>
+            );
+          })
+        )}
+      </div>
+
+      <div className="mt-5 flex justify-end">
+        <Button onClick={onClose}>Concluir</Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1174,10 +1368,16 @@ function AlternadorLayout({ layout, setLayout }: { layout: "1" | "2"; setLayout:
 export default function AltoVolumeAnalisePage() {
   const { token } = useAuth();
 
-  /** Pílula Grupo/Projeto: abre em GRUPO por padrão (decisão do diretor). */
-  const [visao, setVisao] = useState<"grupo" | "projeto">("grupo");
-  /** Layout da área de resultados, compartilhado pelas duas visões. */
-  const [layout, setLayout] = useState<"1" | "2">("1");
+  /**
+   * A visão é GRUPO, fixa. A pílula Grupo/Projeto saiu da interface (ajuste 3): a visão por projeto
+   * fica dormente, não apagada, para um retorno futuro. O estado segue tipado como união para o
+   * ramo de projeto continuar compilando sem ser alcançado.
+   */
+  const [visao] = useState<"grupo" | "projeto">("grupo");
+  /** Layout fixo na opção empilhada: o alternador Opção 1 / Opção 2 saiu (ajuste 2). */
+  const [layout] = useState<"1" | "2">("1");
+  /** Modal do seletor de grupos (ajuste 4). */
+  const [modalGruposAberto, setModalGruposAberto] = useState(false);
 
   // VISÃO PROJETO: um cliente (seletor único) e vários projetos daquele cliente (multiselect).
   const [projetos, setProjetos] = useState<Projeto[]>([]);
@@ -1327,8 +1527,19 @@ export default function AltoVolumeAnalisePage() {
     () => projetosSelIds.map((id) => projetoAnalises[id]).filter((d): d is Analise => Boolean(d)),
     [projetosSelIds, projetoAnalises],
   );
-  const grupoConsol = useMemo(() => consolidarGrupos(grupoItens), [grupoItens]);
   const projetoConsol = useMemo(() => consolidarProjetos(projetoItens), [projetoItens]);
+
+  // TOTAIS CONSOLIDADOS dos grupos selecionados (ajuste 1): soma dos indicadores dos grupos que já
+  // responderam, pela mesma régua de meta do card por grupo.
+  const totaisConsolidados = useMemo(
+    () => consolidarTotaisGrupos(grupoItens.map((a) => a.totais)),
+    [grupoItens],
+  );
+  // Os objetos dos grupos de fato selecionados, na ordem do catálogo, para o card do seletor.
+  const gruposSelecionados = useMemo(
+    () => grupos.filter((g) => gruposSelIds.includes(g.id)),
+    [grupos, gruposSelIds],
+  );
 
   return (
     <>
@@ -1342,24 +1553,6 @@ export default function AltoVolumeAnalisePage() {
         <ThemeToggle />
       </div>
 
-      {/* PÍLULA Grupo/Projeto (decisão do diretor): abre em GRUPO. */}
-      <div className="mb-5 inline-flex rounded-full border border-[var(--border)] bg-[var(--surface-2)] p-1">
-        {(["grupo", "projeto"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setVisao(v)}
-            aria-pressed={visao === v}
-            className={cn(
-              "rounded-full px-5 py-1.5 text-sm font-semibold transition",
-              visao === v ? "bg-[var(--accent)] text-white" : "text-dim hover:text-text",
-            )}
-          >
-            {v === "grupo" ? "Grupo" : "Projeto"}
-          </button>
-        ))}
-      </div>
-
       {/* ══════════════ VISÃO POR GRUPO DE CLIENTE ══════════════ */}
       {visao === "grupo" && (
         <>
@@ -1368,22 +1561,19 @@ export default function AltoVolumeAnalisePage() {
             admissões dos CNPJs que ele reúne. O grupo não tem período, então aqui não há termômetro.
           </p>
 
-          <GlassCard className="mb-5 flex flex-wrap items-center gap-3 p-4">
-            <label className="flex items-start gap-2 text-sm text-dim">
-              <span className="mt-2 whitespace-nowrap">Grupos</span>
-              <div className="min-w-[320px]">
-                <MultiSelect
-                  values={gruposSelIds}
-                  onChange={setGruposSelIds}
-                  placeholder="Selecione um ou mais grupos"
-                  ariaLabel="Grupos de cliente"
-                  options={grupos.map((g) => ({ value: g.id, label: g.nome }))}
-                />
-              </div>
-            </label>
-          </GlassCard>
-
-          <AlternadorLayout layout={layout} setLayout={setLayout} />
+          {/* CARD PEQUENO + MODAL do seletor de grupos (ajuste 4). */}
+          <SeletorGruposCard
+            selecionados={gruposSelecionados}
+            onAbrir={() => setModalGruposAberto(true)}
+          />
+          {modalGruposAberto && (
+            <ModalSeletorGrupos
+              grupos={grupos}
+              selecionadosIds={gruposSelIds}
+              onChange={setGruposSelIds}
+              onClose={() => setModalGruposAberto(false)}
+            />
+          )}
 
           {erroGrupo && (
             <p
@@ -1402,41 +1592,30 @@ export default function AltoVolumeAnalisePage() {
             <GlassCard className="p-8 text-center text-faint">Selecione um ou mais grupos.</GlassCard>
           ) : carregandoGrupos && grupoItens.length === 0 ? (
             <GlassCard className="p-8 text-center text-faint">Carregando a análise…</GlassCard>
-          ) : layout === "1" ? (
-            grupoItens.map((a) => (
-              <div key={a.grupo.id} className="mb-8">
-                <CardGrupo a={a} />
-                <GlassCard className="mt-4 overflow-hidden p-2">
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 pb-2 pt-1">
-                    <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">Por Cargo</h3>
-                    <span className="text-sm text-dim">
-                      {a.grupo.nome}. Vagas e Faltam não existem por cargo no grupo: a meta é do grupo
-                      inteiro e aparece só no Total.
-                    </span>
-                  </div>
-                  <TabelaPorCargo linhas={linhasCargoDoGrupo(a)} total={totalCargoDoGrupo(a)} />
-                </GlassCard>
-              </div>
-            ))
           ) : (
             <>
-              <div className="mb-6 space-y-5">
-                {grupoItens.map((a) => (
-                  <CardGrupo key={a.grupo.id} a={a} />
-                ))}
-              </div>
-              <GlassCard className="mb-5 overflow-hidden p-2">
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 pb-2 pt-1">
-                  <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">
-                    Por Cargo, Consolidado
-                  </h3>
-                  <span className="text-sm text-dim">
-                    soma dos {grupoItens.length} grupos selecionados. Vagas e Faltam por cargo ficam
-                    como não informado; a meta total aparece só no Total.
-                  </span>
+              {/* AJUSTE 1: resumo somado no topo, antes do detalhe por grupo. Só aparece com 2 ou mais
+                  grupos, que é quando a soma informa algo que o card do grupo único já não mostra. */}
+              {grupoItens.length > 1 && (
+                <CardConsolidado totais={totaisConsolidados} qtdGrupos={grupoItens.length} />
+              )}
+
+              {/* DETALHE POR GRUPO, empilhado (ajuste 2: visualização permanente). */}
+              {grupoItens.map((a) => (
+                <div key={a.grupo.id} className="mb-8">
+                  <CardGrupo a={a} />
+                  <GlassCard className="mt-4 overflow-hidden p-2">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 pb-2 pt-1">
+                      <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">Por Cargo</h3>
+                      <span className="text-sm text-dim">
+                        {a.grupo.nome}. Vagas e Faltam não existem por cargo no grupo: a meta é do grupo
+                        inteiro e aparece só no Total.
+                      </span>
+                    </div>
+                    <TabelaPorCargo linhas={linhasCargoDoGrupo(a)} total={totalCargoDoGrupo(a)} />
+                  </GlassCard>
                 </div>
-                <TabelaPorCargo linhas={grupoConsol.linhas} total={grupoConsol.total} />
-              </GlassCard>
+              ))}
             </>
           )}
         </>
@@ -1478,8 +1657,6 @@ export default function AltoVolumeAnalisePage() {
               </div>
             </label>
           </GlassCard>
-
-          <AlternadorLayout layout={layout} setLayout={setLayout} />
 
           {erroProj && (
             <p

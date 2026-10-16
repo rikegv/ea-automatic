@@ -66,3 +66,79 @@ export function sugerirProjetoPorPeriodo(
   const maisAntigo = [...cobrem].sort((a, b) => a.dataInicio.localeCompare(b.dataInicio))[0];
   return maisAntigo.id;
 }
+
+/**
+ * CONSOLIDAÇÃO DOS TOTAIS DE VÁRIOS GRUPOS (Controle Gerencial, Alto Volume por grupo).
+ *
+ * É a soma dos indicadores dos grupos selecionados num resumo só, no topo da tela, sem substituir o
+ * detalhe por grupo que fica embaixo. Mora FORA da tela pelo mesmo motivo das outras regras daqui:
+ * é conta, não desenho, e conta sem teste vira número errado silencioso na mão da diretoria.
+ *
+ * A REGRA DA META, que o diretor fixou: meta não definida de um grupo NÃO quebra a soma. A meta
+ * consolidada soma só as metas QUE EXISTEM; grupo legado sem meta entra com as contagens dele e
+ * fica de fora do alvo. Se NENHUM grupo tem meta, a meta e o `faltam` consolidados ficam nulos (não
+ * zero), porque sem alvo não há o que faltar, e zero mentiria dizendo "não falta ninguém". É a mesma
+ * forma do card por grupo (`faltam = meta - naEsteira`, `percentual = naEsteira / meta`).
+ */
+export type TotaisGrupoConsolidavel = {
+  /** Meta do grupo, nula para o legado sem meta. */
+  meta: number | null;
+  naEsteira: number;
+  ativos: number;
+  emBanco: number;
+  concluidas: number;
+  emAndamento: number;
+  pausadas: number;
+  declinios: number;
+};
+
+export type TotaisConsolidados = {
+  /** Soma só das metas existentes; nula quando nenhum grupo tem meta. */
+  meta: number | null;
+  naEsteira: number;
+  ativos: number;
+  emBanco: number;
+  concluidas: number;
+  emAndamento: number;
+  pausadas: number;
+  declinios: number;
+  /** `meta - naEsteira`, nulo quando a meta consolidada é nula. */
+  faltam: number | null;
+  /** `naEsteira / meta` em pontos percentuais; nulo quando não há meta para medir. */
+  percentual: number | null;
+  /** Quantos dos grupos somados têm meta e quantos não têm, para a tela ser honesta sobre a soma. */
+  gruposComMeta: number;
+  gruposSemMeta: number;
+};
+
+export function consolidarTotaisGrupos(totais: TotaisGrupoConsolidavel[]): TotaisConsolidados {
+  const soma = (f: (t: TotaisGrupoConsolidavel) => number) => totais.reduce((a, t) => a + f(t), 0);
+
+  let meta: number | null = null;
+  let gruposComMeta = 0;
+  for (const t of totais) {
+    if (t.meta !== null) {
+      meta = (meta ?? 0) + t.meta;
+      gruposComMeta += 1;
+    }
+  }
+
+  const naEsteira = soma((t) => t.naEsteira);
+  const faltam = meta === null ? null : meta - naEsteira;
+  const percentual = meta !== null && meta > 0 ? Math.round((naEsteira / meta) * 100) : null;
+
+  return {
+    meta,
+    naEsteira,
+    ativos: soma((t) => t.ativos),
+    emBanco: soma((t) => t.emBanco),
+    concluidas: soma((t) => t.concluidas),
+    emAndamento: soma((t) => t.emAndamento),
+    pausadas: soma((t) => t.pausadas),
+    declinios: soma((t) => t.declinios),
+    faltam,
+    percentual,
+    gruposComMeta,
+    gruposSemMeta: totais.length - gruposComMeta,
+  };
+}

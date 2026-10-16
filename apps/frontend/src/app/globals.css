@@ -297,6 +297,29 @@
     }
   }
 
+  /* Card do seletor de grupos (Controle Gerencial, Alto Volume por grupo): quando nada está
+     selecionado, respira de leve com um brilho suave na borda, para convidar o clique sem ser
+     agressivo. Premium e discreto, no padrão do sistema. Respeita quem prefere menos movimento. */
+  @keyframes seletor-grupo-respira {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+      border-color: var(--border);
+    }
+    50% {
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    }
+  }
+  .seletor-grupo-respira {
+    animation: seletor-grupo-respira 2.8s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .seletor-grupo-respira {
+      animation: none;
+    }
+  }
+
   /* Bloco F: barra de rolagem premium (fina, arredondada, cores do tema, clara e escura). Aplicada
      na área de scroll das tabelas (`.ea-scroll`). Substitui o "tubo branco" padrão do navegador. */
   .ea-scroll {
