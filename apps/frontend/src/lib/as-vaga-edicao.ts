@@ -155,6 +155,13 @@ export function textoDaConfirmacao(n: AsVagaEdicaoNegada): {
 export function avisoDaFronteiraDaAdmissao(previa: AsVagaEdicaoPrevia | null): string {
   if (!previa || previa.camposTravadosPelaAdmissao.length === 0) return "";
   const n = previa.enviadosParaAdmissao;
+  // SUPER_ADMIN recebe a prévia com o cliente FORA dos campos travados (OST 16/10/2026). O aviso
+  // então muda: ele pode trocar o cliente aqui, mas a troca mexe só na vaga, e as admissões já
+  // encaminhadas se corrigem uma a uma pela troca de cliente na tela de cada admissão.
+  const clienteDestravado = !previa.camposTravadosPelaAdmissao.includes("codCliente");
+  if (clienteDestravado) {
+    return `Esta vaga já mandou ${plural(n, "pessoa", "pessoas")} para a admissão. Como superadmin, você pode trocar o cliente aqui, e isso muda só a vaga. As admissões já encaminhadas não mudam sozinhas: corrija o cliente de cada uma pela troca de cliente na tela da admissão. Cargo, salário, escala, tempo de contrato, motivo, substituído e local de trabalho seguem do time de ADM.`;
+  }
   return `Esta vaga já mandou ${plural(n, "pessoa", "pessoas")} para a admissão. Cliente, cargo, salário, escala, tempo de contrato, motivo, substituído e local de trabalho agora são do time de ADM, e se alteram na tela da admissão.`;
 }
 

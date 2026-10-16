@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
+import type { AsVagaEdicaoPrevia, AsVagaCampoDaAdmissao } from "@ea/shared-types";
 import {
+  avisoDaFronteiraDaAdmissao,
   confirmacoesDepoisDe,
   corpoDaEdicao,
   podeExcluirVagaPeloPapel,
@@ -100,6 +102,43 @@ describe("o 409 da edição", () => {
     expect(recusaDaEdicao(new ApiError("x", 409, { codigo: "OUTRA_COISA" }))).toBeNull();
     expect(recusaDaEdicao(new ApiError("x", 400, { codigo: "VAGA_NAO_EDITAVEL" }))).toBeNull();
     expect(recusaDaEdicao(new Error("rede"))).toBeNull();
+  });
+});
+
+describe("o aviso da fronteira da admissão segue o papel (Item B, reversão 16/10/2026)", () => {
+  const TODOS_9: AsVagaCampoDaAdmissao[] = [
+    "codCliente",
+    "cargoId",
+    "salarioAbertura",
+    "horarioEscala",
+    "tempoContrato",
+    "motivo",
+    "substituidoNome",
+    "substituidoCpf",
+    "localTrabalho",
+  ];
+  const previa = (campos: AsVagaCampoDaAdmissao[], enviados: number): AsVagaEdicaoPrevia =>
+    ({ camposTravadosPelaAdmissao: campos, enviadosParaAdmissao: enviados } as AsVagaEdicaoPrevia);
+
+  it("sem campo travado (enviados=0): aviso vazio", () => {
+    expect(avisoDaFronteiraDaAdmissao(previa([], 0))).toBe("");
+    expect(avisoDaFronteiraDaAdmissao(null)).toBe("");
+  });
+
+  it("não-SUPER_ADMIN (os 9 travados, cliente incluso): o cliente é do ADM", () => {
+    const aviso = avisoDaFronteiraDaAdmissao(previa(TODOS_9, 2));
+    expect(aviso).toContain("Cliente, cargo");
+    expect(aviso).toContain("são do time de ADM");
+    expect(aviso).not.toContain("Como superadmin");
+  });
+
+  it("SUPER_ADMIN (cliente FORA dos travados): pode trocar o cliente aqui, muda só a vaga", () => {
+    const semCliente = TODOS_9.filter((c) => c !== "codCliente");
+    const aviso = avisoDaFronteiraDaAdmissao(previa(semCliente, 2));
+    expect(aviso).toContain("Como superadmin");
+    expect(aviso).toContain("troca de cliente na tela da admissão");
+    // NÃO diz que o cliente é do ADM, porque ele voltou a ser editável para o superadmin.
+    expect(aviso).not.toContain("Cliente, cargo");
   });
 });
 

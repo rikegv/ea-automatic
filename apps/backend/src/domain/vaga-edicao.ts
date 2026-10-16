@@ -224,6 +224,28 @@ export function camposDaAdmissaoAlterados(
 }
 
 /**
+ * ─ OS CAMPOS QUE A ADMISSÃO AINDA TRAVA NA EDIÇÃO, POR PAPEL (OST 16/10/2026, reversão) ──────────
+ *
+ * A regra anterior travava TODOS os `AS_VAGA_CAMPOS_DA_ADMISSAO` depois que a vaga mandava gente para
+ * a admissão. O diretor REVERTEU para o cliente: o SUPER_ADMIN (e SÓ ele) pode trocar o CLIENTE da
+ * vaga liberada mesmo com candidato já encaminhado. Nada mais afrouxa: os outros oito campos seguem
+ * do ADM, e qualquer outro papel (Master, consultor, comum) continua com os NOVE travados.
+ *
+ * A troca do cliente aqui muda SÓ a vaga. As admissões já encaminhadas se reencaixam uma a uma pela
+ * troca de cliente da própria admissão (`AdmissoesService.trocarCliente`), que refaz vínculo, grupo e
+ * régua e, por construção, NÃO dispara envio ao G.I nem mexe no Drive (decisões 1, 2 e 3 da OST).
+ * Nada cascateia automaticamente a partir desta troca.
+ */
+export function camposTravadosNaEdicao(
+  papel: string | null | undefined,
+): AsVagaCampoDaAdmissao[] {
+  if (papel === "SUPER_ADMIN") {
+    return AS_VAGA_CAMPOS_DA_ADMISSAO.filter((campo) => campo !== "codCliente");
+  }
+  return [...AS_VAGA_CAMPOS_DA_ADMISSAO];
+}
+
+/**
  * ─ AS POSIÇÕES NA EDIÇÃO (decisões 5 e 6) ──────────────────────────────────────────────────────
  *
  * ABAIXO DO ENTREGUE é a MESMA régua de `editarPosicoes`: `excessoDePosicoes`, por lado. Recusa

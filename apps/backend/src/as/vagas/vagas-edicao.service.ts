@@ -7,7 +7,6 @@ import {
 } from "@nestjs/common";
 import { and, asc, count, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import {
-  AS_VAGA_CAMPOS_DA_ADMISSAO,
   AS_VAGA_CAMPOS_NUNCA_EDITAVEIS,
   type AsVagaEdicaoNegada,
   type AsVagaEdicaoPrevia,
@@ -42,6 +41,7 @@ import { excessoDePosicoes, normalizarCodigoVaga } from "../../domain/vaga";
 import {
   VAGA_EDICAO_CAMPOS_DA_TRILHA,
   camposDaAdmissaoAlterados,
+  camposTravadosNaEdicao,
   campoMudou,
   decidirPosicoesDaEdicao,
   trilhaDoCampo,
@@ -196,7 +196,7 @@ export class VagasEdicaoService {
 
   // ─── PRÉVIA DA EDIÇÃO ─────────────────────────────────────────────────────────────────────────
 
-  async previa(id: string): Promise<AsVagaEdicaoPrevia> {
+  async previa(id: string, papel?: string | null): Promise<AsVagaEdicaoPrevia> {
     const regua = await this.statusVaga.regua();
     const etapasDeEntrega = await this.etapas.codigosDeEntregaAoCliente();
     const [vaga] = await this.db.select().from(vagas).where(eq(vagas.id, id)).limit(1);
@@ -212,7 +212,7 @@ export class VagasEdicaoService {
       editavel: motivoNaoEditavel === null,
       motivoNaoEditavel,
       enviadosParaAdmissao: enviados,
-      camposTravadosPelaAdmissao: enviados > 0 ? [...AS_VAGA_CAMPOS_DA_ADMISSAO] : [],
+      camposTravadosPelaAdmissao: enviados > 0 ? camposTravadosNaEdicao(papel) : [],
       entrevistasComOCliente: entrevistas,
       posicoesOficiais: vaga.posicoesOficiais,
       posicoesBanco: vaga.posicoesBanco,
@@ -225,7 +225,12 @@ export class VagasEdicaoService {
 
   // ─── EDITAR ───────────────────────────────────────────────────────────────────────────────────
 
-  async editar(id: string, dto: EditarVagaDto, porId: string): Promise<AsVagaEdicaoResultado> {
+  async editar(
+    id: string,
+    dto: EditarVagaDto,
+    porId: string,
+    papel?: string | null,
+  ): Promise<AsVagaEdicaoResultado> {
     // O CATÁLOGO ANTES DA TRANSAÇÃO (a régua do `VagasService`): o status da vaga se lê sob a trava.
     const regua = await this.statusVaga.regua();
     const etapasDeEntrega = await this.etapas.codigosDeEntregaAoCliente();
@@ -317,8 +322,15 @@ export class VagasEdicaoService {
       const alterou = (c: string) => (alterados as readonly string[]).includes(c);
 
       // ── 5. A FRONTEIRA A&S/ADM, no RESULTADO.
+      // SUPER_ADMIN (e só ele) pode trocar o CLIENTE da vaga mesmo com gente já encaminhada (OST
+      // 16/10/2026, reversão): `camposTravadosNaEdicao` tira o `codCliente` do conjunto travado só
+      // para ele. Os outros oito campos e os demais papéis seguem travados; a troca muda SÓ a vaga,
+      // e as admissões vivas se reencaixam pela troca por admissão, sem tocar G.I nem Drive.
       if ((await this.enviadosParaAdmissao(tx, id)) > 0) {
-        const travados = camposDaAdmissaoAlterados(comparavelAtual, resultado);
+        const aindaTravados = camposTravadosNaEdicao(papel);
+        const travados = camposDaAdmissaoAlterados(comparavelAtual, resultado).filter((c) =>
+          aindaTravados.includes(c),
+        );
         if (travados.length > 0) {
           recusa({
             codigo: "CAMPO_DA_ADMISSAO",

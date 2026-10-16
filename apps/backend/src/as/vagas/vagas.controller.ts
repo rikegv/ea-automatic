@@ -455,8 +455,11 @@ export class VagasController {
    * dois `CONFIRMAR_*` pedem que a tela reenvie o mesmo corpo com a confirmação marcada.
    */
   @Get(":id/edicao-previa")
-  previaDaEdicao(@Param("id", ParseUUIDPipe) id: string) {
-    return this.edicao().previa(id);
+  previaDaEdicao(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    // O papel decide se o seletor de cliente vem destravado: SUPER_ADMIN troca o cliente da vaga
+    // liberada mesmo com gente encaminhada (OST 16/10/2026). A prévia é só conveniência; a trava
+    // de verdade mora no `editar`, que recebe o mesmo papel.
+    return this.edicao().previa(id, user.papel);
   }
 
   @Patch(":id/editar")
@@ -465,7 +468,7 @@ export class VagasController {
     @Body() dto: EditarVagaDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.edicao().editar(id, dto, user.id);
+    return this.edicao().editar(id, dto, user.id, user.papel);
   }
 
   /**
