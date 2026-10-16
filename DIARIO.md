@@ -22796,3 +22796,25 @@ fornecedor foi liberado (§A.48, mas o valor final é false, então não se apli
 **§A.49/§A.32:** worktree pristino `ea-agenda-entrevistas` off `origin/main` (ffad857), sem colisão. Validação do diretor é NA PRODUÇÃO (decisão da OST): o menu nasce SUPER_ADMIN-only, então está invisível até o Rike liberar e validar na tela, e liberar a quem deve ver.
 
 **ABERTO:** validação do Rike na produção + liberação do menu `as-agenda-entrevistas` (§A.23, decisão dele). Débito §A.38 acima. Homolog 3120 segue defasada (175 atrás) e `ea-homolog` sujo (débito herdado, a coordenar).
+
+---
+
+## 16/10/2026: Central das Vagas — Agenda De Entrevistas lista só consultor com acesso de A&S (fora quem só tem ADM) — EM PRODUÇÃO (`addd27f`), Item A da OST
+
+**Pedido do Rike (OST Central das Vagas, 2 ajustes — este é o Item A):** consultor que só tem ADM liberado NÃO pode aparecer na lista de consultores da Agenda de Entrevistas NEM no campo "Consultor da entrevista" do agendamento (individual e em massa). Só quem tem acesso de A&S. Investigar como o sistema distingue ADM de A&S (§A.14). Rike aprovou subir para produção para testar com os consultores reais dele; a prova é em produção (a lista só mostra quem tem A&S).
+
+**Causa (§A.14/§A.27):** a lista do livro da Agenda e do campo "Consultor da entrevista" (individual+massa) vinha de `GET /as/vagas/consultores` (`consultoresParaTransferencia`), que filtrava só `ativo + papelAs='CONSULTOR'`, sem olhar área. Consultor com papel de consultor mas só com ADM liberado aparecia.
+
+**Desenho ESCOPADO (§A.14/§A.26), não reusei o endpoint compartilhado:** `GET /as/vagas/consultores` também alimenta o seletor de "transferência de responsável da vaga" (`TrilhaDaVaga`), que NÃO está nesta OST e cuja lista anda EM PAR com a trava `consultorDeDestino` (§A.26). Mexer nele mudaria a transferência e obrigaria a tocar trava já validada. Então: método NOVO `consultoresDaAgendaDeEntrevistas()` (`vagas.service.ts`) + rota NOVA `GET /as/vagas/consultores-agenda` (mesma `VagasController`, mesmo `MenuGuard` `as-vagas`, sem `@Roles`, espelhando a irmã). Front: hook `useConsultoresDaAgenda` (`lib/as-agenda-entrevistas.ts`) passou a chamar a nova `carregarConsultoresDaAgenda`; `carregarConsultores`/transferência INTACTOS.
+
+**Critério:** `ativo AND papelAs='CONSULTOR' AND (papel='SUPER_ADMIN' OR EXISTS usuario_areas area='AS')`. "Ter acesso de A&S" = área `AS` em `usuario_areas` (mesma segmentação do `MenuGuard`), ou SUPER_ADMIN (acima da segmentação). Fail-closed: sem área `AS`, não entra. Projeção só `id`+`nome` (§A.6, mesma de `consultoresParaTransferencia`). Sem migration (só leitura).
+
+**§A.38 (acionados, com veredito):** `seguranca` APROVADO — auditoria adversarial de RBAC (rota sob `MenuGuard` `as-vagas` reivindicada, não FAIL-OPEN), PII (só id+nome), rota (caminho fixo antes do `@Get(":id")`), injeção (sem interpolação de entrada na SQL; `'AS'`/`'SUPER_ADMIN'` são literais), escopo (transferência intacta). `tester` independente (não-autor) 17/17 em `vagas.consultores-agenda.spec.ts`, fake-db fiel por AST-walk + mutation testing (trocar `OR`→`AND` ou `'AS'`→`'ADM'` quebra o teste: consultor só-ADM comprovadamente fora).
+
+**GATE (verde):** typecheck back+front 0; ESLint 0 nos 4 arquivos; sem travessão (§A.11). Specs dos 3 consumidores + novo: verdes. Suíte backend 889/890: única falha PRÉ-EXISTENTE `vagas.liberar-vaga-completa` (lista fixa espera 9 escritores de `vagas` e o AST-walk acha 8 — falta `as/depara-cliente/fila-de-cliente.service.ts`, que NÃO existe nesta base; drift do teste, alheio a esta frente: meu diff só LÊ `usuarios`/`usuario_areas`, não escreve em `vagas` nem toca `depara-cliente`).
+
+**DEPLOY (§A.49):** worktree pristino `ea-cv-consultor-cliente` off `origin/main` (1687d4d). Commit `addd27f`, push ff `1687d4d..addd27f` (flag `READY_*` criada após gate+aprovação do Rike e removida logo após, §A.7/§A.21), `publicar-producao.sh` sem pipe (build pristino de `origin/main` no `ea-build`, swap de artefato). Produção serve `addd27f`, health backend `3011/api/health`=200 (4s) e frontend `3010/login`=200 (1s), backup `*.bak-20261016-141506` (commit servido antes: `c28d8e0`). EXIT=0.
+
+**§A.49 convivência:** coordenado com a sessão do incidente G.I (henrique-77); esta frente NÃO toca `src/gi/*` (só lê `usuarios`/`usuario_areas`). O incidente do G.I, aliás, se resolveu nesse ínterim (era latência de promoção, não perda de dado; apiSinc=false segue correto, §A.48).
+
+**ABERTO:** validação do Rike em PRODUÇÃO com os consultores reais (gatilho da OST). Item B da mesma OST (trocar cliente de vaga liberada só SUPERADMIN) em construção nesta sessão, registro próprio quando concluído.
