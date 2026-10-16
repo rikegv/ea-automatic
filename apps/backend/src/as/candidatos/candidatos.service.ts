@@ -3112,7 +3112,9 @@ export class CandidatosService {
       if (!c) throw new NotFoundException("Candidatura não encontrada.");
       await this.marcarEntrevista(
         candidaturaId,
-        { etapa: c.etapa, agendadaEm: dto.agendadaEm },
+        // O CONSULTOR escolhido vale para o lote inteiro (OST do complemento); `porId` segue como
+        // rastreio de quem disparou o lote, por linha.
+        { etapa: c.etapa, agendadaEm: dto.agendadaEm, consultorId: dto.consultorId },
         porId,
       );
     });
@@ -4106,7 +4108,13 @@ export class CandidatosService {
 
     await this.db
       .insert(asCandidaturaEntrevistas)
-      .values({ candidaturaId, etapa: dto.etapa, agendadaEm, agendadaPorId: porId })
+      .values({
+        candidaturaId,
+        etapa: dto.etapa,
+        agendadaEm,
+        agendadaPorId: porId,
+        consultorId: dto.consultorId,
+      })
       /*
        * REMARCAR É ESTE `onConflictDoUpdate`, e o alvo é o MESMO par do unique do banco. O AUTOR É
        * REESCRITO junto com a data, de propósito: quem remarcou é quem responde por aquela
@@ -4116,7 +4124,14 @@ export class CandidatosService {
        */
       .onConflictDoUpdate({
         target: [asCandidaturaEntrevistas.candidaturaId, asCandidaturaEntrevistas.etapa],
-        set: { agendadaEm, agendadaPorId: porId, atualizadoEm: new Date() },
+        // O CONSULTOR também é reescrito na remarcação: remarcar é reatribuir, e a nova atribuição
+        // (consultor + quem atribuiu) é a que vale, como a data.
+        set: {
+          agendadaEm,
+          agendadaPorId: porId,
+          consultorId: dto.consultorId,
+          atualizadoEm: new Date(),
+        },
       });
 
     return this.listarEntrevistas(candidaturaId);

@@ -36,7 +36,9 @@ import { useEffect, useState } from "react";
 import type { AsCandidaturaItem, CandidaturaEtapa } from "@ea/shared-types";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
+import { Select } from "@/components/ui/Select";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { useConsultoresDaAgenda } from "@/lib/as-agenda-entrevistas";
 import { dataHoraBr, mensagemDoErro } from "@/lib/as-candidatos";
 import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import {
@@ -62,8 +64,11 @@ export function EntrevistaDaCandidatura({
   const { etapas } = useEtapas();
   const { codigos } = useEtapasComEntrevista();
   const { entrevistas, erro: erroLeitura, substituir } = useEntrevistas(candidatura.id, token);
+  const { consultores } = useConsultoresDaAgenda(token);
 
   const [quando, setQuando] = useState("");
+  /** O CONSULTOR da entrevista (complemento): quem agenda escolhe para quem vai. Para si ou para outro. */
+  const [consultorId, setConsultorId] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -86,7 +91,7 @@ export function EntrevistaDaCandidatura({
   const instante = instanteDoCampo(quando);
 
   async function salvar() {
-    if (!instante) return;
+    if (!instante || !consultorId) return;
     setErro(null);
     setSalvando(true);
     try {
@@ -95,7 +100,7 @@ export function EntrevistaDaCandidatura({
       substituir(
         await marcarEntrevista(
           candidatura.id,
-          { etapa: candidatura.etapa as CandidaturaEtapa, agendadaEm: instante },
+          { etapa: candidatura.etapa as CandidaturaEtapa, agendadaEm: instante, consultorId },
           token,
         ),
       );
@@ -131,6 +136,20 @@ export function EntrevistaDaCandidatura({
 
       {oferece ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3.5">
+          {/* O CONSULTOR DA ENTREVISTA (complemento): quem agenda escolhe para quem a entrevista vai,
+              e ela cai na agenda DELE. Para si mesmo, escolhe a si mesmo. §A.35: Select do design
+              system, com busca quando a lista é longa. */}
+          <label className="mb-3 flex flex-col gap-1.5">
+            <span className="text-[12.5px] text-dim">Consultor da entrevista</span>
+            <Select
+              value={consultorId}
+              onChange={(v) => setConsultorId(v)}
+              options={consultores.map((c) => ({ value: c.id, label: c.nome }))}
+              placeholder="Escolha para qual consultor é esta entrevista"
+              ariaLabel="Consultor da entrevista"
+              disabled={desabilitado || salvando}
+            />
+          </label>
           <label className="flex flex-col gap-1.5">
             <span className="text-[12.5px] text-dim">
               {jaMarcada
@@ -154,7 +173,7 @@ export function EntrevistaDaCandidatura({
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
               className="px-4 py-2.5"
-              disabled={desabilitado || salvando || instante === null}
+              disabled={desabilitado || salvando || instante === null || consultorId === ""}
               onClick={() => void salvar()}
             >
               <Icon name="check" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />

@@ -75,6 +75,7 @@ import {
   instanteDoCampo,
   useEtapasComEntrevista,
 } from "@/lib/as-entrevistas";
+import { useConsultoresDaAgenda } from "@/lib/as-agenda-entrevistas";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
 import {
@@ -449,13 +450,14 @@ export function AcoesEmMassaDaVaga({
         <AgendarEntrevistaEmLoteModal
           selecionadas={selecionadas}
           codigosComEntrevista={codigosComEntrevista}
+          token={token}
           processando={processando}
           erro={erro}
           bloqueado={acimaDoTeto}
           onCancelar={() => setAcao(null)}
-          onConfirmar={(agendadaEm) =>
+          onConfirmar={(agendadaEm, consultorId) =>
             void executar("Agendar Entrevista Em Massa", () =>
-              agendarEntrevistaEmLote(ids, agendadaEm, token),
+              agendarEntrevistaEmLote(ids, agendadaEm, consultorId, token),
             )
           }
         />
@@ -754,6 +756,7 @@ function MoverEmLoteModal({
 function AgendarEntrevistaEmLoteModal({
   selecionadas,
   codigosComEntrevista,
+  token,
   processando,
   erro,
   bloqueado,
@@ -762,13 +765,17 @@ function AgendarEntrevistaEmLoteModal({
 }: {
   selecionadas: AsCandidaturaItem[];
   codigosComEntrevista: string[];
+  token: string | null;
   processando: boolean;
   erro: string | null;
   bloqueado: boolean;
   onCancelar: () => void;
-  onConfirmar: (agendadaEm: string) => void;
+  onConfirmar: (agendadaEm: string, consultorId: string) => void;
 }) {
   const [quando, setQuando] = useState("");
+  /** O CONSULTOR da entrevista do lote inteiro (complemento): o escolhido vale para todos. */
+  const [consultorId, setConsultorId] = useState("");
+  const { consultores } = useConsultoresDaAgenda(token);
   const instante = instanteDoCampo(quando);
   /** Quem da seleção está numa etapa de entrevista (os alvos reais); o resto volta em falhas. */
   const alvos = selecionadas.filter((c) => etapaAceitaEntrevista(c.etapa, codigosComEntrevista)).length;
@@ -781,10 +788,23 @@ function AgendarEntrevistaEmLoteModal({
       acao="Agendar entrevista"
       processando={processando}
       erro={erro}
-      impedido={bloqueado || alvos === 0 || instante === null}
+      impedido={bloqueado || alvos === 0 || instante === null || consultorId === ""}
       onCancelar={onCancelar}
-      onConfirmar={() => instante && onConfirmar(instante)}
+      onConfirmar={() => instante && consultorId && onConfirmar(instante, consultorId)}
     >
+      <Secao titulo="Consultor Da Entrevista">
+        {/* Quem agenda escolhe PARA QUAL consultor vai o lote; a entrevista cai na agenda dele
+            (complemento). §A.35: Select do design system, com busca em lista longa. */}
+        <Select
+          value={consultorId}
+          onChange={(v) => setConsultorId(v)}
+          options={consultores.map((c) => ({ value: c.id, label: c.nome }))}
+          placeholder="Escolha para qual consultor é este lote"
+          ariaLabel="Consultor da entrevista do lote"
+          disabled={processando}
+        />
+      </Secao>
+
       <Secao titulo="Data E Horário">
         {/* UM CAMPO SÓ (`datetime-local`), como no agendamento individual: data e hora juntas evitam
             o estado impossível "hora sem dia". §A.35 recorta o `<select>` cru, não este controle. */}

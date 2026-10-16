@@ -211,6 +211,16 @@ export const SELECAO: NavDef[] = [
     codigo: "as-vagas",
     descricao: "Aberturas de vaga do processo seletivo, com código próprio.",
   },
+  {
+    // AGENDA DE ENTREVISTAS (A&S, Central das Vagas): governada pelo menu `as-agenda-entrevistas`,
+    // que nasce só para o SUPER_ADMIN (§A.23). A linha aqui não concede nada; só faz o item aparecer
+    // para quem já tem a permissão. Ícone `clock`: é a agenda, por horário.
+    href: "/as/agenda-entrevistas",
+    icon: "clock",
+    label: "Agenda De Entrevistas",
+    codigo: "as-agenda-entrevistas",
+    descricao: "A agenda de entrevistas de cada consultor, por mês, dia e horário.",
+  },
   /**
    * CENTRAL DE CANDIDATOS: a entrada estava FALTANDO na barra (achado de 27/08).
    *

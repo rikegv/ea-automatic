@@ -134,12 +134,14 @@ export function moverEtapaEmLote(
 export function agendarEntrevistaEmLote(
   candidaturaIds: string[],
   agendadaEm: string,
+  // O CONSULTOR da entrevista do lote inteiro (complemento da OST): o escolhido vale para todos.
+  consultorId: string,
   token: string | null,
 ): Promise<AsResultadoEmMassa> {
   return apiFetch<AsResultadoEmMassa>("/as/candidatos/candidaturas/lote/entrevista", {
     method: "POST",
     token,
-    body: { candidaturaIds, agendadaEm },
+    body: { candidaturaIds, agendadaEm, consultorId },
   });
 }
 

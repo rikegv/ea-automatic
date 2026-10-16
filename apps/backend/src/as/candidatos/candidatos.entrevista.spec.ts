@@ -27,6 +27,7 @@ import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
  */
 
 const AUTOR = "user-1";
+const CONSULTOR = "consultor-9";
 const QUINTA_AS_15H = "2026-10-01T18:00:00.000Z";
 const SEXTA_AS_10H = "2026-10-02T13:00:00.000Z";
 
@@ -163,12 +164,12 @@ describe("1. a entrevista mora por ETAPA: as duas convivem, e é isso que a tabe
 
     await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
       AUTOR,
     );
     const lista = await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_CLIENTE", agendadaEm: SEXTA_AS_10H },
+      { etapa: "ENTREVISTA_CLIENTE", agendadaEm: SEXTA_AS_10H, consultorId: CONSULTOR },
       AUTOR,
     );
 
@@ -183,12 +184,12 @@ describe("1. a entrevista mora por ETAPA: as duas convivem, e é isso que a tabe
 
     await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_CLIENTE", agendadaEm: SEXTA_AS_10H },
+      { etapa: "ENTREVISTA_CLIENTE", agendadaEm: SEXTA_AS_10H, consultorId: CONSULTOR },
       AUTOR,
     );
     await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
       AUTOR,
     );
 
@@ -203,12 +204,12 @@ describe("2. remarcar é o MESMO gesto, e ele reescreve a linha em vez de criar 
 
     await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
       AUTOR,
     );
     const lista = await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: SEXTA_AS_10H },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: SEXTA_AS_10H, consultorId: CONSULTOR },
       AUTOR,
     );
 
@@ -227,7 +228,7 @@ describe("2. remarcar é o MESMO gesto, e ele reescreve a linha em vez de criar 
 
     await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
       AUTOR,
     );
 
@@ -241,7 +242,7 @@ describe("3. onde cabe entrevista vem do CATÁLOGO, e o vazio é fail-closed", (
     const b = banco();
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "TRIAGEM", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "TRIAGEM", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     expect(erro).toBeInstanceOf(BadRequestException);
@@ -253,7 +254,7 @@ describe("3. onde cabe entrevista vem do CATÁLOGO, e o vazio é fail-closed", (
     const b = banco();
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "ETAPA_QUE_NAO_EXISTE", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "ETAPA_QUE_NAO_EXISTE", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     expect(erro).toBeInstanceOf(BadRequestException);
@@ -269,7 +270,7 @@ describe("3. onde cabe entrevista vem do CATÁLOGO, e o vazio é fail-closed", (
     const b = banco({ semEtapaComEntrevista: true });
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     expect(erro).toBeInstanceOf(BadRequestException);
@@ -282,7 +283,7 @@ describe("4. as guardas da candidatura", () => {
     const b = banco({ situacao: "DESCARTADO" });
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     expect(erro).toBeInstanceOf(ConflictException);
@@ -295,7 +296,7 @@ describe("4. as guardas da candidatura", () => {
     const b = banco({ semCandidatura: true });
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     expect(erro).toBeInstanceOf(NotFoundException);
@@ -312,7 +313,7 @@ describe("5. a marcação PASSADA é aceita, porque registrar depois é o caso n
 
     const lista = await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: "2020-01-02T12:00:00.000Z" },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: "2020-01-02T12:00:00.000Z", consultorId: CONSULTOR },
       AUTOR,
     );
 
@@ -335,7 +336,7 @@ describe("6. a vaga precisa estar EM PROCESSO (achado do `tester`, §A.38)", () 
     const b = banco({ vagaStatus: status });
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     expect(erro).toBeInstanceOf(ConflictException);
@@ -352,7 +353,7 @@ describe("6. a vaga precisa estar EM PROCESSO (achado do `tester`, §A.38)", () 
     const b = banco({ vagaStatus: "FECHADA" });
 
     const erro = await b.service
-      .marcarEntrevista("cand-1", { etapa: "TRIAGEM", agendadaEm: QUINTA_AS_15H }, AUTOR)
+      .marcarEntrevista("cand-1", { etapa: "TRIAGEM", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR }, AUTOR)
       .catch((e: unknown) => e);
 
     const frase = String((erro as ConflictException).message);
@@ -366,10 +367,52 @@ describe("6. a vaga precisa estar EM PROCESSO (achado do `tester`, §A.38)", () 
 
     const lista = await b.service.marcarEntrevista(
       "cand-1",
-      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H },
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
       AUTOR,
     );
 
     expect(lista).toHaveLength(1);
+  });
+});
+
+describe("7. o CONSULTOR escolhido e o RASTREIO de quem atribuiu são campos distintos (complemento)", () => {
+  /**
+   * O COMPLEMENTO SEPAROU DUAS PERGUNTAS que antes eram uma só: "de quem é a agenda" (o consultor
+   * escolhido) e "quem atribuiu" (quem agendou). O teste prova que o insert grava as duas em colunas
+   * distintas, para a agenda filtrar por uma e o rastreio mostrar a outra.
+   */
+  it("grava o consultor escolhido E, separado, quem atribuiu (quem agendou)", async () => {
+    const b = banco();
+
+    await b.service.marcarEntrevista(
+      "cand-1",
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
+      AUTOR,
+    );
+
+    const linha = [...b.entrevistas.values()][0]!;
+    expect(linha.consultorId).toBe(CONSULTOR);
+    expect(linha.agendadaPorId).toBe(AUTOR);
+  });
+
+  /** Remarcar é reatribuir: troca o consultor E o autor, sem duplicar a linha daquela etapa. */
+  it("remarcar reatribui o consultor e o autor, sem criar a segunda linha", async () => {
+    const b = banco();
+
+    await b.service.marcarEntrevista(
+      "cand-1",
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: QUINTA_AS_15H, consultorId: CONSULTOR },
+      AUTOR,
+    );
+    await b.service.marcarEntrevista(
+      "cand-1",
+      { etapa: "ENTREVISTA_SOULAN", agendadaEm: SEXTA_AS_10H, consultorId: "consultor-outro" },
+      "user-outro",
+    );
+
+    expect(b.entrevistas.size).toBe(1);
+    const linha = [...b.entrevistas.values()][0]!;
+    expect(linha.consultorId).toBe("consultor-outro");
+    expect(linha.agendadaPorId).toBe("user-outro");
   });
 });

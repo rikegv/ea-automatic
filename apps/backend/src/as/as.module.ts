@@ -60,6 +60,8 @@ import { VagaStatusController } from "./vaga-status/vaga-status.controller";
 import { VagaStatusService } from "./vaga-status/vaga-status.service";
 import { VagasController } from "./vagas/vagas.controller";
 import { VagasService } from "./vagas/vagas.service";
+import { AgendaEntrevistasController } from "./agenda-entrevistas/agenda-entrevistas.controller";
+import { AgendaEntrevistasService } from "./agenda-entrevistas/agenda-entrevistas.service";
 import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
 
 /**
@@ -180,6 +182,9 @@ import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
   imports: [AdmissoesModule, PandapeArquivosModule, PortalModule],
   controllers: [
     VagasController,
+    // AGENDA DE ENTREVISTAS (A&S, Central das Vagas). Classe própria, reivindicada pelo menu
+    // `as-agenda-entrevistas` (sem o qual o `MenuGuard` a deixaria aberta, pois é FAIL-OPEN).
+    AgendaEntrevistasController,
     /*
      * A SHORTLIST DA VAGA (Frente E, pontos 10 e 11). CLASSE PRÓPRIA, e a separação é de TAMANHO e
      * NUNCA de permissão: ela é reivindicada pelo MESMO menu `as-vagas` que a `VagasController`
@@ -271,6 +276,7 @@ import { VagasEdicaoService } from "./vagas/vagas-edicao.service";
   // vaga recebe candidato?" também.
   providers: [
     VagasService,
+    AgendaEntrevistasService,
     // Editar e excluir a vaga JÁ LIBERADA (05/10/2026). Usa as peças do `VagasService`, não o `atualizar`.
     VagasEdicaoService,
     /*

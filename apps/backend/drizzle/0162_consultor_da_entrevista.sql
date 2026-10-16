@@ -1,0 +1,4 @@
+ALTER TABLE "as_candidatura_entrevistas" ADD COLUMN "consultor_id" uuid;--> statement-breakpoint
+ALTER TABLE "as_candidatura_entrevistas" ADD CONSTRAINT "as_candidatura_entrevistas_consultor_id_usuarios_id_fk" FOREIGN KEY ("consultor_id") REFERENCES "public"."usuarios"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_as_candidatura_entrevistas_consultor" ON "as_candidatura_entrevistas" ("consultor_id","agendada_em");--> statement-breakpoint
+UPDATE "as_candidatura_entrevistas" SET "consultor_id" = "agendada_por_id" WHERE "consultor_id" IS NULL;

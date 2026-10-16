@@ -138,6 +138,16 @@ vi.mock("@/lib/as-entrevistas", async () => {
   };
 });
 
+// O CONSULTOR DA ENTREVISTA (complemento): o modal de agendar em massa oferece o campo; a lista vem
+// deste hook, dublado para o Select ter opções.
+vi.mock("@/lib/as-agenda-entrevistas", () => ({
+  useConsultoresDaAgenda: () => ({
+    consultores: [{ id: "consultor-7", nome: "Maria Consultora" }],
+    carregando: false,
+    erro: null,
+  }),
+}));
+
 import { AcoesEmMassaDaVaga } from "./AcoesEmMassaDaVaga";
 
 /**
@@ -433,7 +443,7 @@ describe("agendar entrevista em massa (ITEM 4)", () => {
     expect(screen.queryByText(/Agendar entrevista/i)).toBeNull();
   });
 
-  it("aplica o MESMO instante ao lote, chamando agendarEntrevistaEmLote com os ids e o token", async () => {
+  it("aplica o MESMO instante e o CONSULTOR escolhido ao lote, com os ids e o token", async () => {
     montar([
       candidatura({ id: "cand-1", etapa: "ENTREVISTA_SOULAN" }),
       candidatura({ id: "cand-2", candidatoNome: "Beltrana", etapa: "ENTREVISTA_CLIENTE" }),
@@ -443,20 +453,42 @@ describe("agendar entrevista em massa (ITEM 4)", () => {
     const campo = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(campo, { target: { value: "2026-10-20T10:00" } });
 
+    // Escolhe o consultor da entrevista do lote (complemento): sem ele o confirmar fica travado.
+    fireEvent.click(screen.getByRole("button", { name: "Consultor da entrevista do lote" }));
+    fireEvent.click(screen.getByText("Maria Consultora"));
+
     fireEvent.click(
       screen.getAllByRole("button").find((b) => (b.textContent ?? "").trim() === "Agendar entrevista") as HTMLElement,
     );
 
     await waitFor(() => expect(agendarEntrevistaEmLote).toHaveBeenCalledTimes(1));
-    const [ids, agendadaEm, token] = agendarEntrevistaEmLote.mock.calls[0] as unknown as [
+    const [ids, agendadaEm, consultorId, token] = agendarEntrevistaEmLote.mock.calls[0] as unknown as [
       string[],
+      string,
       string,
       string,
     ];
     expect([...ids].sort()).toEqual(["cand-1", "cand-2"]);
     expect(typeof agendadaEm).toBe("string");
     expect(agendadaEm.length).toBeGreaterThan(0);
+    // O CONSULTOR escolhido vale para o lote inteiro (complemento).
+    expect(consultorId).toBe("consultor-7");
     expect(token).toBe("t");
+  });
+
+  it("o confirmar fica travado até escolher o consultor da entrevista do lote (complemento)", () => {
+    montar([
+      candidatura({ id: "cand-1", etapa: "ENTREVISTA_SOULAN" }),
+      candidatura({ id: "cand-2", candidatoNome: "Beltrana", etapa: "ENTREVISTA_CLIENTE" }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /agendar entrevista \(2\)/i }));
+    const campo = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(campo, { target: { value: "2026-10-20T10:00" } });
+    // Com data mas SEM consultor, o botão de confirmar está desabilitado.
+    const confirmar = screen
+      .getAllByRole("button")
+      .find((b) => (b.textContent ?? "").trim() === "Agendar entrevista") as HTMLButtonElement;
+    expect(confirmar.disabled).toBe(true);
   });
 });
 

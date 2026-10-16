@@ -1037,6 +1037,30 @@ export const MENUS: MenuDef[] = [
   },
   {
     /**
+     * AGENDA DE ENTREVISTAS (A&S, Central das Vagas): a agenda, por consultor, de quem tem entrevista
+     * com data e horário marcados. Formato de livro: consultor, mês, horários, e as pessoas de cada
+     * horário com a vaga de cada uma.
+     *
+     * §A.23, SEM EXCEÇÃO: o menu NASCE SÓ PARA O SUPER_ADMIN. O convergedor do boot REGISTRA o menu
+     * no catálogo (para existir e ser selecionável na tela de liberação) e PARA POR AÍ: nenhuma
+     * concessão acontece aqui, nenhum seed roda, e não aparecer para os demais usuários NÃO é bug.
+     * Quem libera quem enxerga é o diretor.
+     *
+     * A CONTROLLER INTEIRA é reivindicada, porque o `MenuGuard` é FAIL-OPEN para operação que ninguém
+     * reivindica: sem esta linha a agenda ficaria alcançável por qualquer autenticado, com `curl`, e
+     * ela devolve NOME de candidato e vaga (§A.6). `areas: ["AS"]` é obrigatório (o default é ADM), e
+     * o grupo `SELECAO` o deixa fora de qualquer backfill de COMUM por construção.
+     */
+    codigo: "as-agenda-entrevistas",
+    rotulo: "Agenda De Entrevistas",
+    href: "/as/agenda-entrevistas",
+    grupo: "SELECAO",
+    ordem: 43,
+    areas: ["AS"],
+    operacoes: ["AgendaEntrevistasController.*"],
+  },
+  {
+    /**
      * ETAPAS DO FUNIL (A&S): o gerenciador da lista de etapas, que deixou de ser enum e virou
      * catálogo (`as_etapas_funil`, migration 0100).
      *
@@ -1481,6 +1505,9 @@ export function areasDeNascimento(menu: MenuDef): Area[] {
 export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "as-vagas",
   "as-candidatos",
+  // A AGENDA DE ENTREVISTAS: menu de A&S, nasce só na área AS (grupo SELECAO, como a Central de
+  // Vagas a que pertence). Declarado aqui para a prova de nascimento ser deliberada, não descuido.
+  "as-agenda-entrevistas",
   // A FILA DE REVISAO DAS DIVERGENCIAS DA INGESTAO: menu de A&S, nasce so na area AS. Mora no grupo
   // ADMIN por dois motivos medidos, e nenhum deles e estetico: o grupo OPERACAO a faria entrar em
   // `MENUS_PADRAO_COMUM` e se conceder sozinha num backfill, e o prefixo `as-` a arrastaria para a

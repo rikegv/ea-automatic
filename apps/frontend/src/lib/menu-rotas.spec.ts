@@ -41,6 +41,12 @@ describe("menuDaRota (guard de rota do front, OST permissão de menu)", () => {
     expect(menuDaRota("/admin/as/etapas")).not.toBe("as-vagas");
   });
 
+  it("a Agenda De Entrevistas é governada pelo seu próprio menu, e não pela Central De Vagas", () => {
+    expect(menuDaRota("/as/agenda-entrevistas")).toBe("as-agenda-entrevistas");
+    // o prefixo não é engolido por `/as/vagas` nem vice-versa.
+    expect(menuDaRota("/as/vagas")).not.toBe("as-agenda-entrevistas");
+  });
+
   it("rota não governada por menu devolve null (home, raiz do admin, sessão)", () => {
     expect(menuDaRota("/")).toBeNull();
     expect(menuDaRota("/admin")).toBeNull();

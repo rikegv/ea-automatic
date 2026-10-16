@@ -1114,6 +1114,13 @@
       "when": 1792101353255,
       "tag": "0161_consultor_responsavel_frente",
       "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1792188000000,
+      "tag": "0162_consultor_da_entrevista",
+      "breakpoints": true
     }
   ]
 }

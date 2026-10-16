@@ -21,6 +21,7 @@ import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
  */
 
 const PORID = "consultor-9";
+const CONSULTOR = "consultor-lote";
 const QUANDO = "2026-10-20T13:00:00.000Z";
 
 /** Candidaturas servidas pelo fake, por id. TRIAGEM não tem entrevista no catálogo semente. */
@@ -98,16 +99,18 @@ describe("agendar entrevista em massa aplica o MESMO instante, cada um na sua et
     const { service, entrevistas } = makeDb();
 
     const r = await service.agendarEntrevistaEmLote(
-      { candidaturaIds: ["cand-soulan", "cand-cliente"], agendadaEm: QUANDO },
+      { candidaturaIds: ["cand-soulan", "cand-cliente"], agendadaEm: QUANDO, consultorId: CONSULTOR },
       PORID,
     );
 
     expect(r.aplicadas).toBe(2);
     expect(r.falhas).toHaveLength(0);
     expect(entrevistas).toHaveLength(2);
-    // o MESMO instante para todas, e o autor é o da sessão.
+    // o MESMO instante para todas, o CONSULTOR escolhido vale para o lote inteiro, e o autor (quem
+    // atribuiu) é o da sessão, separado do consultor (complemento).
     for (const e of entrevistas) {
       expect((e.agendadaEm as Date).toISOString()).toBe(QUANDO);
+      expect(e.consultorId).toBe(CONSULTOR);
       expect(e.agendadaPorId).toBe(PORID);
     }
     // cada uma na SUA etapa atual.
@@ -119,7 +122,7 @@ describe("agendar entrevista em massa aplica o MESMO instante, cada um na sua et
     const { service, entrevistas } = makeDb();
 
     const r = await service.agendarEntrevistaEmLote(
-      { candidaturaIds: ["cand-soulan", "cand-triagem", "cand-cliente"], agendadaEm: QUANDO },
+      { candidaturaIds: ["cand-soulan", "cand-triagem", "cand-cliente"], agendadaEm: QUANDO, consultorId: CONSULTOR },
       PORID,
     );
 

@@ -822,6 +822,15 @@ export class MarcarEntrevistaDto {
    */
   @IsISO8601()
   agendadaEm!: string;
+
+  /**
+   * O CONSULTOR DA ENTREVISTA, escolhido por quem agenda (OST do complemento). A entrevista cai na
+   * agenda DELE, não na de quem agendou; quem agendou fica como rastreio (`agendada_por_id`). VEM NO
+   * CORPO e é obrigatório: o formulário sempre oferece a escolha (para si mesmo ou para outro). Sem
+   * `@IsIn`: a lista é de usuários; a FK do banco recusa um id que não exista.
+   */
+  @IsUUID()
+  consultorId!: string;
 }
 
 /**
@@ -1149,6 +1158,14 @@ export class AgendarEntrevistaEmLoteDto {
 
   @IsISO8601()
   agendadaEm!: string;
+
+  /**
+   * O CONSULTOR DA ENTREVISTA do lote inteiro (OST do complemento): o escolhido se aplica a todas as
+   * linhas, cada uma com o rastreio de quem atribuiu (quem disparou o lote). Obrigatório, como no
+   * individual.
+   */
+  @IsUUID()
+  consultorId!: string;
 }
 
 /**

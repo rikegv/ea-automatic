@@ -40,6 +40,18 @@ vi.mock("@/lib/as-entrevistas", async () => {
   };
 });
 
+// O CONSULTOR DA ENTREVISTA (complemento): a lista vem deste hook; dublada para o campo ter opções.
+vi.mock("@/lib/as-agenda-entrevistas", () => ({
+  useConsultoresDaAgenda: () => ({
+    consultores: [
+      { id: "consultor-1", nome: "Maria Consultora" },
+      { id: "consultor-2", nome: "João Consultor" },
+    ],
+    carregando: false,
+    erro: null,
+  }),
+}));
+
 import { EntrevistaDaCandidatura } from "./EntrevistaDaCandidatura";
 
 function candidatura(etapa: string): AsCandidaturaItem {
@@ -100,14 +112,20 @@ describe("quem oferece o controle é o catálogo", () => {
 });
 
 describe("marcar e remarcar", () => {
-  it("manda a etapa ATUAL e o instante, e o botão não libera sem data", async () => {
+  it("manda a etapa ATUAL, o instante e o CONSULTOR escolhido; não libera sem data nem sem consultor", async () => {
     render(<EntrevistaDaCandidatura candidatura={candidatura("ETAPA_COM")} token="t" />);
     const botao = screen.getByRole("button", { name: /Marcar entrevista/ }) as HTMLButtonElement;
     expect(botao.disabled).toBe(true);
 
+    // Só a data NÃO libera: falta o consultor da entrevista (complemento).
     fireEvent.change(screen.getByLabelText("Data e horário da entrevista"), {
       target: { value: "2026-09-26T14:30" },
     });
+    expect(botao.disabled).toBe(true);
+
+    // Escolhe o consultor no Select do design system (trigger pelo ariaLabel, opção pelo nome).
+    fireEvent.click(screen.getByRole("button", { name: "Consultor da entrevista" }));
+    fireEvent.click(screen.getByText("Maria Consultora"));
     expect(botao.disabled).toBe(false);
 
     marcarEntrevista.mockResolvedValueOnce([]);
@@ -118,6 +136,8 @@ describe("marcar e remarcar", () => {
     expect(corpo.etapa).toBe("ETAPA_COM");
     // O INSTANTE, e não a string do campo: é o que o `@IsISO8601` do servidor espera.
     expect(new Date(corpo.agendadaEm).getTime()).toBe(new Date("2026-09-26T14:30").getTime());
+    // O CONSULTOR escolhido viaja no corpo (complemento): a entrevista cai na agenda dele.
+    expect(corpo.consultorId).toBe("consultor-1");
   });
 
   it("com a etapa já marcada, o botão vira REMARCAR e o campo abre preenchido", () => {

@@ -4150,6 +4150,48 @@ export interface AsCandidaturaEntrevista {
 }
 
 /**
+ * ─ A AGENDA DE ENTREVISTAS, POR CONSULTOR (OST da Central das Vagas, livro) ──────────────────────
+ *
+ * A fonte é `as_candidatura_entrevistas`: o consultor da agenda é `agendada_por_id` (quem agendou ou
+ * remarcou, o único vínculo consultor↔entrevista do schema; o fluxo já o trata como "quem responde
+ * pela marcação"). Só linhas com `agendada_em` existem, então "só agendados aparecem" é da própria
+ * fonte. A contagem de PESSOAS é por candidatura (uma pessoa numa vaga): o dia soma as pessoas de
+ * todos os horários, o horário conta as pessoas naquele instante.
+ *
+ * §A.6: o MÊS devolve só contagem por dia, sem nome; o nome do candidato e a vaga só viajam no DIA
+ * aberto (`AsAgendaPessoa`), que é onde a tela os mostra. Nenhum CPF, nenhum contato.
+ */
+export interface AsAgendaDia {
+  /** O dia no fuso da operação (America/Sao_Paulo), em `YYYY-MM-DD`. */
+  data: string;
+  /** Soma de pessoas agendadas no dia, por todos os horários. */
+  pessoas: number;
+}
+
+export interface AsAgendaPessoa {
+  candidaturaId: string;
+  /** Para o atalho "abrir o candidato" (a ficha é por candidato). */
+  candidatoId: string;
+  candidatoNome: string;
+  vagaId: string;
+  vagaNome: string;
+  vagaCodigo: string;
+  /** RASTREIO: quem ATRIBUIU a entrevista a este consultor (quem agendou). Nulo se o autor saiu. */
+  atribuidoPorNome: string | null;
+  /** RASTREIO: quando a atribuição foi feita/refeita (o instante da última marcação), ISO. */
+  atribuidoEm: string;
+}
+
+export interface AsAgendaHorario {
+  /** O instante exato da entrevista, ISO. É a chave que agrupa as pessoas do mesmo horário. */
+  instante: string;
+  /** O horário já formatado no fuso da operação, `HH:MM`, para a tela não reconverter. */
+  hora: string;
+  /** Quem está nesse horário, e para qual vaga. A contagem da tela é `pessoas.length`. */
+  pessoas: AsAgendaPessoa[];
+}
+
+/**
  * ─ O CATÁLOGO DE MOTIVOS DE REENVIO DA SHORTLIST (decisão do diretor) ──────────────────────────
  *
  * MESMA FORMA DO `AsMotivoDescarte`, e a igualdade é de propósito: são dois catálogos gerenciáveis

@@ -5205,7 +5205,20 @@ export const asCandidaturaEntrevistas = pgTable(
       .references(() => asEtapasFunil.codigo, { onDelete: "restrict" }),
     /** DATA E HORÁRIO, num instante só. Ver o bloco acima. */
     agendadaEm: timestamp("agendada_em", { withTimezone: true }).notNull(),
+    /**
+     * QUEM ATRIBUIU (o rastreio): o usuário da sessão que marcou ou remarcou esta entrevista. É
+     * reescrito a cada remarcação, como a data. SET NULL no autor removido (o rastreio perde o nome,
+     * a marcação fica). NÃO é o consultor da agenda: ver `consultorId`.
+     */
     agendadaPorId: uuid("agendada_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * O CONSULTOR DA ENTREVISTA (a quem a agenda pertence), escolhido por quem agenda. A Agenda de
+     * Entrevistas filtra por ELE, não por quem agendou: Henrique pode marcar a entrevista de Maria, e
+     * ela cai na agenda da Maria, com o rastreio de que foi o Henrique quem atribuiu (`agendadaPorId`).
+     * SET NULL no usuário removido. Nulo nas linhas anteriores ao campo (migration 0162 as backfilla
+     * com `agendada_por_id`, que era quem efetivamente respondia pela marcação).
+     */
+    consultorId: uuid("consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
     criadoEm,
     atualizadoEm,
   },
@@ -5222,6 +5235,11 @@ export const asCandidaturaEntrevistas = pgTable(
     ),
     /** A agenda da semana: "o que está marcado entre tal e tal dia", sobre a base inteira. */
     idxAgenda: index("idx_as_candidatura_entrevistas_agenda").on(t.agendadaEm),
+    /** A Agenda de Entrevistas por consultor: "o que o consultor X tem marcado no mês/dia". */
+    idxConsultorAgenda: index("idx_as_candidatura_entrevistas_consultor").on(
+      t.consultorId,
+      t.agendadaEm,
+    ),
   }),
 );
 

@@ -42,7 +42,9 @@ export function listarEntrevistas(
 /** Marca OU remarca: uma rota para os dois gestos, e ela devolve a lista inteira de volta. */
 export function marcarEntrevista(
   candidaturaId: string,
-  entrevista: { etapa: CandidaturaEtapa; agendadaEm: string },
+  // `consultorId`: o CONSULTOR da entrevista escolhido por quem agenda (complemento da OST). A
+  // entrevista cai na agenda dele; quem agenda fica como rastreio no backend (`agendada_por_id`).
+  entrevista: { etapa: CandidaturaEtapa; agendadaEm: string; consultorId: string },
   token: string | null,
 ): Promise<AsCandidaturaEntrevista[]> {
   return apiFetch<AsCandidaturaEntrevista[]>(

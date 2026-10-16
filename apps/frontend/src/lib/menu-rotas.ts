@@ -86,6 +86,11 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, mesmo com o
   // módulo de A&S liberado a ninguém. O backend já barra as operações; isto fecha a porta da tela.
   { prefixo: "/as/vagas", codigo: "as-vagas" },
+  // AGENDA DE ENTREVISTAS (A&S): governada pelo menu `as-agenda-entrevistas`, que nasce só para o
+  // SUPER_ADMIN (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto.
+  // DEVE VIR ANTES de `/as/vagas` NÃO é necessário: o casamento é por prefixo exato do caminho, e
+  // `/as/agenda-entrevistas` não é prefixo de `/as/vagas` nem vice-versa.
+  { prefixo: "/as/agenda-entrevistas", codigo: "as-agenda-entrevistas" },
   // CENTRAL DE CANDIDATOS (A&S, onda 1): governada pelo menu `as-candidatos`, que nasce só para o
   // SUPER_ADMIN (§A.23). Vale com peso extra aqui, porque esta é a primeira tela do sistema com dado
   // pessoal de quem AINDA NÃO É FUNCIONÁRIO: enquanto o menu estiver liberado a ninguém, ela precisa
