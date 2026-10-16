@@ -42,7 +42,6 @@ import {
   SOLICITACOES_POR_HORA,
   codigosIguais,
   decisaoDaIdentidade,
-  divergencias,
   gerarCodigo,
   hashDoCodigo,
   hashDoEmail,
@@ -902,8 +901,6 @@ export class PortalAcessoEmailService {
       const [ficha] = await tx
         .select({
           id: asCandidatos.id,
-          cpf: asCandidatos.cpf,
-          dataNascimento: asCandidatos.dataNascimento,
           anonimizadoEm: asCandidatos.anonimizadoEm,
         })
         .from(asCandidatos)
@@ -949,10 +946,6 @@ export class PortalAcessoEmailService {
         cpfValido,
         jaTravado,
         cpfDeOutro: !!outro,
-        divergentes: divergencias(
-          { cpf, dataNascimento },
-          { cpf: ficha.cpf, dataNascimento: ficha.dataNascimento },
-        ),
       });
 
       if (decisao.tipo === "BILHETE_MORTO") {

@@ -21,12 +21,10 @@ import {
   TAMANHO_CODIGO,
   codigosIguais,
   decisaoDaIdentidade,
-  divergencias,
   gerarCodigo,
   hashDoCodigo,
   hashDoEmail,
   normalizarEmail,
-  type CampoDivergente,
   type DecisaoDaIdentidade,
 } from "../domain/portal-acesso-email";
 
@@ -163,36 +161,36 @@ type EntradaDaDecisao = {
   cpfValido: boolean;
   jaTravado: boolean;
   cpfDeOutro: boolean;
-  divergentes: readonly CampoDivergente[];
 };
 
 /**
- * PRECEDÊNCIA DE REFERÊNCIA, derivada do requisito e da seção 5 da v2, não copiada da implementação
- * (que ainda não existe). O contrato manda "PRECEDENCIA FIXA, testada item a item" e lista os
- * resultados, mas NÃO escreve a ordem entre eles. A ordem abaixo é a que a segurança impõe, e está
- * reportada ao coordenador como lacuna do contrato: se a construção escolher outra, é conversa com
- * ele, não ajuste silencioso deste arquivo.
+ * PRECEDÊNCIA DE REFERÊNCIA, derivada do requisito e da seção 5 da v2.
  *
- * 1. BILHETE MORTO vence tudo. Autenticação antes de qualquer avaliação: se a divergência vencesse
- *    aqui, um chamador SEM bilhete válido GRAVARIA trava no candidato de outra pessoa, que é
- *    negação de serviço com escrita, e a fila do time viraria brinquedo de quem quisesse enchê-la.
+ * DECISÃO DO DIRETOR (16/10/2026): a TRAVA POR DIVERGÊNCIA de CPF/data foi APOSENTADA. O e-mail e o
+ * código são o único portão de acesso, e CPF e data viram CAPTURA. A função `decisaoDaIdentidade`
+ * não recebe mais `divergentes` e não devolve mais `DIVERGENCIA_CADASTRO`. Restam só as travas de
+ * INTEGRIDADE (CPF de outro candidato) e os dois desfechos que não são trava (CPF inválido, bilhete
+ * morto). O catálogo `DIVERGENCIA_CADASTRO` segue existindo para as travas históricas (ver o teste
+ * de catálogo), mas esta porta não o produz mais.
+ *
+ * 1. BILHETE MORTO vence tudo. Autenticação antes de qualquer avaliação: sem bilhete válido, um
+ *    chamador GRAVARIA trava no candidato de outra pessoa, que é negação de serviço com escrita, e a
+ *    fila do time viraria brinquedo de quem quisesse enchê-la.
  * 2. JÁ TRAVADO em seguida. Enquanto travado nada é reavaliado: reavaliar permitiria sobrescrever o
  *    motivo original, apagando da trilha o que de fato travou (a tabela guarda UMA trava por
  *    candidato, `unique` em `as_candidato_id`).
- * 3. CPF INVÁLIDO antes de comparar com a base, e é a primeira linha da tabela da seção 5. Comparar
- *    dígito verificador errado com o cadastro não tem sentido, e travar por erro de digitação do
- *    próprio candidato encheria a fila de destrave de ruído que ele corrige sozinho na tela.
- * 4. CPF DE OUTRO CANDIDATO antes da divergência: é o achado mais grave (dois candidatos disputando
- *    o mesmo CPF, `uq_as_candidatos_cpf`) e é o que a gravação consulta ANTES de tentar escrever.
- * 5. DIVERGÊNCIA de cadastro por último.
- * 6. OK somente quando absolutamente tudo está limpo.
+ * 3. CPF INVÁLIDO, e é a primeira linha da tabela da seção 5. Dígito verificador errado não vira
+ *    pessoa na ficha, e travar por erro de digitação do próprio candidato encheria a fila de
+ *    destrave de ruído que ele corrige sozinho na tela. É INTEGRIDADE, não identidade.
+ * 4. CPF DE OUTRO CANDIDATO: dois candidatos disputando o mesmo CPF (`uq_as_candidatos_cpf`), o que
+ *    a gravação consulta ANTES de tentar escrever. Também é INTEGRIDADE.
+ * 5. OK somente quando absolutamente tudo está limpo.
  */
 function decisaoEsperada(e: EntradaDaDecisao): DecisaoDaIdentidade {
   if (!e.bilheteVivo) return { tipo: "BILHETE_MORTO" };
   if (e.jaTravado) return { tipo: "TRAVAR", motivo: "TRAVA_ANTERIOR" };
   if (!e.cpfValido) return { tipo: "CPF_INVALIDO" };
   if (e.cpfDeOutro) return { tipo: "TRAVAR", motivo: "CPF_DE_OUTRO_CANDIDATO" };
-  if (e.divergentes.length > 0) return { tipo: "TRAVAR", motivo: "DIVERGENCIA_CADASTRO" };
   return { tipo: "OK" };
 }
 
@@ -201,7 +199,6 @@ const LIMPO: EntradaDaDecisao = {
   cpfValido: true,
   jaTravado: false,
   cpfDeOutro: false,
-  divergentes: [],
 };
 
 afterEach(() => {
@@ -637,156 +634,6 @@ describe("normalizarEmail", () => {
   });
 });
 
-describe("divergencias: só CPF e data, e sem retorno antecipado", () => {
-  const REGISTRADO = { cpf: CPF_VALIDO, dataNascimento: DATA_REGISTRADA };
-
-  it("REQUISITO: o catálogo de campos tem só CPF e DATA_NASCIMENTO (a v2 tirou o NOME)", () => {
-    // O candidato não digita nome nesta porta, então não havia com o que confrontar. Um "NOME"
-    // voltando para cá significaria que a tela voltou a pedir nome, o que a auditoria proibiu.
-    const achados = divergencias(
-      { cpf: OUTRO_CPF_VALIDO, dataNascimento: "1985-01-02" },
-      REGISTRADO,
-    );
-    expect([...achados].sort()).toEqual(["CPF", "DATA_NASCIMENTO"]);
-    for (const campo of achados) expect(["CPF", "DATA_NASCIMENTO"]).toContain(campo);
-  });
-
-  it("REQUISITO: campo AUSENTE no registro NÃO é divergência, é dado sendo preenchido", () => {
-    // É o caso da frente inteira: o candidato sem CPF está preenchendo o que falta. Acusar
-    // divergência do que está vazio travaria exatamente quem a porta nova existe para atender. É
-    // também o que a auditoria apontou como vazio por construção (nulo não discorda de nada), e por
-    // isso a v2 não confia SÓ nesta função: o vínculo é que manda.
-    const informado = { cpf: CPF_VALIDO, dataNascimento: DATA_REGISTRADA };
-    expect(divergencias(informado, { cpf: null, dataNascimento: null })).toEqual([]);
-    expect(divergencias(informado, {})).toEqual([]);
-    expect(divergencias(informado, { cpf: "", dataNascimento: "" })).toEqual([]);
-    expect(divergencias(informado, { cpf: "   ", dataNascimento: "   " })).toEqual([]);
-    expect(divergencias(informado, { cpf: undefined, dataNascimento: undefined })).toEqual([]);
-  });
-
-  it("REQUISITO: CPF compara só DÍGITOS, então a máscara casa com a forma crua", () => {
-    expect(
-      divergencias({ cpf: "529.982.247-25", dataNascimento: DATA_REGISTRADA }, REGISTRADO),
-    ).toEqual([]);
-    expect(
-      divergencias({ cpf: " 529 982 247 25 ", dataNascimento: DATA_REGISTRADA }, REGISTRADO),
-    ).toEqual([]);
-    expect(
-      divergencias({ cpf: CPF_VALIDO, dataNascimento: DATA_REGISTRADA }, { ...REGISTRADO, cpf: "529.982.247-25" }),
-    ).toEqual([]);
-  });
-
-  it("REQUISITO (contraprova): CPF de outra pessoa diverge, e prefixo não passa por igual", () => {
-    // O caso do prefixo é o que uma comparação frouxa (`startsWith`, ou "contém") deixaria passar:
-    // CPF truncado casaria com o do cadastro e a trava nunca dispararia.
-    for (const cpf of [OUTRO_CPF_VALIDO, "5299822472", "529982247250"]) {
-      expect(divergencias({ cpf, dataNascimento: DATA_REGISTRADA }, REGISTRADO), cpf).toEqual(["CPF"]);
-    }
-  });
-
-  it("REQUISITO: a data compara só a parte ISO, então timestamp do banco casa com a data digitada", () => {
-    // `as_candidatos.data_nascimento` pode chegar como timestamp e o candidato digita só a data.
-    // Comparar o texto inteiro acusaria divergência em 100% dos casos e travaria todo mundo.
-    expect(
-      divergencias({ cpf: CPF_VALIDO, dataNascimento: "1990-05-17" }, { ...REGISTRADO, dataNascimento: "1990-05-17T00:00:00.000Z" }),
-    ).toEqual([]);
-    expect(
-      divergencias({ cpf: CPF_VALIDO, dataNascimento: "1990-05-17T03:00:00.000Z" }, REGISTRADO),
-    ).toEqual([]);
-    expect(divergencias({ cpf: CPF_VALIDO, dataNascimento: "  1990-05-17  " }, REGISTRADO)).toEqual([]);
-  });
-
-  it("REQUISITO (contraprova): data de outro dia diverge", () => {
-    expect(divergencias({ cpf: CPF_VALIDO, dataNascimento: "1990-05-18" }, REGISTRADO)).toEqual([
-      "DATA_NASCIMENTO",
-    ]);
-  });
-
-  it("REQUISITO: divergência nos DOIS campos devolve os dois", () => {
-    const achados = divergencias({ cpf: OUTRO_CPF_VALIDO, dataNascimento: "1985-01-02" }, REGISTRADO);
-    expect(achados).toHaveLength(2);
-    expect([...achados].sort()).toEqual(["CPF", "DATA_NASCIMENTO"]);
-  });
-
-  it("REQUISITO: SEM retorno antecipado, o segundo campo é avaliado mesmo com o primeiro já divergindo", () => {
-    // Retorno antecipado é canal de tempo (quem responde mais rápido divergiu no primeiro campo) e,
-    // pior, empobrece a contagem de tentativas e a análise de quem destrava, que deixa de saber o
-    // tamanho do problema.
-    const soData = divergencias({ cpf: CPF_VALIDO, dataNascimento: "1985-01-02" }, REGISTRADO);
-    const soCpf = divergencias({ cpf: OUTRO_CPF_VALIDO, dataNascimento: DATA_REGISTRADA }, REGISTRADO);
-    const ambos = divergencias({ cpf: OUTRO_CPF_VALIDO, dataNascimento: "1985-01-02" }, REGISTRADO);
-    expect(soData).toEqual(["DATA_NASCIMENTO"]);
-    expect(soCpf).toEqual(["CPF"]);
-    expect(ambos).toHaveLength(2);
-  });
-
-  it("REQUISITO (propriedade): o resultado é exatamente a UNIÃO das divergências de cada campo, nas 4 combinações", () => {
-    // Prova mais forte que um caso de dois: cada campo é avaliado de forma independente do outro. Se
-    // qualquer um curto-circuitasse o outro, alguma das quatro combinações quebraria.
-    const combinacoes: CampoDivergente[][] = [[], ["CPF"], ["DATA_NASCIMENTO"], ["CPF", "DATA_NASCIMENTO"]];
-    for (const alvo of combinacoes) {
-      const informado = {
-        cpf: alvo.includes("CPF") ? OUTRO_CPF_VALIDO : CPF_VALIDO,
-        dataNascimento: alvo.includes("DATA_NASCIMENTO") ? "1985-01-02" : DATA_REGISTRADA,
-      };
-      expect([...divergencias(informado, REGISTRADO)].sort(), alvo.join("+") || "(nenhuma)").toEqual(
-        [...alvo].sort(),
-      );
-    }
-  });
-
-  it("REQUISITO (§A.6): o retorno só carrega NOMES de campo, nunca o valor informado nem o registrado", () => {
-    // A tabela de travas da v2 não tem sequer coluna de campo divergente, e as colunas de valor são
-    // PROIBIDAS nominalmente (seção 4). Função que devolvesse valor faria o vazamento chegar lá pelo
-    // caminho natural, e à trilha junto.
-    const informado = { cpf: OUTRO_CPF_VALIDO, dataNascimento: "1985-01-02" };
-    const achados = divergencias(informado, REGISTRADO);
-    const texto = JSON.stringify(achados);
-    for (const segredo of [informado.cpf, informado.dataNascimento, REGISTRADO.cpf, REGISTRADO.dataNascimento]) {
-      expect(texto).not.toContain(segredo);
-    }
-    expect(new Set(achados).size, "campo repetido no retorno").toBe(achados.length);
-  });
-
-  it("BORDA: entrada vazia e nula não estouram e não inventam divergência contra registro vazio", () => {
-    const vazio = { cpf: "", dataNascimento: "" };
-    expect(() => divergencias(vazio, {})).not.toThrow();
-    expect(divergencias(vazio, {})).toEqual([]);
-    const nulo = { cpf: null as unknown as string, dataNascimento: null as unknown as string };
-    expect(() => divergencias(nulo, { cpf: null, dataNascimento: null })).not.toThrow();
-    expect(divergencias(nulo, { cpf: null, dataNascimento: null })).toEqual([]);
-  });
-
-  it("BORDA: informado VAZIO contra registro PREENCHIDO diverge, e não passa por igual", () => {
-    // Campo vazio de quem informa não pode ser lido como "igual ao que já existe", senão bastaria
-    // mandar o corpo em branco para a conferência passar.
-    expect([...divergencias({ cpf: "", dataNascimento: "" }, REGISTRADO)].sort()).toEqual([
-      "CPF",
-      "DATA_NASCIMENTO",
-    ]);
-  });
-
-  it("BORDA: data impossível e data futura são comparadas como texto ISO e divergem do cadastro", () => {
-    // A seção 3 da v2 NÃO tem função de validade de data, então quem recusa 2026-02-31 ou data
-    // futura é o DTO ou o serviço. Reportado ao coordenador: com o cadastro vazio, nada neste módulo
-    // impede que uma data impossível seja gravada em `as_candidatos.data_nascimento`.
-    expect(divergencias({ cpf: CPF_VALIDO, dataNascimento: "2026-02-31" }, REGISTRADO)).toEqual([
-      "DATA_NASCIMENTO",
-    ]);
-    expect(divergencias({ cpf: CPF_VALIDO, dataNascimento: "2031-12-31" }, REGISTRADO)).toEqual([
-      "DATA_NASCIMENTO",
-    ]);
-  });
-
-  it("BORDA: a função não altera os objetos que recebe (o chamador grava a partir deles)", () => {
-    const informado = { cpf: "529.982.247-25", dataNascimento: "1990-05-17T00:00:00.000Z" };
-    const registrado = { ...REGISTRADO };
-    divergencias(informado, registrado);
-    expect(informado).toEqual({ cpf: "529.982.247-25", dataNascimento: "1990-05-17T00:00:00.000Z" });
-    expect(registrado).toEqual(REGISTRADO);
-  });
-});
-
 describe("decisaoDaIdentidade: precedência item a item", () => {
   it("REQUISITO: OK só sai quando TUDO está limpo", () => {
     expect(decisaoDaIdentidade(LIMPO)).toEqual({ tipo: "OK" });
@@ -816,20 +663,19 @@ describe("decisaoDaIdentidade: precedência item a item", () => {
     });
   });
 
-  it("REQUISITO: divergência devolve TRAVAR com DIVERGENCIA_CADASTRO", () => {
-    expect(decisaoDaIdentidade({ ...LIMPO, divergentes: ["CPF"] })).toEqual({
+  it("REQUISITO (diretor 16/10/2026): divergência de CPF/data NÃO trava mais, virou captura", () => {
+    // A trava por divergência foi APOSENTADA: o e-mail e o código são o único portão, e CPF e data
+    // viram captura. A entrada da decisão nem carrega mais divergência, então o cadastro que no mundo
+    // antigo divergiria do funil stale agora devolve OK e segue para a gravação. As únicas travas que
+    // restam são de INTEGRIDADE, nunca "o dado digitado difere do que estava guardado".
+    expect(decisaoDaIdentidade(LIMPO)).toEqual({ tipo: "OK" });
+    expect(decisaoDaIdentidade({ ...LIMPO, jaTravado: true })).toEqual({
       tipo: "TRAVAR",
-      motivo: "DIVERGENCIA_CADASTRO",
+      motivo: "TRAVA_ANTERIOR",
     });
-    expect(decisaoDaIdentidade({ ...LIMPO, divergentes: ["CPF", "DATA_NASCIMENTO"] })).toEqual({
+    expect(decisaoDaIdentidade({ ...LIMPO, cpfDeOutro: true })).toEqual({
       tipo: "TRAVAR",
-      motivo: "DIVERGENCIA_CADASTRO",
-    });
-  });
-
-  it("CONFLITO: bilhete morto vence a divergência (sem autenticação ninguém trava candidato alheio)", () => {
-    expect(decisaoDaIdentidade({ ...LIMPO, bilheteVivo: false, divergentes: ["CPF"] })).toEqual({
-      tipo: "BILHETE_MORTO",
+      motivo: "CPF_DE_OUTRO_CANDIDATO",
     });
   });
 
@@ -840,65 +686,47 @@ describe("decisaoDaIdentidade: precedência item a item", () => {
         cpfValido: false,
         jaTravado: true,
         cpfDeOutro: true,
-        divergentes: ["CPF", "DATA_NASCIMENTO"],
       }),
     ).toEqual({ tipo: "BILHETE_MORTO" });
   });
 
-  it("CONFLITO: já travado vence CPF inválido, CPF de outro e divergência (a trava original não é reescrita)", () => {
+  it("CONFLITO: já travado vence CPF inválido e CPF de outro (a trava original não é reescrita)", () => {
     expect(
       decisaoDaIdentidade({
         bilheteVivo: true,
         cpfValido: false,
         jaTravado: true,
         cpfDeOutro: true,
-        divergentes: ["CPF"],
       }),
     ).toEqual({ tipo: "TRAVAR", motivo: "TRAVA_ANTERIOR" });
   });
 
-  it("CONFLITO: CPF inválido vence CPF de outro e divergência (comparar CPF malformado com a base não tem sentido)", () => {
+  it("CONFLITO: CPF inválido vence CPF de outro (comparar CPF malformado com a base não tem sentido)", () => {
     expect(
       decisaoDaIdentidade({
         bilheteVivo: true,
         cpfValido: false,
         jaTravado: false,
         cpfDeOutro: true,
-        divergentes: ["CPF", "DATA_NASCIMENTO"],
       }),
     ).toEqual({ tipo: "CPF_INVALIDO" });
   });
 
-  it("CONFLITO: CPF de outro candidato vence a divergência (é o achado mais grave dos dois)", () => {
-    expect(
-      decisaoDaIdentidade({ ...LIMPO, cpfDeOutro: true, divergentes: ["DATA_NASCIMENTO"] }),
-    ).toEqual({ tipo: "TRAVAR", motivo: "CPF_DE_OUTRO_CANDIDATO" });
-  });
-
-  it("PROPRIEDADE: a precedência vale nas 48 combinações possíveis, e OK nunca aparece com nada sujo", () => {
-    const listas: CampoDivergente[][] = [[], ["CPF"], ["CPF", "DATA_NASCIMENTO"]];
+  it("PROPRIEDADE: a precedência vale nas 16 combinações possíveis, e OK nunca aparece com nada sujo", () => {
     let combinacoes = 0;
     for (const bilheteVivo of [true, false])
       for (const cpfValido of [true, false])
         for (const jaTravado of [true, false])
-          for (const cpfDeOutro of [true, false])
-            for (const divergentes of listas) {
-              const entrada: EntradaDaDecisao = {
-                bilheteVivo,
-                cpfValido,
-                jaTravado,
-                cpfDeOutro,
-                divergentes,
-              };
-              const rotulo = JSON.stringify(entrada);
-              const obtida = decisaoDaIdentidade(entrada);
-              expect(obtida, rotulo).toEqual(decisaoEsperada(entrada));
-              const limpo =
-                bilheteVivo && cpfValido && !jaTravado && !cpfDeOutro && divergentes.length === 0;
-              if (!limpo) expect(obtida.tipo, `OK indevido em ${rotulo}`).not.toBe("OK");
-              combinacoes += 1;
-            }
-    expect(combinacoes).toBe(48);
+          for (const cpfDeOutro of [true, false]) {
+            const entrada: EntradaDaDecisao = { bilheteVivo, cpfValido, jaTravado, cpfDeOutro };
+            const rotulo = JSON.stringify(entrada);
+            const obtida = decisaoDaIdentidade(entrada);
+            expect(obtida, rotulo).toEqual(decisaoEsperada(entrada));
+            const limpo = bilheteVivo && cpfValido && !jaTravado && !cpfDeOutro;
+            if (!limpo) expect(obtida.tipo, `OK indevido em ${rotulo}`).not.toBe("OK");
+            combinacoes += 1;
+          }
+    expect(combinacoes).toBe(16);
   });
 
   it("REQUISITO: `MOTIVOS_DA_TRAVA` é o catálogo FECHADO da v2, com EMAIL_AMBIGUO incluído", () => {
@@ -933,12 +761,6 @@ describe("decisaoDaIdentidade: precedência item a item", () => {
     }
     expect(isValidCpf(CPF_VALIDO)).toBe(true);
     expect(isValidCpf("529.982.247-25")).toBe(true);
-  });
-
-  it("BORDA: lista congelada de divergências é aceita sem estouro e sem ser modificada", () => {
-    const congelada = Object.freeze<CampoDivergente[]>(["CPF", "DATA_NASCIMENTO"]);
-    expect(() => decisaoDaIdentidade({ ...LIMPO, divergentes: congelada })).not.toThrow();
-    expect(congelada).toEqual(["CPF", "DATA_NASCIMENTO"]);
   });
 });
 
@@ -1092,34 +914,30 @@ describe("anti-oráculo: o domínio não distingue e-mail cadastrado de não cad
     // conjuntos fechados, nenhuma recusa carrega CPF, data, e-mail nem qual campo divergiu.
     const tipos = new Set(["OK", "TRAVAR", "CPF_INVALIDO", "BILHETE_MORTO"]);
     const motivos = new Set<string>(MOTIVOS_DA_TRAVA);
-    const listas: CampoDivergente[][] = [[], ["CPF"], ["CPF", "DATA_NASCIMENTO"]];
     for (const bilheteVivo of [true, false])
       for (const cpfValido of [true, false])
         for (const jaTravado of [true, false])
-          for (const cpfDeOutro of [true, false])
-            for (const divergentes of listas) {
-              const r = decisaoDaIdentidade({
-                bilheteVivo,
-                cpfValido,
-                jaTravado,
-                cpfDeOutro,
-                divergentes,
-              }) as Record<string, unknown>;
-              for (const chave of Object.keys(r)) expect(["tipo", "motivo"]).toContain(chave);
-              expect(tipos).toContain(r.tipo);
-              if (r.tipo === "TRAVAR") expect(motivos).toContain(r.motivo as string);
-              else expect(Object.keys(r)).toEqual(["tipo"]);
-            }
+          for (const cpfDeOutro of [true, false]) {
+            const r = decisaoDaIdentidade({
+              bilheteVivo,
+              cpfValido,
+              jaTravado,
+              cpfDeOutro,
+            }) as Record<string, unknown>;
+            for (const chave of Object.keys(r)) expect(["tipo", "motivo"]).toContain(chave);
+            expect(tipos).toContain(r.tipo);
+            if (r.tipo === "TRAVAR") expect(motivos).toContain(r.motivo as string);
+            else expect(Object.keys(r)).toEqual(["tipo"]);
+          }
   });
 
-  it("REQUISITO: as duas recusas que o candidato provoca de propósito têm a MESMA forma", () => {
-    // Travar por divergência e travar por CPF de outra pessoa diferem por um código de motivo, que é
-    // para a TRILHA e para a fila do time. A forma é a mesma, e é isso que permite ao serviço
-    // devolver a frase neutra única sem achatar o dado de quem vai destravar.
-    const porDivergencia = decisaoDaIdentidade({ ...LIMPO, divergentes: ["CPF"] });
+  it("REQUISITO: a recusa que o candidato provoca de propósito tem FORMA fechada, sem campo livre", () => {
+    // A trava por CPF de outra pessoa carrega um código de motivo, que é para a TRILHA e para a fila
+    // do time, nunca para a resposta. A forma (só `tipo` e `motivo` de listas fechadas) é o que
+    // permite ao serviço devolver a frase neutra única sem achatar o dado de quem vai destravar.
     const porCpfDeOutro = decisaoDaIdentidade({ ...LIMPO, cpfDeOutro: true });
-    expect(Object.keys(porDivergencia)).toEqual(Object.keys(porCpfDeOutro));
-    expect(porDivergencia.tipo).toBe(porCpfDeOutro.tipo);
+    expect(Object.keys(porCpfDeOutro).sort()).toEqual(["motivo", "tipo"]);
+    expect(porCpfDeOutro.tipo).toBe("TRAVAR");
   });
 
   it("REQUISITO (§A.6): nada que o módulo devolve carrega PII, em nenhuma das combinações", () => {
@@ -1130,8 +948,6 @@ describe("anti-oráculo: o domínio não distingue e-mail cadastrado de não cad
       JSON.stringify(decisaoDaIdentidade({ ...LIMPO, jaTravado: true })),
       JSON.stringify(decisaoDaIdentidade({ ...LIMPO, cpfValido: false })),
       JSON.stringify(decisaoDaIdentidade({ ...LIMPO, cpfDeOutro: true })),
-      JSON.stringify(decisaoDaIdentidade({ ...LIMPO, divergentes: ["CPF", "DATA_NASCIMENTO"] })),
-      JSON.stringify(divergencias({ cpf: OUTRO_CPF_VALIDO, dataNascimento: "1985-01-02" }, { cpf: CPF_VALIDO, dataNascimento: DATA_REGISTRADA })),
     ];
     for (const saida of saidas) for (const segredo of PII) expect(saida).not.toContain(segredo);
   });

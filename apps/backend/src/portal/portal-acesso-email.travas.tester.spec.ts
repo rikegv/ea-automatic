@@ -619,10 +619,10 @@ describe("trava 4: divergência e violação de `uq_as_candidatos_cpf` desemboca
     expect(corpoRecusa).not.toContain("cpf");
   });
 
-  it("nenhuma recusa NOMEIA o campo que divergiu", () => {
-    // `divergentes:` NÃO entra nesta lista, e a distinção é a que importa: ele é o parâmetro de
-    // ENTRADA de `decisaoDaIdentidade`, calculado e consumido dentro do serviço. O que não pode
-    // existir é o nome do campo saindo daqui, para a resposta, para a trilha ou para a tabela.
+  it("nenhuma recusa NOMEIA um campo de dado do candidato", () => {
+    // A trava por divergência de CPF/data foi APOSENTADA (decisão do diretor, 16/10/2026), então não
+    // há mais "campo que divergiu". O invariante que FICA é mais geral e continua valendo: nenhum
+    // nome de campo de dado pessoal pode sair daqui para a resposta, para a trilha ou para a tabela.
     const fonte = fonteDe(SERVICO);
     for (const padrao of ["campoDivergente", "camposDivergentes", "valorEsperado", "valorInformado"]) {
       expect(fonte, `nome de campo divergente exposto: ${padrao}`).not.toContain(padrao);

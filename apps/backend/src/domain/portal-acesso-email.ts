@@ -2,7 +2,7 @@ import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto"
 import { MOTIVOS_DA_TRAVA_DE_ACESSO, type MotivoDaTravaDeAcesso } from "@ea/shared-types";
 
 /**
- * PORTAL, A PORTA DE E-MAIL: a régua pura do código de verificação e da trava de divergência.
+ * PORTAL, A PORTA DE E-MAIL: a régua pura do código de verificação e da decisão da identidade.
  *
  * Fonte NORMATIVA: `docs/CONTRATO-PORTAL-ACESSO-EMAIL.md` (v2), seções 2 e 3. A v1 foi VETADA e
  * nada dela sobreviveu aqui. `docs/MAPA-ALCANCE-PORTAL-ACESSO-POR-EMAIL.md` traz a medição.
@@ -201,59 +201,26 @@ export function hashDoEmail(email: string, segredo: string): string {
   return createHmac("sha256", segredo).update(`email:${normalizarEmail(email)}`).digest("hex");
 }
 
-// ══ A TRAVA DE DIVERGÊNCIA ══════════════════════════════════════════════════════════════════════
+// ══ A DIVERGÊNCIA DE CPF/DATA FOI APOSENTADA (decisão do diretor, 16/10/2026) ═══════════════════
 
-export type CampoDivergente = "CPF" | "DATA_NASCIMENTO";
-
-/** Só dígitos: o candidato digita com ponto e traço, e a base guarda só número. */
-function soDigitos(valor: string | null | undefined): string {
-  return (valor ?? "").replace(/\D/g, "");
-}
-
-/** `yyyy-mm-dd` aparado. A coluna `date` do Postgres chega assim pelo driver. */
-function dataNormalizada(valor: string | null | undefined): string {
-  return (valor ?? "").trim().slice(0, 10);
-}
-
-/**
- * O QUE O CANDIDATO INFORMOU DISCORDA DO QUE A FICHA DO FUNIL JÁ TEM?
+/*
+ * NÃO EXISTE MAIS trava por divergência de CPF/data nesta porta, e a ausência é DECISÃO, não
+ * esquecimento. O diretor determinou que o ÚNICO validador de acesso é o e-mail (mais o código, que
+ * prova a posse da caixa): CPF e data de nascimento passaram a ser CAPTURA, gravados na ficha, e
+ * NUNCA confrontados contra o que já estava lá para barrar a entrada.
  *
- * ┌─ CAMPO AUSENTE NO REGISTRO NÃO É DIVERGÊNCIA: É DADO SENDO PREENCHIDO ─────────────────────┐
- * │ É o caso NORMAL desta porta, e não a exceção: a população-alvo é exatamente quem tem `cpf`  │
- * │ nulo. Tratar nulo como discordância travaria todo mundo que a porta existe para atender.     │
- * │                                                                                             │
- * │ E É PRECISAMENTE POR ISSO QUE A TRAVA SOZINHA NÃO SEGURA NADA, o que a auditoria provou      │
- * │ contra a v1: com os dois campos nulos, `divergencias` devolve lista VAZIA para QUALQUER CPF  │
- * │ digitado. O que segura é a estrutura da v2 (a admissão vem do VÍNCULO, nunca de busca por    │
- * │ CPF) mais a consulta de `CPF_DE_OUTRO_CANDIDATO`. Quem ler esta função como "a defesa" vai   │
- * │ reintroduzir o furo.                                                                         │
- * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ * O MOTIVO OPERACIONAL, medido: a ficha do funil (`as_candidatos`) podia estar DESATUALIZADA por
+ * atraso, então o candidato digitava o dado CERTO, divergia do valor velho e travava. O time tinha
+ * de cadastrar os dados na mão, com desconforto operacional, e a experiência do candidato quebrava.
+ * Com o acesso provado pelo e-mail e pelo código, não há identidade a confrontar: a admissão já vem
+ * do VÍNCULO do bilhete, nunca de busca por CPF do corpo (o veto estrutural da v1 segue de pé).
  *
- * SEM RETORNO ANTECIPADO, e os DOIS campos são avaliados SEMPRE. Um `if (cpf diverge) return` faria
- * o tempo da resposta contar qual campo bateu: quem varre datas de nascimento saberia, pelo relógio,
- * que o CPF que digitou é o certo. O trabalho extra é de duas comparações de string, e o que se
- * compra é um oráculo a menos.
- *
- * NOME NÃO ENTRA, e não é esquecimento: o candidato não digita nome nesta porta, então não há o que
- * comparar. Acrescentá-lo exigiria pedir o nome, e pedir o nome transformaria a recusa neutra num
- * teste de adivinhação sobre o cadastro.
+ * O QUE PERMANECE, porque é INTEGRIDADE do dado e não validação de identidade: CPF com dígito
+ * verificador válido (`CPF_INVALIDO`, senão grava lixo na ficha) e CPF que já pertence a OUTRO
+ * candidato (`CPF_DE_OUTRO_CANDIDATO`, senão dois cadastros colidem no `uq_as_candidatos_cpf`). O
+ * valor de catálogo `DIVERGENCIA_CADASTRO` segue existindo em `MOTIVOS_DA_TRAVA` para as travas
+ * históricas e para a tela do time rotulá-las: esta porta apenas deixou de PRODUZI-lo.
  */
-export function divergencias(
-  informado: { cpf: string; dataNascimento: string },
-  registrado: { cpf?: string | null; dataNascimento?: string | null },
-): CampoDivergente[] {
-  const cpfRegistrado = soDigitos(registrado.cpf);
-  const nascimentoRegistrado = dataNormalizada(registrado.dataNascimento);
-
-  const cpfDiverge = cpfRegistrado.length > 0 && cpfRegistrado !== soDigitos(informado.cpf);
-  const nascimentoDiverge =
-    nascimentoRegistrado.length > 0 && nascimentoRegistrado !== dataNormalizada(informado.dataNascimento);
-
-  const achados: CampoDivergente[] = [];
-  if (cpfDiverge) achados.push("CPF");
-  if (nascimentoDiverge) achados.push("DATA_NASCIMENTO");
-  return achados;
-}
 
 /**
  * OS MOTIVOS DA TRAVA, REUSADOS DO CONTRATO COMPARTILHADO e NÃO redigitados aqui.
@@ -279,45 +246,45 @@ export type DecisaoDaIdentidade =
  * `decisaoDaIdentificacao` (`domain/portal-identidade.ts`), e pelo mesmo motivo: régua que faz I/O
  * só se prova com banco, e aí ninguém varre a tabela de combinações.
  *
- * A ORDEM FOI FECHADA PELO `tester` A PARTIR DO REQUISITO, ANTES DE EXISTIR CÓDIGO, e cada degrau
- * tem razão própria. Quem for reordenar precisa derrubar a razão, não só achar outra ordem mais
- * bonita:
+ * A ORDEM FOI FECHADA PELO `tester` A PARTIR DO REQUISITO, e cada degrau tem razão própria. Quem for
+ * reordenar precisa derrubar a razão, não só achar outra ordem mais bonita:
  *
- * 1. `BILHETE_MORTO` PRIMEIRO, autenticação antes de tudo. Se a divergência vencesse, quem NÃO tem
- *    bilhete válido conseguiria GRAVAR TRAVA no candidato de outra pessoa: negação de serviço COM
- *    ESCRITA, e a fila de destrave do time viraria brinquedo de quem quisesse enchê-la.
+ * 1. `BILHETE_MORTO` PRIMEIRO, autenticação antes de tudo. Sem bilhete válido, quem chamasse
+ *    conseguiria GRAVAR TRAVA no candidato de outra pessoa: negação de serviço COM ESCRITA, e a fila
+ *    de destrave do time viraria brinquedo de quem quisesse enchê-la.
  * 2. `TRAVA_ANTERIOR`, porque estando travado nada é reavaliado. Reavaliar permitiria SOBRESCREVER
  *    o motivo original e apagar da trilha o que de fato travou, que é justamente o que a fila
  *    precisa saber para destravar com conhecimento.
- * 3. `CPF_INVALIDO` antes das comparações: comparar dígito verificador errado com o cadastro não
- *    quer dizer nada, e travar por erro de digitação do PRÓPRIO candidato encheria a fila de ruído.
- *    Isso ele corrige sozinho na tela, e é o único desfecho desta função que não custa trabalho a
- *    ninguém do time.
- * 4. `CPF_DE_OUTRO_CANDIDATO` antes da divergência: é o caso mais grave (dois candidatos disputando
- *    o mesmo CPF) e ele é CONSULTADO antes de tentar escrever, em vez de esperar a violação de
- *    `uq_as_candidatos_cpf`. O `catch` do 23505 continua existindo no serviço, como rede, e
- *    desemboca nesta MESMA linha.
- * 5. `DIVERGENCIA_CADASTRO`, por último entre as travas.
- * 6. `OK` só quando tudo está limpo.
+ * 3. `CPF_INVALIDO`: dígito verificador que não fecha não vira pessoa na ficha, e travar por erro de
+ *    digitação do PRÓPRIO candidato encheria a fila de ruído. Isso ele corrige sozinho na tela, e é
+ *    o único desfecho desta função que não custa trabalho a ninguém do time. NÃO é validação de
+ *    identidade: é INTEGRIDADE do dado que vai ser gravado.
+ * 4. `CPF_DE_OUTRO_CANDIDATO`: dois candidatos disputando o mesmo CPF é colisão de
+ *    `uq_as_candidatos_cpf`, CONSULTADA antes de tentar escrever, em vez de esperar a violação virar
+ *    um 500. O `catch` do 23505 continua existindo no serviço, como rede, e desemboca nesta MESMA
+ *    linha. Também é INTEGRIDADE, não validação de identidade.
+ * 5. `OK` quando tudo está limpo.
+ *
+ * NÃO HÁ MAIS TRAVA POR DIVERGÊNCIA DE CPF/DATA, e a ausência é decisão do diretor (16/10/2026, ver
+ * o bloco acima): o e-mail e o código são o único portão de acesso, e CPF e data viram captura. Esta
+ * função não recebe mais `divergentes` e não devolve mais `DIVERGENCIA_CADASTRO`.
  *
  * `EMAIL_AMBIGUO` NÃO ENTRA AQUI: ele é decidido em `solicitar`, quando o e-mail resolve para mais
  * de um candidato, e naquele ponto não existe bilhete nem CPF. Pôr um degrau para ele nesta função
  * criaria um caminho morto que alguém tentaria alimentar depois.
  *
- * O CAMPO DIVERGENTE NÃO ATRAVESSA. A decisão diz que travou e por qual MOTIVO de catálogo, nunca
- * qual campo bateu: dizer "o CPF divergiu" é confirmar a quem tentou que o outro dado está certo.
+ * NENHUM CAMPO ATRAVESSA. A decisão diz que travou e por qual MOTIVO de catálogo, nunca qual dado
+ * bateu: o motivo é para a trilha e para a fila do time, não para a resposta ao candidato.
  */
 export function decisaoDaIdentidade(entrada: {
   bilheteVivo: boolean;
   cpfValido: boolean;
   jaTravado: boolean;
   cpfDeOutro: boolean;
-  divergentes: readonly CampoDivergente[];
 }): DecisaoDaIdentidade {
   if (!entrada.bilheteVivo) return { tipo: "BILHETE_MORTO" };
   if (entrada.jaTravado) return { tipo: "TRAVAR", motivo: "TRAVA_ANTERIOR" };
   if (!entrada.cpfValido) return { tipo: "CPF_INVALIDO" };
   if (entrada.cpfDeOutro) return { tipo: "TRAVAR", motivo: "CPF_DE_OUTRO_CANDIDATO" };
-  if (entrada.divergentes.length > 0) return { tipo: "TRAVAR", motivo: "DIVERGENCIA_CADASTRO" };
   return { tipo: "OK" };
 }
