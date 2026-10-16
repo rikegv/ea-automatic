@@ -23158,3 +23158,47 @@ funcionou). (2) 3 débitos pré-existentes VERMELHOS no origin/main achados na s
 "9 arquivos escrevem em vagas"); nenhum referencia os arquivos desta frente (provado), são de outras
 frentes (o de vagas cheira a resíduo da "Reabrir vaga"); não travam o build do G.I. (3) proposta de
 emenda da §A.48 citando a dimensão `inclusaoOK` ao lado do apiSinc, aguardando o diretor.
+
+## 2026-10-16 (sessão remote-control) — Controle Gerencial, Alto Volume por grupo: 4 ajustes (`e27b33f`)
+
+**OST:** 5 ajustes na tela Controle Gerencial, aba Alto Volume, visão por GRUPO
+(`apps/frontend/src/app/(app)/diretoria/alto-volume/page.tsx`). Os ajustes 1 a 4 subiram juntos; o
+ajuste 5 (meta por cargo) fica para a rodada seguinte, alinhado com o diretor (ver ABERTO).
+
+**O que entrou (frontend puro, tela segue só leitura §A.26, sem PII §A.6):**
+1. **KPIs Consolidados** somando os grupos selecionados, bloco no topo antes do detalhe por grupo
+   (que continua empilhado embaixo, intacto §A.27). Só aparece com 2+ grupos. A soma respeita a régua
+   da meta: soma só as metas que existem; grupo sem meta entra com as contagens e fica fora do alvo;
+   sem nenhuma meta, meta/faltam/percentual ficam "não informado", nunca zero. Regra pura e testada:
+   `consolidarTotaisGrupos` em `lib/alto-volume.ts`, 5 testes novos (inclui a soma na esteira).
+2. **Opção 1 / Opção 2 removido** (componente `AlternadorLayout` apagado): empilhado permanente. A
+   consolidação por cargo da Opção 2 do grupo (`consolidarGrupos`) saiu junto.
+3. **Visão por PROJETO desativada na interface**: a pílula Grupo/Projeto saiu; `visao` fixo em
+   "grupo"; o ramo de projeto fica dormente, compilando, não apagado (retorno futuro).
+4. **Seletor virou card pequeno premium + modal** (`SeletorGruposCard` + `ModalSeletorGrupos`): o card
+   diz "Selecione o Grupo" e respira de leve quando vazio (keyframe `seletor-grupo-respira` em
+   globals.css, com guarda de `prefers-reduced-motion`); o modal tem busca (§A.35), selecionar
+   todos/limpar e "Concluir", e não fecha ao clicar fora (§A.41).
+
+**Prova (§A.13):** preview isolado (frontend `next dev` :3130 deste worktree + 2º backend do artefato
+`ea-homolog` :3119 contra o banco de homologação, ALLOWED_ORIGINS próprios; homolog 3120/3111 intocado;
+derrubado após). Harness Playwright, conta `manual.captura@homolog.local` (COMUM, menu `diretoria` área
+ADM). Medido: 4 grupos somando **Meta 260 (200+60), Na Esteira 180 (0+33+129+18), Faltam 80, 69%**, com
+o aviso "2 grupos sem meta". Prints enviados ao diretor, claro e escuro. Meta sintética semeada em
+PROPARTS (§A.43) e **revertida**.
+
+**Agentes (§A.38):** coordenador direto. `seguranca` NÃO acionado (sem CPF/PII/auth/RBAC/credencial,
+frontend lendo contagem). `tester`: coberto por testes unitários da soma (14 verdes).
+
+**Gate:** typecheck 0, eslint 0, 14 testes. Rebase são sobre `origin/main` (5f29beb). Validação do
+diretor pelos prints ("pode avançar"). Deploy §A.49 (worktree pristino de origin/main), sem migration
+(frontend puro).
+
+**ABERTO: ajuste 5 (coluna Vagas por cargo).** Alinhado com o diretor via pergunta estruturada: ele
+escolheu **meta própria por cargo** (o Total do grupo passa a ser a SOMA das metas por cargo) e
+**editada no cadastro de grupo** (livreto na tela de Clientes; o Controle Gerencial segue só leitura).
+Hoje `grupos_cliente.meta` é um total único (nullable p/ legado), e `analise()` não traz vagas/faltam
+por cargo de propósito. Plano: tabela nova `grupo_cliente_cargo_meta` (migration aditiva), livreto
+ganha a seção "Vagas Por Cargo" (catálogo de cargos com busca), a tabela por cargo passa a mostrar
+Vagas/Faltam, `tester` independente (frente grande); legado mantém o total único até cadastrar por
+cargo. Em construção na sequência.
