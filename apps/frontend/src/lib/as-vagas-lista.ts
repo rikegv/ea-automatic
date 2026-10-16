@@ -186,3 +186,20 @@ export function somarPosicoesOficiais(
 ): number {
   return vagas.reduce((soma, v) => soma + (v.posicoesOficiais ?? 0), 0);
 }
+
+/**
+ * ─ A VAGA ENCERRADA NÃO SOME DO SISTEMA (decisão do Rike, 16/10/2026) ─────────────────────────
+ *
+ * A visão de trabalho da Central mostra só vaga VIVA, mas a fechada/cancelada nunca some da
+ * PESQUISA nem dos CARDS: ela volta à TABELA quando há uma BUSCA em curso ou quando um STATUS foi
+ * escolhido no filtro. Sem nenhum dos dois (o padrão), a encerrada fica fora da tabela de trabalho,
+ * mas segue contada nos cards (que leem a lista sem este recorte) e achável pela pesquisa.
+ *
+ * Régua pura, para a tela não decidir isto por conta e para o comportamento ficar travado em teste.
+ */
+export function encerradaEntraNaVisaoDeTrabalho(
+  temBusca: boolean,
+  statusEscolhidos: number,
+): boolean {
+  return temBusca || statusEscolhidos > 0;
+}

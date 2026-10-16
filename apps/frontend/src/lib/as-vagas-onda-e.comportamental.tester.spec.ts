@@ -57,8 +57,10 @@ function linhaDaTabela(src: string): string {
 
 /** O corpo do `useMemo` que aplica os filtros à lista. */
 function blocoDoFiltro(src: string): string {
-  const i = src.indexOf("return rows.filter((v) => {");
-  expect(i, "não achei o filtro da lista (`rows.filter`)").toBeGreaterThan(-1);
+  // O predicado dos filtros vive em `const passa = (v...) => { ... return true; }` (o `useMemo`
+  // passou a derivar DUAS listas, tabela e cards, do mesmo predicado, 16/10/2026).
+  const i = src.indexOf("const passa = (v");
+  expect(i, "não achei o filtro da lista (o predicado `passa`)").toBeGreaterThan(-1);
   return src.slice(i, src.indexOf("return true;", i));
 }
 

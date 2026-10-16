@@ -86,8 +86,11 @@ describe("2. a linha da fila padrão continua na tela, e continua perguntando `v
    */
   it("o recorte sem filtro esconde a encerrada, pela função do catálogo", () => {
     const fonte = readFileSync(PAGINA, "utf8");
+    // A régua evoluiu (16/10/2026): a VISÃO DE TRABALHO (sem busca e sem status) esconde a encerrada,
+    // e isso é decidido por `encerradaEntraNaVisaoDeTrabalho` + o recorte `!vagaEncerrada(...)` do
+    // catálogo. A fechada NÃO some dos cards nem da pesquisa (volta quando há busca ou status).
     expect(
-      /setStatus\.size === 0 && vagaEncerrada\(/.test(fonte),
+      /encerradaEntraNaVisaoDeTrabalho\(/.test(fonte) && /!vagaEncerrada\(/.test(fonte),
       "a fila padrão da Central de Vagas deixou de esconder a vaga encerrada pela régua do catálogo. Se a linha mudou de forma, este teste precisa acompanhar a mudança DE PROPÓSITO, e não cair sozinho.",
     ).toBe(true);
   });

@@ -112,6 +112,7 @@ import {
 } from "@/lib/as-vagas-funil";
 import {
   casaBusca,
+  encerradaEntraNaVisaoDeTrabalho,
   fatiarPagina,
   paginaValida,
   somarPosicoesOficiais,
@@ -1642,7 +1643,7 @@ export default function CentralDeVagasPage() {
    * filtro só troca a lista que entra no `useOrdenacao`, e a coluna escolhida continua de pé porque
    * ela mora no estado do hook, não na lista.
    */
-  const filtradas = useMemo(() => {
+  const { filtradas, filtradasParaCards } = useMemo(() => {
     const termo = busca;
     const setClientes = new Set(fClientes);
     const setCargos = new Set(fCargos);
@@ -1653,7 +1654,7 @@ export default function CentralDeVagasPage() {
     const setSegmento = new Set(fSegmento);
     const setComercial = new Set(fComercial);
 
-    return rows.filter((v) => {
+    const passa = (v: (typeof rows)[number]) => {
       /*
        * ─ A BUSCA RÁPIDA COBRE QUALQUER COLUNA ────────────────────────────────────────────────
        *
@@ -1693,17 +1694,9 @@ export default function CentralDeVagasPage() {
       // alguma coisa em cada um dos cinco filtros.
       if (setClientes.size && !(v.codCliente && setClientes.has(v.codCliente))) return false;
       if (setCargos.size && !(v.cargoId && setCargos.has(v.cargoId))) return false;
-      /*
-       * ─ ESCOPO PADRÃO (item 5): A VISÃO DE TRABALHO MOSTRA SÓ VAGA VIVA ───────────────────────
-       *
-       * Sem filtro de status escolhido, a vaga ENCERRADA (finalizada ou cancelada) SAI da visão
-       * padrão: a frente de trabalho é onde ainda há o que fazer. Ela volta quando o status é
-       * escolhido no filtro, que é o caminho explícito para o histórico ("aparece só quando
-       * filtrada pelo status"). Com status escolhido, a régua abaixo já resolve exatamente o que
-       * mostrar, encerrada incluída, e os cards contam esse mesmo recorte, então card e tabela nunca
-       * discordam.
-       */
-      if (setStatus.size === 0 && vagaEncerrada(v.status, catalogoStatus)) return false;
+      // O recorte de ESCOPO PADRÃO (esconder a encerrada na visão de trabalho) NÃO mora mais aqui:
+      // `passa` deixa a encerrada passar, para ela continuar nos cards e na pesquisa, e a tabela a
+      // esconde depois, só quando não há busca nem status escolhido (ver `filtradas` abaixo).
       if (setStatus.size && !setStatus.has(v.status)) return false;
       if (setVinculos.size && !(v.vinculo && setVinculos.has(v.vinculo))) return false;
       // O consultor casa por ID; a vaga sem consultor responde pelo sentinela, para "sem responsável"
@@ -1763,7 +1756,24 @@ export default function CentralDeVagasPage() {
         if (abertaAte && d > abertaAte) return false;
       }
       return true;
-    });
+    };
+    const filtradasParaCards = rows.filter(passa);
+    /*
+     * ─ ESCOPO PADRÃO + A FECHADA NÃO SOME DA PESQUISA NEM DOS CARDS (decisão do Rike, 16/10/2026) ─
+     *
+     * `filtradasParaCards` é tudo que passou os filtros, ENCERRADA INCLUÍDA: é dela que os cards
+     * contam (o card "Fechada"/"Cancelada" mostra a contagem REAL, nunca some) e é nela que a busca
+     * acha a fechada. A TABELA (`filtradas`) é a VISÃO DE TRABALHO: sem busca e sem status escolhido,
+     * a encerrada sai dela, porque a frente de trabalho é onde ainda há o que fazer. Digitou algo na
+     * busca OU escolheu um status, a encerrada VOLTA à tabela. Assim a vaga fechada nunca some do
+     * sistema (segue nos cards, na pesquisa e sob o filtro de status), só fica fora da visão de
+     * trabalho e do total de ativas (§A.27).
+     */
+    const mostrarEncerradas = encerradaEntraNaVisaoDeTrabalho(termo.trim() !== "", setStatus.size);
+    const filtradas = mostrarEncerradas
+      ? filtradasParaCards
+      : filtradasParaCards.filter((v) => !vagaEncerrada(v.status, catalogoStatus));
+    return { filtradas, filtradasParaCards };
     // `catalogoStatus` ENTRA NA LISTA porque a BUSCA procura pelo rótulo do status: sem ele, quem
     // digitasse "Aberta" antes de o catálogo chegar não acharia nada, e a tela não recalcularia
     // quando ele chegasse.
@@ -1806,22 +1816,25 @@ export default function CentralDeVagasPage() {
    * backend já não as manda), então um card delas nasceria sempre zerado.
    */
   const kpis = useMemo(() => {
+    // OS CARDS CONTAM `filtradasParaCards` (encerrada INCLUÍDA), para o card "Fechada"/"Cancelada"
+    // mostrar a contagem REAL e a fechada nunca sumir dos cards (decisão do Rike, 16/10/2026). O
+    // `total` e as `posicoes` seguem sobre `filtradas` (a visão de trabalho, só ativa no padrão): a
+    // fechada conta no card dela, separada do total de ativas (§A.27).
     const conta: Record<string, number> = {};
-    for (const v of filtradas) conta[v.status] = (conta[v.status] ?? 0) + 1;
+    for (const v of filtradasParaCards) conta[v.status] = (conta[v.status] ?? 0) + 1;
     return {
       total: filtradas.length,
       /*
        * ─ AS POSIÇÕES DO RECORTE (frente C, ponto 6) ────────────────────────────────────────────
        *
-       * "1 VAGA COM 10 POSIÇÕES SÃO 10 TRABALHOS, NÃO 1". A conta é sobre `filtradas`, a MESMA
-       * lista do `total` logo acima, então os dois números do card dividido falam sempre do mesmo
-       * recorte: filtrar um cliente e ler "15 vagas / 150 posições" é a leitura pedida. A régua
-       * mora em `lib/as-vagas-lista.somarPosicoesOficiais` e é testada lá.
+       * "1 VAGA COM 10 POSIÇÕES SÃO 10 TRABALHOS, NÃO 1". `total` e `posicoes` são sobre `filtradas`
+       * (a visão de trabalho), os dois números do card dividido falam do mesmo recorte de ativas. A
+       * régua mora em `lib/as-vagas-lista.somarPosicoesOficiais` e é testada lá.
        */
       posicoes: somarPosicoesOficiais(filtradas),
       cards: cardsDeStatus(catalogoStatusLiberados, conta),
     };
-  }, [filtradas, catalogoStatusLiberados]);
+  }, [filtradas, filtradasParaCards, catalogoStatusLiberados]);
 
   /**
    * ─ A SEGUNDA FILEIRA (peça 2.3): QUANTA GENTE, E ONDE ────────────────────────────────────────
@@ -1906,8 +1919,16 @@ export default function CentralDeVagasPage() {
    * é o que se espera de dois cards acesos ao mesmo tempo.
    */
   const doCard = useMemo(
-    () => (cardAtivo === "total" ? filtradas : filtradas.filter((v) => v.status === cardAtivo)),
-    [filtradas, cardAtivo],
+    // O CARD "TOTAL" é a visão de trabalho (`filtradas`, encerrada escondida no padrão). Um card de
+    // STATUS específico recorta de `filtradasParaCards` (encerrada incluída), então clicar em
+    // "Fechada"/"Cancelada" REVELA as encerradas daquele status, mesmo sem status escolhido no
+    // filtro (decisão do Rike, 16/10/2026). Card de status vivo (Aberta/Entregue) não muda, porque
+    // a encerrada nunca esteve entre eles.
+    () =>
+      cardAtivo === "total"
+        ? filtradas
+        : filtradasParaCards.filter((v) => v.status === cardAtivo),
+    [filtradas, filtradasParaCards, cardAtivo],
   );
 
   /**
@@ -4028,18 +4049,19 @@ export default function CentralDeVagasPage() {
    */
   function KpiTotalDividido() {
     const ativo = cardAtivo === "total";
-    // O RECORTE DE STATUS É QUEM DECIDE O RÓTULO, e a régua é a mesma do `filtradas`: lista vazia
-    // significa "todos" e, nesse caso, a encerrada já ficou de fora.
-    const recorteDeStatus = fStatus.length > 0;
-    const rotuloVagas = recorteDeStatus ? "Vagas No Recorte" : "Vagas Abertas";
-    const rotuloPosicoes = recorteDeStatus ? "Posições No Recorte" : "Posições Abertas";
-    const dica = recorteDeStatus
+    // O RÓTULO MUDA QUANDO A ENCERRADA PODE ENTRAR NA CONTA: ou um status foi escolhido no filtro,
+    // ou há uma BUSCA (que traz a fechada de volta, decisão do Rike, 16/10/2026). Sem os dois, a
+    // conta é só de vaga viva (`filtradas` esconde a encerrada), e o rótulo diz "Abertas".
+    const recorteAtivo = fStatus.length > 0 || busca.trim() !== "";
+    const rotuloVagas = recorteAtivo ? "Vagas No Recorte" : "Vagas Abertas";
+    const rotuloPosicoes = recorteAtivo ? "Posições No Recorte" : "Posições Abertas";
+    const dica = recorteAtivo
       ? `${kpis.total} ${kpis.total === 1 ? "vaga" : "vagas"} e ${kpis.posicoes} ${
           kpis.posicoes === 1 ? "posição" : "posições"
-        } no recorte filtrado, com os status escolhidos.`
+        } no recorte atual.`
       : `${kpis.total} ${kpis.total === 1 ? "vaga aberta" : "vagas abertas"} e ${kpis.posicoes} ${
           kpis.posicoes === 1 ? "posição" : "posições"
-        }. A vaga encerrada só entra na conta quando o status é escolhido no filtro.`;
+        }. A vaga encerrada entra na conta quando você escolhe o status no filtro ou pesquisa por ela.`;
     return (
       <GlassCard
         as="button"

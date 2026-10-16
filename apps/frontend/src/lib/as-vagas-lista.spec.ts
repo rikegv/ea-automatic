@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AsOcupacaoVaga } from "@ea/shared-types";
 import {
   casaBusca,
+  encerradaEntraNaVisaoDeTrabalho,
   fatiarPagina,
   normalizar,
   paginaValida,
@@ -238,5 +239,24 @@ describe("somarPosicoesOficiais", () => {
 
   it("recorte vazio soma zero", () => {
     expect(somarPosicoesOficiais([])).toBe(0);
+  });
+});
+
+describe("encerradaEntraNaVisaoDeTrabalho: a fechada volta à tabela só com busca ou status", () => {
+  it("PADRÃO (sem busca, sem status): a encerrada fica fora da visão de trabalho", () => {
+    expect(encerradaEntraNaVisaoDeTrabalho(false, 0)).toBe(false);
+  });
+
+  it("COM BUSCA: a encerrada volta à tabela (não some da pesquisa)", () => {
+    expect(encerradaEntraNaVisaoDeTrabalho(true, 0)).toBe(true);
+  });
+
+  it("COM STATUS escolhido: a encerrada volta à tabela", () => {
+    expect(encerradaEntraNaVisaoDeTrabalho(false, 1)).toBe(true);
+    expect(encerradaEntraNaVisaoDeTrabalho(false, 3)).toBe(true);
+  });
+
+  it("BUSCA e STATUS juntos: também volta", () => {
+    expect(encerradaEntraNaVisaoDeTrabalho(true, 2)).toBe(true);
   });
 });
