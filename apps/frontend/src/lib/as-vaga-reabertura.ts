@@ -125,6 +125,31 @@ export function fraseDaReabertura(
  * decide sobre uma PESSOA com informação admitidamente incompleta (o `SEM_ORIGEM` com gente a
  * oferecer). Aqui a informação está completa, e o que a frase faz é avisar do efeito.
  */
+/**
+ * ─ A FRASE DA REABERTURA DA VAGA FECHADA (16/10) ────────────────────────────────────────────────
+ *
+ * ┌─ POR QUE ELA É FUNÇÃO PRÓPRIA, e não um caso das outras duas ──────────────────────────────┐
+ * │ PORQUE NÃO HOUVE CANCELAMENTO NEM ENTREGA. As frases do `fraseDaReabertura` descrevem o que  │
+ * │ um CANCELAMENTO registrou ou deixou de registrar, e a `fraseDaReaberturaDeEntrega` fala de   │
+ * │ um cliente que reprovou a entrega. A vaga FECHADA não passou por nenhuma das duas coisas:     │
+ * │ fechar é o desfecho normal da vaga que terminou, e reusar qualquer das frases acima faria a  │
+ * │ tela afirmar um evento que não aconteceu. A frase estaria bem escrita e seria falsa, que é o  │
+ * │ modo de falha que este arquivo existe para impedir.                                          │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * É O CASO MAIS SIMPLES DOS TRÊS: fechar não descarta ninguém, então a prévia vem VAZIA (não há
+ * lista para marcar) e não existe prazo novo a combinar. Reabrir só devolve a vaga ao trabalho como
+ * Aberta, e os candidatos e o histórico seguem exatamente como estão. Por isso a frase não fala de
+ * escolha nem de prazo, e NÃO acende amarelo: não há decisão sobre pessoa com informação incompleta.
+ */
+export function fraseDaReaberturaDeFechamento(): FraseDaReabertura {
+  return {
+    frase:
+      "Esta vaga está fechada. Reabrir devolve ela ao trabalho como Aberta, e os candidatos e o histórico seguem como estão.",
+    alerta: false,
+  };
+}
+
 export function fraseDaReaberturaDeEntrega(quantosOferecidos: number): FraseDaReabertura {
   const base =
     "Esta vaga está entregue ao cliente, e reabrir é o caminho de quando ele reprova a entrega. A vaga volta para Aberta e os candidatos que estão com o cliente voltam para o começo do funil, que hoje é a Triagem, para o time fazer uma nova triagem.";

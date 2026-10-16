@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
@@ -8,7 +8,6 @@ import { VagasService } from "./vagas.service";
 import {
   CODIGO_ABERTURA,
   CODIGO_ENTREGA,
-  CODIGO_FECHAMENTO,
   COMUM,
   MASTER,
   T0,
@@ -147,51 +146,42 @@ describe("a ENTREGA reabre, e o que ela NÃO pode é apagar o carimbo da entrega
     expect(chaves).not.toContain("canceladaEm");
   });
 
-  it("FECHADA e ABERTA continuam recusadas, e AGORA com prazo novo no corpo", async () => {
+  it("a ABERTA continua recusada, mesmo com prazo novo no corpo", async () => {
     /*
-     * ESTE É O VALOR QUE SOBROU DA REGRA J, e ele precisava ser reafirmado com o prazo: a sonda dela
-     * recusa sem prazo, então, para FECHAMENTO e ABERTURA, ela também não distingue mais "recusou
-     * pelo papel" de "recusou por falta de prazo". Com o prazo no corpo, a recusa só pode ser do
-     * papel.
+     * ESTE É O VALOR QUE SOBROU DA REGRA J, isolado na ABERTURA. A reabertura é dos papéis TERMINAIS
+     * (CANCELAMENTO, ENTREGA e, desde a frente da FECHADA, FECHAMENTO); a ABERTURA não é terminal e
+     * não tem encerramento a desfazer. A sonda manda prazo DE PROPÓSITO: sem ele, a recusa da
+     * ABERTURA não distinguiria "recusou pelo papel" de "recusou por falta de prazo", e o teste
+     * mediria a ORDEM das guardas em vez da régua do papel.
      *
-     * FECHADA SEGUE SEM PORTA DE VOLTA por decisão do diretor: reabrir um FECHAMENTO tem régua
-     * própria (a meta fechada, a data prevista de início, o relógio da retenção) e é frente futura.
-     */
-    for (const [papel, codigo] of [
-      ["FECHAMENTO", CODIGO_FECHAMENTO],
-      ["ABERTURA", CODIGO_ABERTURA],
-    ] as const) {
-      const banco = vagaEntregue();
-      banco.vaga.status = codigo;
-
-      const e = await erroDe(() =>
-        porta(banco).reabrir(
-          VAGA,
-          { candidaturaIds: ["cand-Ana"], dataLimite: PRAZO_NOVO },
-          MASTER,
-        ),
-      );
-
-      expect(e, `a vaga no papel ${papel} foi reaberta por esta porta`).toBeInstanceOf(
-        ConflictException,
-      );
-      expect(banco.escritas, `a recusa do papel ${papel} gravou antes de recusar`).toEqual([]);
-      expect(banco.vaga.status).toBe(codigo);
-    }
-  });
-
-  it("o COMUM não reabre a ENTREGUE, e a recusa é 403 sem nenhuma escrita", async () => {
-    /*
-     * O caminho novo entra DEPOIS da reconferência de papel, então esta garantia é herdada. Herdada
-     * não é testada: a régua do `podeReabrir` poderia migrar para dentro de um dos dois ramos numa
-     * refatoração, e o ramo da entrega ficaria aberto ao consultor sem nada ficar vermelho.
+     * A FECHADA SAIU DAQUI porque GANHOU porta de volta (decisão do diretor): a reabertura dela é
+     * medida em `vagas.reabrir-de-fechada.cobertura-independente.tester.spec.ts`, contra a produção.
      */
     const banco = vagaEntregue();
+    banco.vaga.status = CODIGO_ABERTURA;
+
+    const e = await erroDe(() =>
+      porta(banco).reabrir(VAGA, { candidaturaIds: ["cand-Ana"], dataLimite: PRAZO_NOVO }, MASTER),
+    );
+
+    expect(e, "a vaga ABERTA foi reaberta por esta porta").toBeInstanceOf(ConflictException);
+    expect(banco.escritas, "a recusa da ABERTURA gravou antes de recusar").toEqual([]);
+    expect(banco.vaga.status).toBe(CODIGO_ABERTURA);
+  });
+
+  it("o COMUM reabre a ENTREGUE: reabrir virou consultor+, em todos os casos", async () => {
+    /*
+     * REABRIR VIROU CONSULTOR+ (decisão do diretor): o COMUM reabre a ENTREGUE como o Master, desde
+     * que venha o prazo novo que a ENTREGA exige. Antes esta porta recusava o COMUM com 403; a
+     * reversão é a mesma frente que liberou a FECHADA. A autoria segue da sessão (coberta no
+     * comportamental): aqui o que se trava é que o COMUM NÃO é barrado.
+     */
+    const banco = vagaEntregue();
+
     const e = await erroDe(() => porta(banco).reabrir(VAGA, { dataLimite: PRAZO_NOVO }, COMUM));
 
-    expect(e).toBeInstanceOf(ForbiddenException);
-    expect(banco.escritas).toEqual([]);
-    expect(banco.vaga.status).toBe(CODIGO_ENTREGA);
+    expect(e, "o COMUM foi barrado ao reabrir a ENTREGUE").toBeNull();
+    expect(banco.vaga.status).toBe(CODIGO_ABERTURA);
   });
 });
 

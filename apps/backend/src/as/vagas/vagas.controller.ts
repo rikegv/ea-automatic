@@ -303,46 +303,43 @@ export class VagasController {
   }
 
   /**
-   * A PRÉVIA DO REABRIR: quem o cancelamento derrubou, para o Master escolher quem volta.
+   * A PRÉVIA DO REABRIR: quem o cancelamento derrubou, para quem for reabrir escolher quem volta.
    *
-   * ┌─ `@Roles` AQUI TAMBÉM, E ELE NÃO É REDUNDANTE COM O DA ESCRITA ────────────────────────────┐
-   * │ SEM ELE, O COMUM ENUMERA OS DESCARTADOS DE QUALQUER VAGA pela URL da API, com nome, motivo  │
-   * │ e data da saída, sem nunca conseguir reabrir nada. Leitura sensível se protege na leitura.  │
+   * ┌─ SEM `@Roles`, NO MESMO MOLDE DO `fechar` E DO `cancelar` (decisão do diretor) ────────────┐
+   * │ Reabrir passou a ser consultor pra cima, igual ao fechar e ao cancelar, então esta prévia  │
+   * │ segue a escrita e também não leva `@Roles`: o gate é o menu `as-vagas` mais a área AS, que  │
+   * │ reivindicam a controller inteira. O service reconfere o papel do `@CurrentUser()` em         │
+   * │ `podeReabrir`, que agora aceita COMUM, e nunca do corpo.                                     │
    * │                                                                                            │
-   * │ O AVISO AO COMUM É PURAMENTE DE TELA, SEM `fetch`: o botão não se esconde (decisão do       │
-   * │ diretor), ele DIZ que só o Master reabre. Esconder ensina que o sistema está quebrado; dizer │
-   * │ ensina quem procurar.                                                                       │
-   * │                                                                                            │
-   * │ `SUPER_ADMIN` É ESCRITO, e a omissão seria um defeito medido: o `RolesGuard` faz            │
-   * │ `!required.includes(user.papel)` e LANÇA antes de tratar o SUPER_ADMIN, então               │
-   * │ `@Roles("MASTER")` sozinho barraria o próprio diretor. É o molde do `trocarVaga`.            │
+   * │ A LEITURA JÁ NÃO É MAIS RESTRITA QUE A OUTRA PORTA: a MESMA informação, com nome, é servida │
+   * │ a qualquer consultor com o menu por `GET as/candidatos/vaga/:vagaId`; aqui sai o conjunto   │
+   * │ de quem o cancelamento derrubou, para a tela oferecer a escolha.                            │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   @Get(":id/reabrir-previa")
-  @Roles("MASTER", "SUPER_ADMIN")
   previaDeReabertura(@Param("id") id: string, @CurrentUser() user: AuthUser) {
     return this.vagas.previaDeReabertura(id, user);
   }
 
   /**
-   * REABRIR A VAGA CANCELADA (onda B3): a única porta que DESFAZ um encerramento.
+   * REABRIR A VAGA: a única porta que DESFAZ um encerramento (cancelada, entregue ou fechada).
    *
-   * ┌─ COM `@Roles`, AO CONTRÁRIO DO `fechar` E DO `cancelar`, E O CONTRASTE É A REGRA ──────────┐
-   * │ Lá a ausência é deliberada: todo consultor fecha e cancela, e só FORÇAR é de Master, o que  │
-   * │ o service confere. AQUI A AÇÃO INTEIRA É DE MASTER, por decisão do diretor, então a         │
-   * │ restrição sobe para a rota. O service RECONFERE o papel do `@CurrentUser()`, nunca do corpo:│
-   * │ o guard é a primeira autoridade, e a segunda vale para todo chamador interno.                │
+   * ┌─ SEM `@Roles`, NO MESMO MOLDE DO `fechar` E DO `cancelar` (decisão do diretor) ────────────┐
+   * │ Reabrir virou consultor pra cima para TODOS os casos (cancelada, entregue e fechada), igual │
+   * │ ao fechar e ao cancelar, então a restrição de papel SAIU da rota. O gate é o menu           │
+   * │ `as-vagas` mais a área AS, que reivindicam a controller inteira. O service RECONFERE o papel │
+   * │ do `@CurrentUser()` em `podeReabrir`, que agora aceita COMUM, e nunca do corpo: a guarda do  │
+   * │ service fica como rede estrutural para todo chamador interno.                                │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * ELA MORA NESTA CONTROLLER, E ISSO NÃO É ARRUMAÇÃO: uma controller NOVA cairia no default de
-   * área ADM, fail-closed (`menu-areas.service`), e todo Master de A&S levaria 403 dizendo que a
+   * área ADM, fail-closed (`menu-areas.service`), e todo consultor de A&S levaria 403 dizendo que a
    * operação é de outra área. A `VagasController` já é reivindicada pelo menu `as-vagas`.
    *
    * POST e não PATCH, no molde do `fechar` e do `cancelar`: aqui não se edita a vaga, registra-se um
    * movimento dela, com trilha e com gente voltando ao processo.
    */
   @Post(":id/reabrir")
-  @Roles("MASTER", "SUPER_ADMIN")
   reabrir(@Param("id") id: string, @Body() dto: ReabrirVagaDto, @CurrentUser() user: AuthUser) {
     return this.vagas.reabrir(id, dto, user);
   }

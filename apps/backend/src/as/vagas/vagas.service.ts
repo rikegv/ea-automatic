@@ -2392,9 +2392,16 @@ export class VagasService {
     };
   }
 
-  /** Só o MASTER e o SUPER_ADMIN reabrem, e o papel é lido da SESSÃO, nunca do corpo. */
+  /**
+   * REABRIR É CONSULTOR PRA CIMA (decisão do diretor), alinhado ao `fechar` e ao `cancelar`: qualquer
+   * papel autenticado reabre. O gate real é o menu `as-vagas` mais a área AS, conferidos na controller;
+   * o papel é lido da SESSÃO, nunca do corpo. A guarda abaixo fica como rede estrutural para todo
+   * chamador interno que não passe pela controller, e hoje ela aceita COMUM, MASTER e SUPER_ADMIN.
+   */
   private podeReabrir(user: AuthUser): boolean {
-    return user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
+    return (
+      user.papel === "COMUM" || user.papel === "MASTER" || user.papel === "SUPER_ADMIN"
+    );
   }
 
   /**
@@ -2730,17 +2737,17 @@ export class VagasService {
    */
   async reabrir(id: string, dto: ReabrirVagaDto, user: AuthUser): Promise<VagaListItem> {
     /*
-     * O PAPEL É CONFERIDO AQUI, ANTES DE QUALQUER LEITURA, e não só no `@Roles` da rota. O guard é a
-     * primeira autoridade; esta é a que vale para todo chamador interno que não passe por ele. A
-     * recusa é ESTRUTURADA porque o botão NÃO se esconde (decisão do diretor): o consultor clica e o
-     * sistema DIZ que só o Master reabre, em vez de a ação simplesmente não existir na tela dele.
+     * O PAPEL É CONFERIDO AQUI, ANTES DE QUALQUER LEITURA, como rede estrutural para todo chamador
+     * interno que não passe pela controller. Reabrir virou consultor pra cima (decisão do diretor),
+     * então `podeReabrir` hoje aceita COMUM, MASTER e SUPER_ADMIN, e esta guarda NÃO recusa mais
+     * ninguém autenticado: ela fica como rede, não como trava de papel. O gate real é o menu
+     * `as-vagas` mais a área AS, na controller; o papel vem da SESSÃO, nunca do corpo.
      */
     if (!this.podeReabrir(user)) {
       const corpo: AsVagaReabrirNegado = {
         needsConfirmation: false,
         reason: "reabrirEhDeMaster",
-        message:
-          "Reabrir uma vaga cancelada é ação de Master. Peça a reabertura a quem tem esse papel.",
+        message: "Seu usuário não tem permissão para reabrir vagas.",
       };
       throw new ForbiddenException(corpo);
     }
@@ -2806,14 +2813,22 @@ export class VagasService {
          * │ COM O CLIENTE, viva, que precisa voltar para a triagem.                               │
          * └─────────────────────────────────────────────────────────────────────────────────────┘
          *
-         * FECHADA CONTINUA SEM PORTA DE VOLTA, e a ausência é decisão do diretor (fica como frente
-         * futura): reabrir um FECHAMENTO tem régua própria (a meta fechada, a data prevista de
-         * início, o relógio da retenção) e não é um papel a mais nesta lista.
+         * FECHADA GANHOU PORTA DE VOLTA (decisão do diretor): reabrir um FECHAMENTO tem régua
+         * própria, em reverso ao `fechar`, e vive no `reabrirDoFechamento`. A meta fechada, a data
+         * prevista de início, o salário de fechamento e o relógio da retenção são LIMPOS, porque
+         * descrevem um encerramento que deixou de valer; o fato fica na trilha do evento. Diferente
+         * da ENTREGA, a FECHADA não exige prazo novo (como o cancelamento), e os candidatos ficam
+         * onde estão, porque o `fechar` não move ninguém.
          */
         const ehReaberturaDeEntrega = regua.ehDoPapel(vaga.status, "ENTREGA");
-        if (!ehReaberturaDeEntrega && !regua.ehDoPapel(vaga.status, "CANCELAMENTO")) {
+        const ehReaberturaDeFechamento = regua.ehDoPapel(vaga.status, "FECHAMENTO");
+        if (
+          !ehReaberturaDeEntrega &&
+          !ehReaberturaDeFechamento &&
+          !regua.ehDoPapel(vaga.status, "CANCELAMENTO")
+        ) {
           throw new ConflictException(
-            "Só uma vaga CANCELADA ou ENTREGUE é reaberta por aqui. Recarregue a página.",
+            "Só uma vaga CANCELADA, ENTREGUE ou FECHADA é reaberta por aqui. Recarregue a página.",
           );
         }
 
@@ -2878,6 +2893,18 @@ export class VagasService {
             prazoAnterior: vaga.dataLimite,
             prazoNovo: prazoNovo as string,
             regua,
+            dto,
+            user,
+          });
+          return;
+        }
+
+        if (ehReaberturaDeFechamento) {
+          await this.reabrirDoFechamento(tx, {
+            vagaId: id,
+            statusDeOrigem: vaga.status,
+            codigoAbertura,
+            carimbos: carimbosDaReabertura,
             dto,
             user,
           });
@@ -3238,6 +3265,131 @@ export class VagasService {
      * continua gravada, em vez de o sistema mentir sobre o estado dela.
      */
     await derivarStatusDaVaga(tx, ctx.vagaId, ctx.regua, ctx.etapasDeEntrega, ctx.user.id);
+  }
+
+  /**
+   * ─ A REABERTURA DA VAGA FECHADA: O FECHAMENTO EM REVERSO (decisão do diretor) ──────────────────
+   *
+   * ┌─ O QUE ESTA ROTINA FAZ, E É O ESPELHO DO `fechar` ─────────────────────────────────────────┐
+   * │ O `fechar` grava o status de FECHAMENTO, carimba o relógio da retenção, congela a contagem e │
+   * │ guarda a data prevista de início, o salário e a intenção de enviar para admissão. Reabrir    │
+   * │ DESFAZ isso: volta o status para ABERTURA e LIMPA cada carimbo, porque todos descrevem um     │
+   * │ encerramento que deixou de valer. O fato de que a vaga foi fechada NÃO se perde, ele vive na  │
+   * │ trilha do evento inserido aqui (quem reabriu, quando), par com `dataReabertura`.             │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O QUE ESTA ROTINA NÃO FAZ, E CADA AUSÊNCIA É DELIBERADA ──────────────────────────────────┐
+   * │ . NÃO restaura nem move candidato nenhum: o `fechar` não move ninguém (diferente do          │
+   * │   `cancelar`), então na vaga FECHADA os candidatos ficam onde estavam, e a vaga "volta com o  │
+   * │   que tinha". Por isso NÃO chama `conjuntoDoReabrir`, `travaDaSelecao` nem `travaDaCapacidade`.│
+   * │ . NÃO exige prazo novo: a FECHADA é como o cancelamento nesse ponto, o lançamento de prazo    │
+   * │   em `reabrir` cobre só a ENTREGA. Vindo um prazo no corpo, ele é aplicado pelos carimbos.    │
+   * │ . NÃO escreve `status` por derivação: a FECHADA não tem gente em etapa de entrega para a      │
+   * │   derivação ler, então o status volta para ABERTURA direto, no mesmo `.set`.                 │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: a trilha guarda só a observação de quem reabriu, sem nome, sem CPF, sem contagem de pessoa.
+   * §A.11: sem travessão.
+   */
+  private async reabrirDoFechamento(
+    tx: DbTransaction,
+    ctx: {
+      vagaId: string;
+      statusDeOrigem: string;
+      codigoAbertura: string;
+      carimbos: Record<string, unknown>;
+      dto: ReabrirVagaDto;
+      user: AuthUser;
+    },
+  ): Promise<void> {
+    /*
+     * A TRILHA ENTRA PRIMEIRO, como nos outros dois caminhos: é a ÚNICA cópia do fato depois que os
+     * carimbos do fechamento forem limpos no `.set` abaixo. `de` é o status de fechamento de origem,
+     * `para` é o código do papel ABERTURA resolvido no servidor, e QUEM vem da SESSÃO, nunca do corpo.
+     */
+    await tx.insert(asVagaStatusEventos).values({
+      vagaId: ctx.vagaId,
+      de: ctx.statusDeOrigem,
+      para: ctx.codigoAbertura,
+      porId: ctx.user.id,
+      observacao: this.narrativaDaReaberturaDeFechamento(ctx.dto),
+    });
+
+    await tx
+      .update(vagas)
+      .set({
+        // O CÓDIGO VEM DO PAPEL, resolvido antes da transação, e NUNCA do corpo nem do literal
+        // "ABERTA": o status é catálogo do diretor desde a B2. A FECHADA não tem gente em etapa de
+        // entrega, então não há derivação a correr: o status volta para ABERTURA direto.
+        status: ctx.codigoAbertura,
+        /*
+         * O CARIMBO MANUAL É LIMPO PELA REABERTURA (Frente B, ponto 2): a vaga reaberta volta para
+         * Aberta pela porta, então o status vigente NÃO é o que alguém pôs à mão, e o carimbo não
+         * pode afirmar que é, sob pena de nascer com a derivação desligada.
+         */
+        statusManualEm: null,
+        statusManualPorId: null,
+        /*
+         * `encerradaEm` SAI NO MESMO `.set` DO STATUS, pela mesma razão do caminho do cancelamento:
+         * limpar o carimbo sem mover o status deixaria a vaga ENCERRADA com `encerrada_em` nulo, que
+         * é fail-closed no expurgo (`v.encerrada_em is null` PROTEGE) e reteria todo vivo dentro dela
+         * para sempre; mover o status sem limpar o carimbo deixaria a vaga viva afirmando o instante
+         * em que acabou. A FECHADA tinha o carimbo preenchido (o `fechar` grava), então limpar aqui
+         * reprotege os vivos, exatamente como o cancelamento.
+         */
+        encerradaEm: null,
+        /*
+         * OS TRÊS DO ENCERRAMENTO, que o `fechar` escreve: a data do fato comercial e a contagem
+         * CONGELADA. Deixados para trás, a vaga volta viva com o cilindro mostrando o retrato do dia
+         * do fechamento em vez da ocupação derivada de agora, e o contador de dias lendo uma data de
+         * fechamento que não existe mais. O fato viaja na narrativa do evento.
+         */
+        dataFechamento: null,
+        vagasFechadas: null,
+        vagasFechadasBanco: null,
+        /*
+         * A TRILHA DO FORÇADO, limpa pela mesma razão: ela descreve um fechamento forçado que deixou
+         * de valer. Se um dia esta vaga for fechada de novo à força, o `fechar` reescreve os três.
+         */
+        fechamentoForcadoPorId: null,
+        fechamentoForcadoEm: null,
+        fechamentoForcadoFaltavam: null,
+        /*
+         * O SALÁRIO E A DATA PREVISTA DE INÍCIO DO FECHAMENTO, limpos porque descrevem o fechamento.
+         * Numa vaga ABERTA, a ponte para admissão lê `salarioFechamento ?? salarioAbertura`
+         * (`candidatos.service`), então limpar aqui devolve o comportamento correto da vaga aberta, o
+         * mesmo da vaga que nunca foi fechada. Um envio futuro passa a usar o salário de abertura.
+         */
+        salarioFechamento: null,
+        dataPrevistaInicio: null,
+        /*
+         * A INTENÇÃO DE ENVIAR PARA ADMISSÃO VOLTA A FALSE: ela só registra intenção no instante do
+         * fechamento e não liga nada (ver o comentário em `fechar`). Vaga reaberta não está fechada,
+         * então a intenção do fechamento anterior não pode ficar de pé.
+         */
+        enviarParaAdmissao: false,
+        /*
+         * OS CARIMBOS DA REABERTURA SAEM NO MESMO `.set`, reusando o objeto montado em `reabrir`:
+         * `dataReabertura` e `reaberturaPorId` sempre, e o prazo novo só quando vier no corpo (na
+         * FECHADA normalmente não vem, como no cancelamento). Carimbo que viaja em outro `update` é
+         * carimbo que pode não acontecer.
+         */
+        ...ctx.carimbos,
+        atualizadoEm: new Date(),
+      })
+      .where(eq(vagas.id, ctx.vagaId));
+  }
+
+  /**
+   * A FRASE QUE FICA NA TRILHA DA VAGA quando o fechamento é reaberto, irmã da `narrativaDaReabertura`.
+   *
+   * §A.6: só a observação de quem reabriu, sem nome, sem CPF, sem contagem de pessoa, porque a
+   * reabertura do fechamento não move ninguém. §A.11: sem travessão.
+   */
+  private narrativaDaReaberturaDeFechamento(dto: ReabrirVagaDto): string {
+    const partes = ["Vaga reaberta a partir do fechamento."];
+    if (dto.observacao) partes.push(`Observação: ${dto.observacao}.`);
+    return partes.join(" ");
   }
 
   /**

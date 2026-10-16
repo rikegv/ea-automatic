@@ -80,7 +80,11 @@ import { dataBr, dataHoraBr, mensagemDoErro } from "@/lib/as-candidatos";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { rotuloDoLado } from "@/lib/as-vaga-acoes";
-import { fraseDaReabertura, fraseDaReaberturaDeEntrega } from "@/lib/as-vaga-reabertura";
+import {
+  fraseDaReabertura,
+  fraseDaReaberturaDeEntrega,
+  fraseDaReaberturaDeFechamento,
+} from "@/lib/as-vaga-reabertura";
 import { ehDoPapelDaVaga } from "@/lib/as-status-vaga";
 
 export function ReabrirVagaModal({
@@ -122,6 +126,11 @@ export function ReabrirVagaModal({
      catálogo, então renomear a linha "Entregue" ou criar outra de entrega não faz esta tela voltar
      em silêncio a se comportar como a da vaga cancelada. Mesma régua da Central de Vagas. */
   const deEntrega = ehDoPapelDaVaga(vaga.status, "ENTREGA");
+  /* ─ O TERCEIRO CAMINHO: A VAGA FECHADA (16/10) ────────────────────────────────────────────────
+     FECHAR não descarta ninguém, então este caminho é o mais simples: a prévia vem VAZIA (sem lista
+     a marcar) e não há prazo novo. Reabrir só devolve a vaga ao trabalho como Aberta, e os
+     candidatos e o histórico seguem preservados. A pergunta é pelo PAPEL, igual aos outros dois. */
+  const deFechamento = ehDoPapelDaVaga(vaga.status, "FECHAMENTO");
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -134,15 +143,19 @@ export function ReabrirVagaModal({
       setErro(
         mensagemDoErro(
           err,
-          deEntrega
-            ? "Falha ao carregar o que esta reabertura pode devolver ao processo."
-            : "Falha ao carregar quem este cancelamento encerrou.",
+          /* O FECHAMENTO NÃO FALA DE "CANCELAMENTO": a vaga fechada não teve cancelamento, então a
+             frase é neutra, igual à que a entrega usa, mas sem prometer devolução de ninguém. */
+          deFechamento
+            ? "Falha ao carregar a reabertura desta vaga."
+            : deEntrega
+              ? "Falha ao carregar o que esta reabertura pode devolver ao processo."
+              : "Falha ao carregar quem este cancelamento encerrou.",
         ),
       );
     } finally {
       setCarregando(false);
     }
-  }, [vaga.id, token, deEntrega]);
+  }, [vaga.id, token, deEntrega, deFechamento]);
 
   /* A LEITURA SÓ ACONTECE PARA QUEM PODE REABRIR. Para o comum, o `podeReabrir` falso corta o
      efeito antes do `fetch`, e a caixa desenha a explicação direto (ver o cabeçalho do arquivo). */
@@ -188,9 +201,11 @@ export function ReabrirVagaModal({
 
      NO CAMINHO DA ENTREGA É OUTRA FRASE, e não uma adaptação desta: ali não houve cancelamento
      nenhum, então toda frase que fale de "este cancelamento" seria falsa. */
-  const aviso = deEntrega
-    ? fraseDaReaberturaDeEntrega(lista.length)
-    : fraseDaReabertura(previa?.origem ?? "NINGUEM_DESCARTADO", lista.length);
+  const aviso = deFechamento
+    ? fraseDaReaberturaDeFechamento()
+    : deEntrega
+      ? fraseDaReaberturaDeEntrega(lista.length)
+      : fraseDaReabertura(previa?.origem ?? "NINGUEM_DESCARTADO", lista.length);
   /* O PRAZO NOVO É OBRIGATÓRIO NO CAMINHO DA ENTREGA, e a tela não deixa nem tentar: reabrir contra
      a previsão antiga é o defeito que este campo existe para impedir. O servidor continua sendo a
      trava; aqui é só não oferecer um clique que ele recusaria. */
@@ -267,9 +282,11 @@ export function ReabrirVagaModal({
               <p className="mt-1 text-[12.5px] text-dim">
                 <span className="font-semibold text-text">{rotulo}</span>, código{" "}
                 {vaga.codigo ?? "não informado"}.{" "}
-                {deEntrega
-                  ? "A vaga volta ao trabalho e deixa de estar entregue, com um prazo novo."
-                  : "A vaga volta ao trabalho e deixa de estar encerrada."}
+                {deFechamento
+                  ? "A vaga volta ao trabalho e deixa de estar fechada. Os candidatos e o histórico seguem preservados."
+                  : deEntrega
+                    ? "A vaga volta ao trabalho e deixa de estar entregue, com um prazo novo."
+                    : "A vaga volta ao trabalho e deixa de estar encerrada."}
               </p>
             </div>
           </div>
@@ -278,9 +295,11 @@ export function ReabrirVagaModal({
         <div className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
           {carregando && (
             <p className="text-[13px] text-faint">
-              {deEntrega
-                ? "Carregando o que esta reabertura pode devolver ao processo."
-                : "Carregando quem este cancelamento encerrou."}
+              {deFechamento
+                ? "Carregando a reabertura desta vaga."
+                : deEntrega
+                  ? "Carregando o que esta reabertura pode devolver ao processo."
+                  : "Carregando quem este cancelamento encerrou."}
             </p>
           )}
 
@@ -470,15 +489,19 @@ export function ReabrirVagaModal({
             {/* NO CAMINHO DA ENTREGA A FRASE DIZ O EFEITO, e não a contagem de marcados: o que
                 acontece com quem está com o cliente (volta para o começo do funil) é maior do que
                 quem o Master marcou, e é isso que ele precisa ler ao lado do botão. */}
-            {deEntrega
-              ? faltaPrevisao
-                ? "Informe a previsão de entrega nova para reabrir."
-                : "A vaga volta para Aberta e quem está com o cliente volta para o começo do funil."
-              : marcados.length === 0
-                ? "A vaga volta ao trabalho sem ninguém restaurado."
-                : marcados.length === 1
-                  ? "1 pessoa volta para o processo desta vaga."
-                  : `${marcados.length} pessoas voltam para o processo desta vaga.`}
+            {/* O FECHAMENTO VEM ANTES DA CONTAGEM DE MARCADOS: ele não conta ninguém (prévia vazia) e
+                não tem prazo, então a frase diz só o efeito, que é a vaga voltar como estava. */}
+            {deFechamento
+              ? "A vaga volta para Aberta, com os candidatos e o histórico preservados."
+              : deEntrega
+                ? faltaPrevisao
+                  ? "Informe a previsão de entrega nova para reabrir."
+                  : "A vaga volta para Aberta e quem está com o cliente volta para o começo do funil."
+                : marcados.length === 0
+                  ? "A vaga volta ao trabalho sem ninguém restaurado."
+                  : marcados.length === 1
+                    ? "1 pessoa volta para o processo desta vaga."
+                    : `${marcados.length} pessoas voltam para o processo desta vaga.`}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button

@@ -506,13 +506,12 @@ function listaEmTexto(itens: string[], outro: string | null, sentinela: string):
 }
 
 export default function CentralDeVagasPage() {
-  /* `isAdmin` É MASTER OU SUPER_ADMIN, a tradução exata do `@Roles` da rota do reabrir (peça 2).
-     Ele NÃO é a trava, é o que decide se a caixa lê a prévia ou explica que a ação é de Master: a
-     autoridade é o servidor, que recusa o POST de quem não tem o papel. */
-  /* O `user.papel` decide só se o "Excluir vaga" APARECE (frente do CRUD da vaga liberada: excluir
+  /* REABRIR DEIXOU DE SER DE MASTER (16/10): a rota perdeu o `@Roles` e virou de consultor pra cima,
+     igual a fechar e cancelar, então não há mais gate de papel aqui e o modal sempre lê a prévia.
+     O `user.papel` decide só se o "Excluir vaga" APARECE (frente do CRUD da vaga liberada: excluir
      é de SUPER_ADMIN, o Master não exclui), pela régua `podeExcluirVagaPeloPapel`. A autoridade é
      o `@Roles` do DELETE. */
-  const { token, isAdmin, user } = useAuth();
+  const { token, user } = useAuth();
   const [rows, setRows] = useState<VagaListItem[]>([]);
   const [opcoes, setOpcoes] = useState<Opcoes>({
     cargos: [],
@@ -1478,9 +1477,14 @@ export default function CentralDeVagasPage() {
        SÃO DOIS PAPÉIS, E A DIFERENÇA CHEGA NO MODAL: ele é quem muda o que a tela afirma (a
        entregue pede uma previsão de entrega nova, a cancelada não) e quem explica o que vai
        acontecer com os candidatos. Aqui só muda a frase do gesto. */
+    /* ─ E A REABERTURA PASSOU A VALER TAMBÉM PARA A VAGA FECHADA (16/10, decisão do diretor) ──────
+       FECHAR também leva a vaga ao estado terminal, e o diretor decidiu que ela volta pela mesma
+       porta. A diferença chega no modal: fechar não descarta ninguém, então a prévia vem vazia e
+       não há prazo novo nem escolha pessoa a pessoa. Os candidatos e o histórico seguem preservados. */
     const papelReabrivel =
       ehDoPapelDaVaga(v.status, "CANCELAMENTO", catalogoStatus) ||
-      ehDoPapelDaVaga(v.status, "ENTREGA", catalogoStatus);
+      ehDoPapelDaVaga(v.status, "ENTREGA", catalogoStatus) ||
+      ehDoPapelDaVaga(v.status, "FECHAMENTO", catalogoStatus);
     if (papelReabrivel) {
       lista.push({
         id: "reabrir",
@@ -3793,9 +3797,9 @@ export default function CentralDeVagasPage() {
           NO MESMO BLOCO DOS DEMAIS, E DEPOIS DO PAINEL: a ordem aqui é o que faz a caixa pintar por
           cima dele em vez de atrás (o porquê inteiro está no cabeçalho deste bloco).
 
-          `isAdmin` É A TRADUÇÃO EXATA DO `@Roles("MASTER","SUPER_ADMIN")` da rota, e é só ele que
-          decide se a caixa LÊ a prévia ou EXPLICA que a reabertura é de Master. A autoridade
-          continua no servidor: quem burlar a tela leva 403 com a frase dele. */}
+          `podeReabrir` É SEMPRE `true` desde 16/10: reabrir virou de consultor pra cima, igual a
+          fechar e cancelar, e a rota perdeu o `@Roles`, então a caixa sempre LÊ a prévia e não há
+          mais o caminho de leitura "é ação de Master". A autoridade continua no servidor. */}
       {reabrirAlvo && (
         <ReabrirVagaModal
           /* SEM `key` AQUI, E A AUSÊNCIA É MEDIDA (ver o relatório da peça 2) ────────────────────
@@ -3812,7 +3816,10 @@ export default function CentralDeVagasPage() {
              estado dela nasce limpo sem nenhuma ajuda. */
           vaga={reabrirAlvo}
           token={token}
-          podeReabrir={isAdmin}
+          /* REABRIR É DE CONSULTOR PRA CIMA (decisão do diretor, 16/10): todo mundo que já acessa a
+             Central reabre, igual a fechar e cancelar. A rota perdeu o @Roles, então não há mais 403
+             a evitar e não existe mais o caminho de leitura "é ação de Master". */
+          podeReabrir={true}
           onFechar={() => setReabrirAlvo(null)}
           onReaberta={(atualizada) => {
             setReabrirAlvo(null);

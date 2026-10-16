@@ -1594,96 +1594,101 @@ export async function violacoesDoReabrir(
     }
   }
 
-  // ── I. RBAC: O REABRIR NÃO TEM VERSÃO NORMAL ────────────────────────────────
+  // ── I. REABRIR É CONSULTOR+, EM TODOS OS CASOS, E A AUTORIA VEM DA SESSÃO ────
   {
+    /*
+     * ─ O QUE MUDOU, E POR QUE O VALOR DE SEGURANÇA NÃO SE PERDEU ───────────────────────────────
+     *
+     * Reabrir ERA de Master; a decisão do diretor rebaixou para CONSULTOR+ em TODOS os casos
+     * (FECHADA, CANCELADA, ENTREGUE), alinhando `reabrir` ao `fechar` e ao `cancelar`: o gate é o
+     * menu `as-vagas` mais a área AS, não o papel. Como não há mais permissão a ESCALAR (todos
+     * reabrem), o valor de segurança migra de "só o Master" para "a AUTORIA vem da SESSÃO": o
+     * `porId` do evento e o `reaberturaPorId` do carimbo são o `AuthUser.id` da sessão, nunca um
+     * campo do corpo. Sem isso, qualquer um assinaria a reabertura com o id de outra pessoa.
+     */
     const { banco, porta } = montar();
     const e = await erro(() => porta.reabrir(VAGA, { candidaturaIds: ["cand-Ana"] }, COMUM));
-    if (e === null) {
+    if (e !== null) {
       anotar(
-        "COMUM_REABRE",
-        "o COMUM reabriu a vaga. É o OPOSTO do `fechar` e do `cancelar`, que são do consultor: desfazer um encerramento é do Master, e o service reconfere além do guard da rota.",
-      );
-    } else if (!(e instanceof ForbiddenException)) {
-      anotar(
-        "RECUSA_DO_COMUM_NAO_E_403",
-        `a recusa do COMUM veio como ${(e as Error)?.constructor?.name}. Ela precisa ser 403 com mensagem, e não um erro genérico: o botão não se esconde, o sistema DIZ que só o Master reabre.`,
+        "COMUM_NAO_REABRE",
+        `o COMUM foi recusado ao reabrir (${(e as Error)?.constructor?.name}). Reabrir passou a ser de consultor+ em todos os casos (decisão do diretor), alinhado ao \`fechar\` e ao \`cancelar\`: o gate é o menu \`as-vagas\`, não o papel.`,
       );
     }
-    if (banco.escritas.length > 0) {
+    if (banco.vaga.status !== codigoAbertura) {
       anotar(
-        "COMUM_ESCREVE",
-        `a recusa do COMUM gravou ${banco.escritas.length} vez(es) antes de recusar.`,
+        "COMUM_NAO_REABRE",
+        `o COMUM não levou a vaga para ABERTA (ficou ${String(banco.vaga.status)}). Reabrir é dele por decisão do diretor.`,
       );
     }
   }
   {
+    const { porta } = montar();
+    const previa = await porta.previa(VAGA, COMUM);
+    if (previa.podeReabrir !== true) {
+      anotar(
+        "PODE_REABRIR_NEGA_COMUM",
+        "a prévia devolveu `podeReabrir: false` para o COMUM. Reabrir é consultor+, então o botão precisa ficar ativo para ele, igual ao Master.",
+      );
+    }
+  }
+  {
+    // A AUTORIA É DA SESSÃO: um `porId`/`user` forjado no corpo não reautoria o evento.
     const { banco, porta } = montar();
-    const e = await erro(() =>
+    await erro(() =>
       porta.reabrir(
         VAGA,
-        { candidaturaIds: ["cand-Ana"], papel: "SUPER_ADMIN", user: { papel: "MASTER" } },
+        { candidaturaIds: ["cand-Ana"], porId: MASTER.id, user: { id: MASTER.id, papel: "MASTER" } },
         COMUM,
       ),
     );
-    if (e === null || banco.escritas.length > 0) {
+    const trilha = escritasEm(banco, "as_vaga_status_eventos");
+    const porId = trilha[0]?.valores.porId;
+    if (porId !== undefined && porId !== COMUM.id) {
       anotar(
-        "PAPEL_VEM_DO_CORPO",
-        "um `papel` mandado no CORPO promoveu o COMUM. A autoridade é o `AuthUser` da sessão, sempre.",
+        "AUTORIA_VEM_DO_CORPO",
+        `o evento da reabertura foi carimbado com \`porId: ${String(porId)}\`, vindo do CORPO, e não com o autor da SESSÃO (${COMUM.id}). A autoria é sempre o \`AuthUser\` da sessão (§A.6): lida do corpo, qualquer um assina a reabertura com o id de outra pessoa, e a trilha de auditoria deixa de valer.`,
       );
     }
   }
   {
-    for (const user of [MASTER, SUPER]) {
+    for (const user of [COMUM, MASTER, SUPER]) {
       const { banco, porta } = montar();
       const e = await erro(() => porta.reabrir(VAGA, { candidaturaIds: ["cand-Ana"] }, user));
       if (banco.vaga.status !== codigoAbertura) {
         anotar(
-          "MASTER_OU_SUPER_BARRADO",
-          `o ${user.papel} não conseguiu reabrir (${String((e as Error)?.message ?? "sem erro, e mesmo assim a vaga não mudou")}). A régua é 'MASTER e SUPER_ADMIN', e o \`RolesGuard\` NÃO promove o SUPER_ADMIN sozinho: ele confere \`required.includes(papel)\` e LANÇA antes de chegar na linha que trata o SUPER_ADMIN (roles.guard.ts:46). Um \`@Roles("MASTER")\` sozinho barra o diretor, e um teste que só afirme "o COMUM leva 403" passa verde com ele.`,
+          "PAPEL_AUTENTICADO_BARRADO",
+          `o ${user.papel} não conseguiu reabrir (${String((e as Error)?.message ?? "sem erro, e a vaga não mudou")}). Reabrir é de qualquer papel autenticado: COMUM, MASTER e SUPER_ADMIN, por decisão do diretor.`,
         );
       }
     }
   }
 
-  // ── J. FECHAMENTO E ABERTURA NÃO TÊM PORTA DE VOLTA (a ENTREGA passou a ter) ─
+  // ── J. ABERTURA (E OS DEMAIS PAPÉIS NÃO TERMINAIS) NÃO TÊM PORTA DE VOLTA ────
   {
     /*
-     * ┌─ ESTA REGRA PASSAVA POR ACIDENTE, e a prova foi por MUTAÇÃO (30/09/2026) ──────────────────┐
-     * │ Ela dizia "a origem é SÓ o cancelamento" e incluía a ENTREGA na varredura. A decisão do     │
-     * │ diretor tornou isso FALSO: a vaga ENTREGUE reabre, desde que venha prazo novo.              │
+     * ┌─ O QUE REABRE, E O QUE O CONTRATO CONSEGUE MEDIR AQUI ─────────────────────────────────────┐
+     * │ Por decisão do diretor reabrem os TRÊS papéis terminais: CANCELAMENTO, ENTREGA e, agora,    │
+     * │ FECHAMENTO. O que NÃO reabre é o papel NÃO TERMINAL, e a ABERTURA é o caso: ela não tem      │
+     * │ encerramento a desfazer, e reabri-la seria a porta sem régua para qualquer status.          │
      * │                                                                                            │
-     * │ E ela continuava VERDE, o que é pior que ficar vermelha: a sonda mandava um corpo SEM       │
-     * │ `dataLimite`, então a produção recusava a ENTREGA por **falta de prazo**, e o contrato lia  │
-     * │ aquela recusa como se fosse a recusa do PAPEL. O `tester` provou o tamanho do buraco        │
-     * │ aplicando um mutante que APAGA `vagasFechadas`, `vagasFechadasBanco` e `dataFechamento` no  │
-     * │ caminho da entrega, que é literalmente o dano que o texto desta regra nomeava: os 16 testes │
-     * │ do contrato ficaram TODOS VERDES. A regra não detectava mais o dano que existia para pegar. │
-     * │                                                                                            │
-     * │ A SONDA AGORA MANDA PRAZO, de propósito: sem ele, a recusa do FECHAMENTO e da ABERTURA      │
-     * │ também deixaria de distinguir "recusou pelo papel" de "recusou por falta de prazo", e a     │
-     * │ regra passaria a medir a ORDEM das guardas em vez da régua do papel.                        │
-     * │                                                                                            │
-     * │ A OUTRA METADE, "a entrega reabre SEM apagar a entrega", NÃO veio para cá de propósito: ela │
-     * │ só seria executável se a implementação de referência ganhasse o caminho inteiro da 0138, e  │
-     * │ até lá ficaria verde por VACUIDADE, que é exatamente o defeito diagnosticado acima. Ela     │
-     * │ vive em `vagas.reabrir-de-entregue.cobertura-independente.tester.spec.ts`, que roda contra  │
-     * │ a PRODUÇÃO e está provada por mutação.                                                      │
+     * │ POR QUE SÓ A ABERTURA ENTRA NESTE CONTRATO, e não FECHAMENTO/ENTREGA: a implementação de    │
+     * │ REFERÊNCIA modela SÓ o caminho do cancelamento (ver a nota no `reabrir` dela). Afirmar aqui  │
+     * │ "a FECHADA reabre" ficaria VERDE POR VACUIDADE contra a referência, que é o defeito que a    │
+     * │ antiga regra J pagou com a ENTREGA. A reabertura da FECHADA é medida contra a PRODUÇÃO em    │
+     * │ `vagas.reabrir-de-fechada.cobertura-independente.tester.spec.ts`, e a da ENTREGA em          │
+     * │ `vagas.reabrir-de-entregue.cobertura-independente.tester.spec.ts`. Aqui fica o universal:    │
+     * │ quem NÃO tem porta.                                                                          │
      * └────────────────────────────────────────────────────────────────────────────────────────────┘
      */
-    for (const [papel, codigo] of [
-      ["FECHAMENTO", CODIGO_FECHAMENTO],
-      ["ABERTURA", codigoAbertura],
-    ] as const) {
-      const { banco, porta } = montar({ status: codigo });
-      const e = await erro(() =>
-        porta.reabrir(VAGA, { candidaturaIds: ["cand-Ana"], dataLimite: "2026-12-01" }, MASTER),
+    const { banco, porta } = montar({ status: codigoAbertura });
+    const e = await erro(() =>
+      porta.reabrir(VAGA, { candidaturaIds: ["cand-Ana"], dataLimite: "2026-12-01" }, MASTER),
+    );
+    if (e === null || banco.escritas.length > 0) {
+      anotar(
+        "ORIGEM_ACEITA_PAPEL_NAO_TERMINAL",
+        "a vaga no papel ABERTURA foi reaberta por este caminho. Ela não tem encerramento a desfazer, e aceitar qualquer papel não terminal faria desta rota a porta sem régua para qualquer status.",
       );
-      if (e === null || banco.escritas.length > 0) {
-        anotar(
-          "ORIGEM_ACEITA_OUTRO_PAPEL",
-          `a vaga no papel ${papel} foi reaberta por este caminho. O FECHAMENTO tem régua própria (a meta fechada, a data prevista de início, o relógio da retenção) e é frente futura por decisão do diretor; a ABERTURA não tem encerramento a desfazer.`,
-        );
-      }
     }
   }
 
@@ -1845,7 +1850,7 @@ export interface DesvioDaReferencia {
   ignoraSituacaoDeOrigem?: boolean;
   aceitaIdForaDoConjunto?: boolean;
   carimbaSemSelecao?: boolean;
-  semReconferenciaDePapel?: boolean;
+  autoriaDoCorpo?: boolean;
   naoLimpaEncerradaEm?: boolean;
   encerradaEmComoData?: boolean;
   literalDeStatus?: boolean;
@@ -1909,7 +1914,10 @@ export function referenciaDoReabrir(
     transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
   };
 
-  const podeReabrir = (user: AuthUser) => user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
+  // REABRIR É CONSULTOR+ (decisão do diretor): COMUM, MASTER e SUPER_ADMIN reabrem, em todos os
+  // casos. O gate real é o menu `as-vagas` mais a área AS, na controller; o papel é lido da SESSÃO.
+  const podeReabrir = (user: AuthUser) =>
+    user.papel === "COMUM" || user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
 
   const cancelamentosDaVaga = () =>
     [...banco.eventos]
@@ -2051,11 +2059,14 @@ export function referenciaDoReabrir(
     },
 
     async reabrir(vagaId, dto, user) {
-      if (!desvio.semReconferenciaDePapel && !podeReabrir(user)) {
+      // A GUARDA É REDE ESTRUTURAL, não gate de papel: `podeReabrir` aceita COMUM, MASTER e
+      // SUPER_ADMIN, então ela nunca barra um usuário autenticado. Fica para o chamador interno sem
+      // `AuthUser` válido, no mesmo molde da produção.
+      if (!podeReabrir(user)) {
         throw new ForbiddenException({
           needsConfirmation: false,
-          reason: "reabrirEhDeMaster",
-          message: "Só o Master reabre uma vaga cancelada. Peça a reabertura a quem tem esse papel.",
+          reason: "reabrirSemAutor",
+          message: "Reabrir uma vaga precisa de um usuário autenticado.",
         });
       }
       const ids = Array.isArray(dto.candidaturaIds) ? (dto.candidaturaIds as string[]) : [];
@@ -2177,7 +2188,9 @@ export function referenciaDoReabrir(
           vagaId,
           de: CODIGO_CANCELAMENTO,
           para: destino,
-          porId: user.id,
+          // A AUTORIA VEM DA SESSÃO, nunca do corpo. O mutante `autoriaDoCorpo` a lê de `dto.porId`,
+          // que é o defeito que a regra `AUTORIA_VEM_DO_CORPO` existe para pegar.
+          porId: desvio.autoriaDoCorpo ? ((dto.porId as string) ?? user.id) : user.id,
           observacao,
         });
       });
@@ -2220,10 +2233,10 @@ export const MUTANTES: Mutante[] = [
     regraEsperada: "TOCA_CANDIDATURA_SEM_SELECAO",
   },
   {
-    nome: "5. o service deixa de reconferir o papel (fica só o `@Roles` da rota)",
-    dano: "qualquer caminho interno que não passe pelo guard reabre vaga sem autoridade, e o consultor volta a desfazer encerramento.",
-    desvio: { semReconferenciaDePapel: true },
-    regraEsperada: "COMUM_REABRE",
+    nome: "5. a autoria da trilha passa a vir do CORPO em vez da sessão",
+    dano: "qualquer um reabre assinando com o id de outra pessoa: o `porId` do evento sai de `dto.porId`, e a trilha de auditoria passa a registrar um autor forjado (§A.6). Com reabrir rebaixado a consultor+, a autoria da sessão é o que resta de controle.",
+    desvio: { autoriaDoCorpo: true },
+    regraEsperada: "AUTORIA_VEM_DO_CORPO",
   },
   {
     nome: "6. `encerrada_em` deixa de ser limpo",

@@ -15,21 +15,19 @@ import { ACEITE_REABERTURA_SEM_ORIGEM, NOMES_DO_REABRIR } from "./reabrir-vaga.t
  * ─ A ROTA DO REABRIR: A AUTORIDADE QUE UM TESTE DE SERVICE NUNCA ALCANÇA ────────────────────────
  *
  * ┌─ POR QUE ESTE ARQUIVO EXISTE SEPARADO DO COMPORTAMENTAL ───────────────────────────────────┐
- * │ O `vagas.reabrir.comportamental.spec.ts` chama o SERVICE, e o `RolesGuard` roda ANTES de o   │
- * │ service existir na história: nenhum teste de service alcança um decorador de handler. É o    │
- * │ mesmo argumento que obrigou o `vagas.fechar-sem-roles.spec.ts` a nascer, pela ponta oposta.  │
+ * │ O `vagas.reabrir.comportamental.spec.ts` chama o SERVICE, e um `@Roles` é metadado de        │
+ * │ HANDLER: nenhum teste de service o alcança. É o mesmo argumento que obrigou o                 │
+ * │ `vagas.fechar-sem-roles.spec.ts` a nascer, pela ponta oposta.                                 │
  * │                                                                                             │
- * │ E AS DUAS PONTAS CONVIVEM NESTA CONTROLLER, o que é a parte fácil de errar: `fechar`,        │
- * │ `cancelar` e `moverStatus` NÃO TÊM `@Roles` de propósito (todo consultor encerra a vaga que  │
- * │ operou; só FORÇAR é de Master, e isso mora no service). O `reabrir` é o CONTRÁRIO: ele é de  │
- * │ Master INTEIRO, por decisão do diretor, e o `@Roles` é obrigatório aqui. Quem uniformizar os  │
- * │ dois, em qualquer direção, quebra um deles.                                                  │
- * └─────────────────────────────────────────────────────────────────────────────────────────────┘
- *
- * ┌─ O `SUPER_ADMIN` NÃO É IMPLÍCITO, E ESSA É A LINHA QUE QUASE TODA SUÍTE DE RBAC ESQUECE ────┐
- * │ O `RolesGuard` confere `required.includes(user.papel)` e LANÇA (`roles.guard.ts:46`) ANTES   │
- * │ da linha que trata o SUPER_ADMIN como acima da segmentação. Logo, `@Roles("MASTER")` sozinho  │
- * │ BARRA O PRÓPRIO DIRETOR, e um teste que afirme só "o COMUM leva 403" fica VERDE com ele.     │
+ * │ REABRIR É CONSULTOR+ (decisão do diretor), E CONVIVE COM `fechar`/`cancelar`/`moverStatus`    │
+ * │ NO MESMO REGIME: nenhum deles tem `@Roles`. O gate é o menu `as-vagas` mais a área AS, e o    │
+ * │ papel é lido da SESSÃO, dentro do service (`podeReabrir`, que aceita COMUM, MASTER e          │
+ * │ SUPER_ADMIN). Este arquivo trava a AUSÊNCIA do `@Roles`: quem o reintroduzir, em qualquer     │
+ * │ das duas rotas, barra o consultor que o diretor liberou, e o vermelho aqui diz qual.          │
+ * │                                                                                             │
+ * │ ANTES, reabrir era de Master INTEIRO e este arquivo exigia `@Roles("MASTER","SUPER_ADMIN")`.  │
+ * │ A reversão é a decisão do diretor registrada na frente "Reabrir vaga FECHADA, nível           │
+ * │ consultor": reabrir virou consultor+, e a permissão de MENU é quem decide quem enxerga.       │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 
@@ -55,37 +53,36 @@ function handler(nomes: readonly string[], oQueE: string): string {
 const papeis = (nome: string): unknown =>
   Reflect.getMetadata(ROLES_KEY, (VagasController.prototype as unknown as Record<string, object>)[nome]);
 
-describe("as/vagas: o reabrir é de MASTER na ROTA, e não só no service", () => {
-  it("a ESCRITA do reabrir exige MASTER ou SUPER_ADMIN", () => {
+describe("as/vagas: o reabrir é CONSULTOR+ na ROTA, no mesmo regime do fechar e do cancelar", () => {
+  it("a ESCRITA do reabrir NÃO tem @Roles: o gate é o menu `as-vagas`, não o papel", () => {
     const nome = handler(NOMES_DO_REABRIR, "O handler do reabrir");
-    expect(papeis(nome), "sem @Roles, o consultor chega ao service pela URL").toBeDefined();
-    expect(papeis(nome)).toContain("MASTER");
-    expect(papeis(nome), "o RolesGuard NÃO promove o SUPER_ADMIN sozinho").toContain("SUPER_ADMIN");
-    expect(papeis(nome), "o COMUM nunca").not.toContain("COMUM");
+    expect(
+      papeis(nome),
+      "com @Roles, o consultor que o diretor liberou é barrado pelo guard antes do service",
+    ).toBeUndefined();
   });
 
   /**
-   * A LEITURA TAMBÉM, e ela não é redundante com a escrita: a prévia devolve NOME, MOTIVO DA SAÍDA
-   * e DATA de cada pessoa que o cancelamento derrubou. Sem `@Roles` aqui, o consultor lê a lista
-   * inteira de quem foi descartado e por quê, sem nunca conseguir reabrir nada. Leitura sensível se
-   * protege na leitura.
+   * A LEITURA TAMBÉM: a prévia é consultor+, no mesmo regime da escrita. Ela devolve NOME, MOTIVO
+   * DA SAÍDA e DATA de cada pessoa que o cancelamento derrubou, e §A.6 é atendida pela minimização
+   * do payload (sem CPF, sem contato) mais o gate de menu, não por `@Roles`: o mesmo recorte que a
+   * recusa do cancelamento já trafega hoje para o COMUM.
    */
-  it("a LEITURA da prévia exige o mesmo par de papéis", () => {
+  it("a LEITURA da prévia também NÃO tem @Roles", () => {
     const nome = handler(NOMES_DA_PREVIA_NA_ROTA, "O handler da prévia do reabrir");
-    expect(papeis(nome), "a prévia carrega motivo e data da saída de cada pessoa").toBeDefined();
-    expect(papeis(nome)).toContain("MASTER");
-    expect(papeis(nome)).toContain("SUPER_ADMIN");
-    expect(papeis(nome)).not.toContain("COMUM");
+    expect(papeis(nome)).toBeUndefined();
   });
 
   /**
-   * A CONTRAPARTIDA: `@Roles` no HANDLER, nunca na CLASSE. Um decorador de classe barraria o COMUM
-   * em TODAS as rotas do A&S, inclusive o `fechar` e o `cancelar`, que são dele por decisão do
-   * diretor. É a regressão que o `vagas.fechar-sem-roles.spec.ts` protege pela outra ponta.
+   * NADA DE `@Roles`, nem no HANDLER, nem na CLASSE. Reabrir entrou no mesmo grupo de `fechar`,
+   * `cancelar` e `moverStatus`: operar a vaga é do consultor. É a regressão que o
+   * `vagas.fechar-sem-roles.spec.ts` protege pela outra ponta.
    */
-  it("nada foi promovido para a CLASSE: fechar e cancelar continuam do consultor", () => {
+  it("nem a classe nem reabrir/fechar/cancelar/moverStatus têm @Roles", () => {
     expect(Reflect.getMetadata(ROLES_KEY, VagasController)).toBeUndefined();
-    for (const aberta of ["fechar", "cancelar", "moverStatus"]) {
+    const reabrir = handler(NOMES_DO_REABRIR, "O handler do reabrir");
+    const previa = handler(NOMES_DA_PREVIA_NA_ROTA, "O handler da prévia do reabrir");
+    for (const aberta of [reabrir, previa, "fechar", "cancelar", "moverStatus"]) {
       expect(papeis(aberta), `VagasController.${aberta} ganhou @Roles`).toBeUndefined();
     }
   });

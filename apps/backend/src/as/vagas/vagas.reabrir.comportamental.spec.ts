@@ -1,4 +1,3 @@
-import { ForbiddenException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import type { AsVagaStatusLinha } from "../vaga-status/vaga-status.service";
 import { ReguaDeStatusDaVaga } from "../vaga-status/vaga-status.service";
@@ -330,51 +329,42 @@ describe("4b. a capacidade da vaga é conferida, porque a restauração não pas
   });
 });
 
-describe("5. RBAC: a recusa do COMUM vem do SERVIDOR, não da tela", () => {
-  it("o COMUM leva 403 do service e não escreve nada", async () => {
-    const banco = comCancelamentoNovo();
-    await expect(
-      porta(banco).reabrir(VAGA, { candidaturaIds: ["cand-Ana"] }, COMUM),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(banco.escritas, "recusa que já escreveu não é recusa").toEqual([]);
-  });
-
-  it("a recusa DIZ que só o Master reabre, para a tela avisar em vez de esconder o botão", async () => {
-    const banco = comCancelamentoNovo();
-    try {
-      await porta(banco).reabrir(VAGA, { candidaturaIds: ["cand-Ana"] }, COMUM);
-      expect.unreachable("o COMUM reabriu a vaga");
-    } catch (e) {
-      const corpo = (e as ForbiddenException).getResponse();
-      const texto = typeof corpo === "string" ? corpo : JSON.stringify(corpo);
-      expect(texto.toLowerCase(), "o consultor precisa saber a quem pedir").toContain("master");
-    }
-  });
-
+describe("5. permissão e autoria: reabrir é consultor+, e a autoria vem da SESSÃO", () => {
   /**
-   * O SUPER_ADMIN PASSA, E ESTE É O TESTE QUE FALTA EM QUASE TODA SUÍTE DE RBAC.
-   *
-   * O `RolesGuard` NÃO promove o SUPER_ADMIN sozinho: ele confere `required.includes(user.papel)` e
-   * LANÇA (roles.guard.ts:46) antes da linha que trata o SUPER_ADMIN. Um `@Roles("MASTER")` sozinho
-   * barra o diretor, e um teste que só afirme "o COMUM leva 403" fica VERDE com o diretor barrado.
+   * REABRIR VIROU CONSULTOR+ (decisão do diretor, frente "Reabrir vaga FECHADA, nível consultor").
+   * Antes era de Master; agora COMUM, MASTER e SUPER_ADMIN reabrem, no mesmo regime do `fechar` e do
+   * `cancelar`. O gate é o menu `as-vagas`, conferido na controller; o papel é lido da sessão.
    */
-  it("o MASTER e o SUPER_ADMIN reabrem", async () => {
-    for (const user of [MASTER, SUPER]) {
+  it("o COMUM, o MASTER e o SUPER_ADMIN reabrem", async () => {
+    for (const user of [COMUM, MASTER, SUPER]) {
       const banco = comCancelamentoNovo();
       await porta(banco).reabrir(VAGA, { candidaturaIds: ["cand-Ana"] }, user);
       expect(banco.vaga.status, `${user.papel} foi barrado`).toBe(CODIGO_ABERTURA);
     }
   });
 
-  it("o papel vindo no CORPO não promove ninguém", async () => {
+  /**
+   * O VALOR DE SEGURANÇA QUE SOBROU, no mundo em que não há mais permissão a ESCALAR: a AUTORIA vem
+   * da SESSÃO, nunca do corpo. Reabrindo como COMUM com `porId`/`reaberturaPorId`/`user` FORJADOS no
+   * corpo, o que fica gravado (o `porId` do evento de trilha e o `reaberturaPorId` do carimbo da
+   * vaga) é o id da SESSÃO, e o corpo é ignorado. Sem isso, qualquer um assina a reabertura com o id
+   * de outra pessoa, e a trilha de auditoria deixa de valer (§A.6).
+   */
+  it("um `porId`/`user` forjado no corpo é ignorado: a autoria é a da sessão", async () => {
     const banco = comCancelamentoNovo();
-    await expect(
-      porta(banco).reabrir(
-        VAGA,
-        { candidaturaIds: ["cand-Ana"], papel: "MASTER", user: { papel: "SUPER_ADMIN" } },
-        COMUM,
-      ),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(banco.escritas).toEqual([]);
+    await porta(banco).reabrir(
+      VAGA,
+      {
+        candidaturaIds: ["cand-Ana"],
+        porId: MASTER.id,
+        reaberturaPorId: MASTER.id,
+        user: { id: MASTER.id, papel: "MASTER" },
+      },
+      COMUM,
+    );
+
+    const evento = escritasEm(banco, "as_vaga_status_eventos")[0];
+    expect(evento?.valores.porId, "o evento é assinado pela sessão").toBe(COMUM.id);
+    expect(banco.vaga.reaberturaPorId, "o carimbo da vaga é assinado pela sessão").toBe(COMUM.id);
   });
 });
