@@ -503,6 +503,8 @@ function ListaDeCandidaturasDaVaga({
    * corrente, cai ao trocar o recorte, e enquanto ligado a memória fica vazia.
    */
   const [marcadas, setMarcadas] = useState<Map<string, AsCandidaturaItem>>(() => new Map());
+  // Enquanto o "somar todos à seleção" materializa o recorte (o laço de páginas da união do ";").
+  const [somandoSelecao, setSomandoSelecao] = useState(false);
 
   function alternarMarcada(c: AsCandidaturaItem) {
     selecao.alternar(c.id);
@@ -526,6 +528,57 @@ function ListaDeCandidaturasDaVaga({
       // "Todos do filtro" SUBSTITUI a seleção manual: a memória zera e o modo liga.
       setMarcadas(new Map());
       selecao.selecionarTodosDoFiltro();
+    }
+  }
+
+  /**
+   * ─ SOMAR TODOS DO RECORTE À SELEÇÃO ACUMULADA, SEM LIMPAR (ITEM 4: o ";" soma vários) ──────────
+   *
+   * O FLUXO QUE ESTE BOTÃO FECHA: o consultor digita "Maria; João; Pedro" na busca, o servidor casa
+   * a UNIÃO (OR dos termos separados por ";"), e um clique SOMA todos os que casaram à seleção que já
+   * vinha acumulando, SEM limpar nada. É o atalho do "marcar um a um em buscas sucessivas" (decisão de
+   * 13/10): em vez de um clique por pessoa, um clique por lote de nomes.
+   *
+   * POR QUE NÃO O MODO "TODOS DO FILTRO" (`selecionarTodosDoFiltro`), e a diferença é o ponto inteiro:
+   * aquele modo SUBSTITUI a seleção manual (zera `marcadas`) e age sobre o recorte INTEIRO no servidor,
+   * sem materializar id nenhum, então ele não soma à seleção acumulada, e é por isso que ele existe
+   * separado (a caixa do cabeçalho), para a ação em massa SEM TETO. Este botão faz o oposto: materializa
+   * os que casaram e os DOBRA na seleção manual acumulada, pela MESMA porta que o "marcar um a um" já
+   * usa (`alternarMarcada`), então `marcadas` e o Set do hook seguem juntos, sem divergir.
+   *
+   * MATERIALIZA EM PÁGINAS porque o recorte pode passar de uma página; o laço cobre o `total` do
+   * recorte. §A.6: os objetos que descem aqui são os MESMOS que a aba Ver Candidatos já carrega para a
+   * tela, nenhum dado novo, e nada vai a URL nem a log. Só soma quem ainda NÃO está marcado (o
+   * `alternar` do hook é alterna: chamá-lo em quem já está marcado o removeria).
+   */
+  async function somarRecorteNaSelecao() {
+    setSomandoSelecao(true);
+    try {
+      const encontrados: AsCandidaturaItem[] = [];
+      let offset = 0;
+      for (;;) {
+        const pagina = await buscarCandidaturasDaVaga(
+          vaga.id,
+          { ...pag.filtro, limite: PAGINA_TAMANHO, offset },
+          token,
+        );
+        encontrados.push(...pagina.itens);
+        offset += pagina.itens.length;
+        if (pagina.itens.length === 0 || offset >= pagina.total) break;
+      }
+      // SÓ OS AUSENTES: `marcadas` e o Set do hook estão sempre em sincronia, então filtrar por um
+      // basta. Atualiza a memória em UM lote (um render) e soma cada ausente ao Set pela porta do hook.
+      const novos = encontrados.filter((c) => !marcadas.has(c.id));
+      if (novos.length > 0) {
+        setMarcadas((atual) => {
+          const proximo = new Map(atual);
+          for (const c of novos) proximo.set(c.id, c);
+          return proximo;
+        });
+        for (const c of novos) selecao.alternar(c.id);
+      }
+    } finally {
+      setSomandoSelecao(false);
     }
   }
 
@@ -727,6 +780,8 @@ function ListaDeCandidaturasDaVaga({
         etapas={etapasDoFiltro}
         incluirForaDoFunil={incluirForaDoFunil}
         quantosNoRecorte={pag.total}
+        onSomarSelecao={somarRecorteNaSelecao}
+        somandoSelecao={somandoSelecao}
       />
 
       {pag.carregando && (
@@ -864,6 +919,8 @@ function BarraDoRecorte({
   etapas,
   incluirForaDoFunil,
   quantosNoRecorte,
+  onSomarSelecao,
+  somandoSelecao,
 }: {
   recorte: RecorteDoPainel;
   onMudar: (r: RecorteDoPainel) => void;
@@ -871,6 +928,9 @@ function BarraDoRecorte({
   etapas: AsEtapaFunil[];
   incluirForaDoFunil: boolean;
   quantosNoRecorte: number;
+  /** Soma todos os que casam o recorte à seleção já acumulada, sem limpar (ITEM 4). */
+  onSomarSelecao: () => void;
+  somandoSelecao: boolean;
 }) {
   const ativo = recorteAtivo(recorte);
   const quantos = criteriosAtivos(recorte);
@@ -888,16 +948,21 @@ function BarraDoRecorte({
     <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-3">
       <div className="flex flex-wrap items-start gap-3">
         <label className="flex min-w-[220px] flex-1 flex-col gap-1.5">
-          <span className="text-[12px] font-semibold text-dim">Buscar Por Nome</span>
+          <span className="text-[12px] font-semibold text-dim">Buscar Candidato</span>
           <input
             type="search"
             className="ds-input"
-            placeholder="Digite parte do nome"
-            aria-label="Buscar candidato por nome nesta vaga"
-            title="A busca procura pelo nome do candidato. O CPF não é usado aqui e não viaja em nenhum endereço."
+            placeholder="Buscar por nome, telefone ou e-mail"
+            aria-label="Buscar candidato por nome, telefone ou e-mail nesta vaga"
+            title="A busca procura por nome, telefone ou e-mail do candidato. O CPF não é usado aqui e não viaja em nenhum endereço."
             value={recorte.busca}
             onChange={(e) => onMudar({ ...recorte, busca: e.target.value })}
           />
+          {/* ITEM 4: o ";" separa vários nomes na mesma busca (o servidor casa a união). Depois,
+              "Somar à seleção" dobra todos os que casaram na seleção já acumulada, sem limpar. */}
+          <span className="text-[11px] text-faint">
+            Separe com ponto e vírgula para buscar vários de uma vez, por exemplo Maria; João; Pedro.
+          </span>
         </label>
 
         <label className="flex min-w-[200px] flex-1 flex-col gap-1.5">
@@ -931,13 +996,28 @@ function BarraDoRecorte({
             {quantos === 1 ? "1 critério" : `${quantos} critérios`}. A seleção e as ações em massa
             valem para o recorte inteiro.
           </p>
-          <Button
-            variant="secondary"
-            className="flex-none px-3 py-1.5 text-[12.5px]"
-            onClick={() => onMudar(RECORTE_VAZIO)}
-          >
-            Limpar o recorte
-          </Button>
+          <div className="flex flex-none flex-wrap items-center gap-2">
+            {/* ITEM 4: soma todos os que casam o recorte (a união do ";") à seleção já acumulada,
+                SEM limpar. Só aparece quando o recorte tem gente. */}
+            {quantosNoRecorte > 0 && (
+              <Button
+                variant="secondary"
+                className="flex-none px-3 py-1.5 text-[12.5px]"
+                onClick={onSomarSelecao}
+                disabled={somandoSelecao}
+                title="Soma à seleção todos os candidatos que casam a busca e os filtros atuais, inclusive os vários nomes separados por ponto e vírgula. Não limpa o que já estava selecionado."
+              >
+                {somandoSelecao ? "Somando à seleção" : "Somar à seleção"}
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              className="flex-none px-3 py-1.5 text-[12.5px]"
+              onClick={() => onMudar(RECORTE_VAZIO)}
+            >
+              Limpar o recorte
+            </Button>
+          </div>
         </div>
       )}
     </div>

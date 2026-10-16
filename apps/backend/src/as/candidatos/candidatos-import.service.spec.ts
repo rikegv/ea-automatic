@@ -62,7 +62,11 @@ function fakeCandidatos(existentes: Record<string, string> = {}) {
     return { aplicadas: dto.candidatoIds.length, falhas: [] };
   });
 
-  return { criar, adicionarEmLote, criados, vinculacoes };
+  // Item 1 (dedup sem CPF): a porta de auto-merge histórico. Sem match na base (fake vazio),
+  // devolve null, então a linha sem CPF cai no `criar` normal, como antes do dedup.
+  const reaproveitarCapturaSemCpf = vi.fn(async () => null);
+
+  return { criar, adicionarEmLote, reaproveitarCapturaSemCpf, criados, vinculacoes };
 }
 
 function fakeStatusVaga(recebe = true) {

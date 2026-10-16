@@ -142,6 +142,8 @@ interface FiltroCentral {
   cpf?: string;
   /** Telefone por dígitos, busca parcial. Viaja no corpo do POST como o CPF (§A.6). */
   telefone?: string;
+  /** E-mail, busca parcial. Viaja no corpo do POST como o CPF e o telefone (§A.6). */
+  email?: string;
   origem?: AsCandidatoOrigem;
   vagaId?: string;
   escopo: "andamento" | "historico";
@@ -170,6 +172,7 @@ const buscarPaginaDeCandidatos: BuscadorDePagina<
       nome: f.nome,
       cpf: f.cpf,
       telefone: f.telefone,
+      email: f.email,
       origem: f.origem,
       vagaId: f.vagaId,
       escopo: f.escopo,
@@ -259,6 +262,9 @@ export default function CentralDeCandidatosPage() {
   const [fCandidatos, setFCandidatos] = useState<string[]>([]);
   const [cpfBusca, setCpfBusca] = useState("");
   const [telefoneBusca, setTelefoneBusca] = useState("");
+  // §A.6: o e-mail é dado pessoal e viaja NO CORPO do POST, como o CPF e o telefone. É FILTRO, não
+  // coluna: a lista nunca devolve o e-mail de volta.
+  const [emailBusca, setEmailBusca] = useState("");
   const [fVaga, setFVaga] = useState("");
   const [fCliente, setFCliente] = useState("");
   const [fEtapa, setFEtapa] = useState("");
@@ -326,6 +332,7 @@ export default function CentralDeCandidatosPage() {
         nome: busca.trim() || undefined,
         cpf: cpfBusca.replace(/\D/g, "") || undefined,
         telefone: telefoneBusca.replace(/\D/g, "") || undefined,
+        email: emailBusca.trim() || undefined,
         origem: fOrigem || undefined,
         vagaId: fVaga || undefined,
         escopo,
@@ -337,7 +344,7 @@ export default function CentralDeCandidatosPage() {
       });
     }, 300);
     return () => clearTimeout(t);
-  }, [busca, cpfBusca, telefoneBusca, fOrigem, fVaga, escopo, fCliente, fEtapa, filtroDoCardAtivo, aplicarFiltro]);
+  }, [busca, cpfBusca, telefoneBusca, emailBusca, fOrigem, fVaga, escopo, fCliente, fEtapa, filtroDoCardAtivo, aplicarFiltro]);
 
   /**
    * RECARREGAR APÓS UMA MUTAÇÃO. O hook não expõe um "refetch" explícito; reaplicar o filtro (merge
@@ -497,6 +504,7 @@ export default function CentralDeCandidatosPage() {
         nome: busca.trim() || undefined,
         cpf: cpfBusca.replace(/\D/g, "") || undefined,
         telefone: telefoneBusca.replace(/\D/g, "") || undefined,
+        email: emailBusca.trim() || undefined,
         origem: fOrigem || undefined,
         vagaId: fVaga || undefined,
         escopo: "andamento",
@@ -516,7 +524,7 @@ export default function CentralDeCandidatosPage() {
     return () => {
       vivo = false;
     };
-  }, [escopo, busca, cpfBusca, telefoneBusca, fOrigem, fVaga, fCliente, fEtapa, token, revalidacao]);
+  }, [escopo, busca, cpfBusca, telefoneBusca, emailBusca, fOrigem, fVaga, fCliente, fEtapa, token, revalidacao]);
 
   const vagaPorId = useMemo(() => new Map(vagas.map((v) => [v.id, v])), [vagas]);
 
@@ -832,6 +840,7 @@ export default function CentralDeCandidatosPage() {
     (fCandidatos.length ? 1 : 0) +
     (cpfBusca ? 1 : 0) +
     (telefoneBusca ? 1 : 0) +
+    (emailBusca ? 1 : 0) +
     (fVaga ? 1 : 0) +
     (fCliente ? 1 : 0) +
     (fEtapa ? 1 : 0) +
@@ -841,6 +850,7 @@ export default function CentralDeCandidatosPage() {
     setFCandidatos([]);
     setCpfBusca("");
     setTelefoneBusca("");
+    setEmailBusca("");
     setFVaga("");
     setFCliente("");
     setFEtapa("");
@@ -922,6 +932,21 @@ export default function CentralDeCandidatosPage() {
               <p className="mt-1 text-[11.5px] text-faint">
                 A busca por telefone é por dígitos e parcial, então achar pelo final do número
                 funciona. O número viaja no corpo da requisição, nunca no endereço da página.
+              </p>
+            </FiltroCampo>
+            <FiltroCampo label="Buscar por e-mail">
+              <input
+                className="ds-input"
+                type="email"
+                value={emailBusca}
+                onChange={(e) => setEmailBusca(e.target.value)}
+                placeholder="nome@exemplo.com"
+                inputMode="email"
+                aria-label="Buscar por e-mail"
+              />
+              <p className="mt-1 text-[11.5px] text-faint">
+                A busca por e-mail é parcial, então achar por parte do endereço funciona. O e-mail
+                viaja no corpo da requisição, nunca no endereço da página.
               </p>
             </FiltroCampo>
             <FiltroCampo label="Vaga">

@@ -188,18 +188,64 @@ export function somarPosicoesOficiais(
 }
 
 /**
+ * ─ A FAIXA (POSIÇÕES mín/máx, DATA DE ABERTURA de/até) COMO PREDICADO PURO (item 2) ────────────
+ *
+ * Saiu de dentro do `passa` da tela para cá, para se testar nas BORDAS sem React e sem rede, no
+ * padrão do `lib/` da casa. A régua é EXATAMENTE a que estava inline:
+ *
+ *  - PONTA VAZIA NÃO FILTRA; com qualquer ponta escolhida, a vaga SEM valor (rascunho: posições
+ *    `null` ou data ausente) SAI. Quem pergunta "entre X e Y" não está pedindo a que ainda não tem
+ *    meta dimensionada nem a que ainda não abriu.
+ *  - OS LIMITES SÃO INCLUSIVOS: `p === min` e `p === max` passam; `d === de` e `d === até` passam.
+ *  - A DATA COMPARA STRING COM STRING (`yyyy-mm-dd`, aparada do ISO), sem `Date`: a `dataAbertura` é
+ *    uma data pura, e nessa forma a ordem alfabética É a cronológica. Converter para `Date` traria
+ *    fuso para dentro de uma comparação que não tem hora, e a vaga da ponta cairia fora por três
+ *    horas de diferença.
+ *  - POSIÇÕES E DATA SÃO "E": as duas faixas têm de passar (cada ponta vazia é "todas" na sua).
+ *
+ * §A.6: entram só números e datas da vaga. Nenhum dado pessoal atravessa esta função.
+ */
+export function vagaNaFaixa(
+  vaga: { posicoesOficiais: number | null; dataAbertura: string | null },
+  filtro: { posicoesMin?: string; posicoesMax?: string; abertaDe?: string; abertaAte?: string },
+): boolean {
+  const { posicoesMin, posicoesMax, abertaDe, abertaAte } = filtro;
+  if (posicoesMin || posicoesMax) {
+    const p = vaga.posicoesOficiais;
+    if (p === null) return false;
+    const min = posicoesMin ? Number(posicoesMin) : null;
+    const max = posicoesMax ? Number(posicoesMax) : null;
+    if (min !== null && p < min) return false;
+    if (max !== null && p > max) return false;
+  }
+  if (abertaDe || abertaAte) {
+    const d = vaga.dataAbertura?.slice(0, 10);
+    if (!d) return false;
+    if (abertaDe && d < abertaDe) return false;
+    if (abertaAte && d > abertaAte) return false;
+  }
+  return true;
+}
+
+/**
  * ─ A VAGA ENCERRADA NÃO SOME DO SISTEMA (decisão do Rike, 16/10/2026) ─────────────────────────
  *
  * A visão de trabalho da Central mostra só vaga VIVA, mas a fechada/cancelada nunca some da
- * PESQUISA nem dos CARDS: ela volta à TABELA quando há uma BUSCA em curso ou quando um STATUS foi
- * escolhido no filtro. Sem nenhum dos dois (o padrão), a encerrada fica fora da tabela de trabalho,
- * mas segue contada nos cards (que leem a lista sem este recorte) e achável pela pesquisa.
+ * PESQUISA nem dos CARDS: ela volta à TABELA quando há uma BUSCA em curso, quando um STATUS foi
+ * escolhido no filtro OU quando uma FAIXA (posições/data) está ativa. Sem nenhum dos três (o
+ * padrão), a encerrada fica fora da tabela de trabalho, mas segue contada nos cards (que leem a
+ * lista sem este recorte) e achável pela pesquisa.
+ *
+ * A FAIXA É A TERCEIRA DIMENSÃO DE "FILTRO ATIVO" (item 2): filtrar por posições ou por período é
+ * perguntar algo específico, e a encerrada que casa a pergunta tem de aparecer, igual ao status.
+ * `faixaAtiva` é OPCIONAL para os chamadores antigos (sem faixa) seguirem valendo sem mudança.
  *
  * Régua pura, para a tela não decidir isto por conta e para o comportamento ficar travado em teste.
  */
 export function encerradaEntraNaVisaoDeTrabalho(
   temBusca: boolean,
   statusEscolhidos: number,
+  faixaAtiva = false,
 ): boolean {
-  return temBusca || statusEscolhidos > 0;
+  return temBusca || statusEscolhidos > 0 || faixaAtiva;
 }

@@ -489,6 +489,86 @@ export class CandidatosService {
   }
 
   /**
+   * ─ REAPROVEITAR UMA CAPTURA SEM CPF, COM AS TRAVAS DO `seguranca` (ITEM 1 do dedup de import) ──
+   *
+   * A IMPORTAÇÃO sem CPF procura, na base histórica, uma ficha que seja ELA MESMA uma captura sem
+   * CPF e SOBRESCREVE com os dados da planilha, reaproveitando o id (decisão do diretor). Este método
+   * é a ÚNICA porta desse reaproveitamento, e carrega as travas que o `seguranca` exigiu:
+   *
+   *  a. FICHA-RICA NUNCA É FUNDIDA. O `where` recusa quem tem CPF, quem está anonimizado, quem é
+   *     banco de talentos e quem TEM QUALQUER CANDIDATURA (histórico/admissão: a admissão da esteira
+   *     é por CPF, logo impossível aqui, e no funil o elo com a admissão é `as_candidaturas.admissao_id`,
+   *     coberto pelo `not exists`). Sobra só a captura sem CPF, sem histórico, não protegida.
+   *  b. O OVERWRITE PASSA PELA PORTA GUARDADA `editar`, nunca por um `update` direto: assim ele herda
+   *     a guarda `anonimizado_em is null` (a cláusula no `where` do update + a contagem de linhas) e
+   *     JAMAIS reidentifica ficha expurgada, mesmo na corrida com a varredura de retenção.
+   *  c. O CPF NUNCA É ESCRITO: o dto do `editar` vai SEM `cpf`, então `editar` mantém `atual.cpf`
+   *     (que é nulo aqui) e não roda dedup de CPF. Reaproveita a ficha, não a reidentifica.
+   *
+   *  O E-MAIL É OBRIGATÓRIO NO AUTO-MERGE (o `seguranca` vetou telefone como identidade): sem e-mail
+   *  normalizado, devolve `null` e a importação cria ficha nova. Nome + e-mail casam por
+   *  `lower/trim/sem acento` nos DOIS lados (o JS `normalizarNomeParaMerge` espelha o `translate` do
+   *  SQL, com o MESMO par de constantes, para os dois lados concordarem caractere a caractere).
+   *
+   * §A.6: o `select` pede só o `id`; nome/e-mail viajam por PARÂMETRO LIGADO, nunca em log. Devolve o
+   * id reaproveitado ou `null` quando não há match SEGURO.
+   */
+  async reaproveitarCapturaSemCpf(
+    chave: { nomeNorm: string; emailNorm: string },
+    dadosDaPlanilha: {
+      nome: string;
+      email?: string;
+      telefone?: string;
+      dataNascimento?: string;
+      cidade?: string;
+      uf?: string;
+    },
+    autor: AuthUser,
+  ): Promise<string | null> {
+    // E-MAIL é a metade não-negociável do auto-merge: sem ele, não se funde (telefone não identifica).
+    if (!chave.nomeNorm || !chave.emailNorm) return null;
+
+    const [match] = await this.db
+      .select({ id: asCandidatos.id })
+      .from(asCandidatos)
+      .where(
+        and(
+          // trava (a): só a captura que é ELA MESMA sem CPF, não anonimizada, não protegida por retenção.
+          isNull(asCandidatos.cpf),
+          isNull(asCandidatos.anonimizadoEm),
+          eq(asCandidatos.bancoTalentos, false),
+          // NOME por `lower/trim/sem acento` (translate espelha o JS), espaços colapsados nos dois lados.
+          sql`trim(regexp_replace(translate(lower(${asCandidatos.nome}), ${ACENTOS_MERGE_SRC}, ${ACENTOS_MERGE_DST}), ${"\\s+"}, ' ', 'g')) = ${chave.nomeNorm}`,
+          // E-MAIL por `lower(trim())` nos dois lados.
+          sql`lower(trim(coalesce(${asCandidatos.email}, ''))) = ${chave.emailNorm}`,
+          // trava (a): SEM histórico. Qualquer candidatura (viva, morta ou com admissão) tira a ficha daqui.
+          sql`not exists (select 1 from ${asCandidaturas} where ${asCandidaturas.candidatoId} = ${asCandidatos.id})`,
+        ),
+      )
+      // A MAIS ANTIGA é a canônica, quando houver mais de uma captura igual sem CPF na base.
+      .orderBy(asc(asCandidatos.criadoEm))
+      .limit(1);
+
+    if (!match) return null;
+
+    // trava (b)+(c): SOBRESCREVE pela porta guardada. SEM `cpf` no dto (CPF intocado) e SEM
+    // `bancoTalentos`/`origem` (não reclassifica). `editar` recusa ficha anonimizada por construção.
+    await this.editar(
+      match.id,
+      {
+        nome: dadosDaPlanilha.nome,
+        email: dadosDaPlanilha.email,
+        telefone: dadosDaPlanilha.telefone,
+        dataNascimento: dadosDaPlanilha.dataNascimento,
+        cidade: dadosDaPlanilha.cidade,
+        uf: dadosDaPlanilha.uf,
+      },
+      autor,
+    );
+    return match.id;
+  }
+
+  /**
    * ─ A RECUSA DE EDITAR UM CADASTRO JÁ ANONIMIZADO ──────────────────────────────────────────────
    *
    * §A.6 NA MENSAGEM, E ESTA É A PARTE MAIS FÁCIL DE ERRAR SEM PERCEBER: a frase natural de
@@ -674,6 +754,22 @@ export class CandidatosService {
       filtros.push(
         sql`translate(lower(${asCandidatos.nome}), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')
             like ${"%" + semAcento(nome) + "%"}`,
+      );
+    }
+
+    /*
+     * E-MAIL: busca PARCIAL (ITEM 3), ANÁLOGA à do telefone logo acima. `lower(trim())` nos DOIS
+     * lados (o lado gravado pode ter caixa e espaço; o termo já foi aparado no DTO), comparados com
+     * `like` por PARÂMETRO LIGADO, nunca concatenado. Entra em `filtros` (a BASE), não em
+     * `filtrosLista`: assim a lista E os KPIs (`kpisDaBusca(and(...filtros))`) recortam pelo MESMO
+     * conjunto e não divergem (item 3.4). §A.6: o e-mail viaja no corpo e no `where` parametrizado,
+     * nunca em log, e a projeção da lista continua SEM e-mail (só `temCpf`/classificação).
+     */
+    const emailBusca = dto.email?.trim();
+    if (emailBusca) {
+      const likeEmail = `%${emailBusca.toLowerCase()}%`;
+      filtros.push(
+        sql`lower(trim(coalesce(${asCandidatos.email}, ''))) like ${likeEmail}`,
       );
     }
     if (dto.origem) filtros.push(eq(asCandidatos.origem, dto.origem));
@@ -4430,6 +4526,45 @@ export class CandidatosService {
    * O tipo do parametro e ESTRUTURAL de proposito: tanto `RecorteDaVagaDto` quanto o alvo das acoes
    * em massa (`AlvoPorFiltroDaVagaDto`) o satisfazem, e os dois precisam da mesma clausula.
    */
+  /*
+   * ─ UM TERMO DA BUSCA DA VAGA CASA NOME, TELEFONE OU E-MAIL (ITEM 3.5 / ITEM 4) ─────────────────
+   *
+   * A busca da aba Ver Candidatos casava SÓ por nome; agora casa NOME ou TELEFONE ou E-MAIL, o mesmo
+   * repertório da Central. Cada parte é PARÂMETRO LIGADO (`${}`), nunca string concatenada (§A.6).
+   *
+   *  - NOME: a MESMA expressão da Central (sem acento, sem caixa, com `translate`), sempre aplicada.
+   *  - E-MAIL: `like` parcial sobre `lower(trim(email))`, `lower(trim())` nos DOIS lados, sempre.
+   *  - TELEFONE: só entra QUANDO o termo tem dígitos. Sem esta guarda, um termo sem dígito viraria
+   *    `like '%%'` e casaria TODO telefone, trazendo a vaga inteira, que é o oposto de filtrar.
+   *    Procura no escalar `telefone` e em cada item de `telefones` (import por currículo), como a Central.
+   *
+   * §A.6: a aba é de UMA vaga autorizada; o retorno (`AsCandidaturaItem`) é o que ela já devolvia, e
+   * este método só compõe o WHERE. E-mail/telefone entram como CRITÉRIO, nunca na projeção.
+   */
+  private matchDoTermoDaVaga(termo: string): SQL | undefined {
+    const t = termo.trim();
+    if (!t) return undefined;
+    const partes: SQL[] = [
+      sql`translate(lower(${asCandidatos.nome}), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')
+          like ${"%" + semAcento(t) + "%"}`,
+      sql`lower(trim(coalesce(${asCandidatos.email}, ''))) like ${"%" + t.toLowerCase() + "%"}`,
+    ];
+    const digitos = t.replace(/\D/g, "");
+    if (digitos) {
+      const likeTelefone = `%${digitos}%`;
+      partes.push(
+        sql`(
+          regexp_replace(coalesce(${asCandidatos.telefone}, ''), '[^0-9]', '', 'g') like ${likeTelefone}
+          or exists (
+            select 1 from unnest(${asCandidatos.telefones}) as _tel(v)
+            where regexp_replace(_tel.v, '[^0-9]', '', 'g') like ${likeTelefone}
+          )
+        )`,
+      );
+    }
+    return or(...partes);
+  }
+
   private condicoesDaVaga(
     vagaId: string,
     recorte: { aba?: string; busca?: string; filtroSituacao?: string[]; filtroEtapa?: string[] },
@@ -4444,11 +4579,28 @@ export class CandidatosService {
 
     const busca = recorte.busca?.trim();
     if (busca) {
-      // A MESMA expressao da busca por nome da Central: sem acento, sem caixa, com `translate`.
-      cond.push(
-        sql`translate(lower(${asCandidatos.nome}), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')
-            like ${"%" + semAcento(busca) + "%"}`,
-      );
+      /*
+       * ITEM 4: a busca aceita VÁRIOS termos separados por ";". Split em JS, apara, descarta vazios e
+       * CAPA em 25 (ressalva seguranca: evita um OR gigante/DoS num conjunto grande). Cada termo vira
+       * um match por NOME ou TELEFONE ou E-MAIL (item 3.5, `matchDoTermoDaVaga`), e os termos se somam
+       * num OR. §A.6: todo valor viaja por PARÂMETRO LIGADO, nunca concatenado.
+       *
+       * ADITIVO E REGRESSÃO-SAFE: termo SEM ";" vira array de UM, então o `or(...)` tem um só membro e
+       * o predicado é exatamente o `matchDoTermoDaVaga` daquele termo, sem nenhuma mudança introduzida
+       * pelo split. A âncora `eq(vagaId)` (primeira cláusula de `cond`) permanece intacta.
+       */
+      const termos = busca
+        .split(";")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0)
+        .slice(0, 25);
+      const matches = termos
+        .map((t) => this.matchDoTermoDaVaga(t))
+        .filter((m): m is SQL => m !== undefined);
+      if (matches.length > 0) {
+        const orDosTermos = or(...matches);
+        if (orDosTermos) cond.push(orDosTermos);
+      }
     }
 
     if (recorte.filtroSituacao && recorte.filtroSituacao.length > 0) {
@@ -5041,6 +5193,29 @@ function semAcento(v: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+/*
+ * ─ A NORMALIZAÇÃO DE NOME DO AUTO-MERGE DE IMPORT, ESPELHADA EM JS E EM SQL ───────────────────
+ *
+ * O match do `reaproveitarCapturaSemCpf` compara o nome dos DOIS lados: o SQL faz
+ * `translate(lower(nome), SRC, DST)` e o JS faz o MESMO mapeamento caractere a caractere, com ESTE
+ * par de constantes, para os dois concordarem. É o MESMO alfabeto do `translate` usado na busca por
+ * nome da Central (não há `unaccent` no banco), e por isso ele vive aqui, exportado: o serviço de
+ * import computa a chave em JS e este serviço compara no SQL, e uma régua só evita que divirjam.
+ */
+export const ACENTOS_MERGE_SRC = "áàâãäéèêëíìîïóòôõöúùûüçñ";
+export const ACENTOS_MERGE_DST = "aaaaaeeeeiiiiooooouuuucn";
+
+/** Nome em minúsculas, sem acento (mesmo mapa do `translate`), espaços colapsados e aparado. */
+export function normalizarNomeParaMerge(v: string): string {
+  const lower = v.toLowerCase();
+  let out = "";
+  for (const ch of lower) {
+    const i = ACENTOS_MERGE_SRC.indexOf(ch);
+    out += i >= 0 ? ACENTOS_MERGE_DST[i] : ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /**

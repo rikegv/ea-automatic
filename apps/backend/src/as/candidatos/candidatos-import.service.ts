@@ -23,7 +23,7 @@ import { DRIZZLE } from "../../db/drizzle.module";
 import { vagas } from "../../db/schema";
 import { AiClientService } from "../../ai/ai-client.service";
 import type { AuthUser } from "../../auth/auth.types";
-import { CandidatosService } from "./candidatos.service";
+import { CandidatosService, normalizarNomeParaMerge } from "./candidatos.service";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import {
   assinaturaDaGrade,
@@ -246,7 +246,32 @@ export class CandidatosImportService {
       let novos = 0;
       let semCpf = 0;
       let duplicadosCpf = 0;
+      let reaproveitadosSemCpf = 0;
       let invalidos = 0;
+
+      /*
+       * ─ DEDUP DENTRO DO LOTE (RÉGUA 1 do diretor, "sempre, seguro"): mesma pessoa no MESMO upload ─
+       *
+       * Linhas idênticas do mesmo arquivo (mesmo upload, mesma vaga no cenário COM_VAGA) colapsam numa
+       * pessoa só, por NOME normalizado + (E-MAIL OU TELEFONE). Sem isto, três linhas iguais sem CPF
+       * viravam três fichas e três candidaturas na mesma vaga, porque o `uq_as_candidatos_cpf` é
+       * parcial (só com CPF) e não barra duplicata sem CPF. É o MESMO upload, claramente a mesma pessoa
+       * (o `seguranca` liberou este caminho). Os dois mapas guardam o id da ficha já criada/reaproveitada
+       * nesta execução, um por chave `nome+email` e outro por `nome+telefone`; só entram quando o campo
+       * respectivo existe (chave com campo vazio casaria pessoas diferentes).
+       */
+      const SEP = "\u0000";
+      const loteNomeEmail = new Map<string, string>();
+      const loteNomeTelefone = new Map<string, string>();
+      const registrarNoLote = (
+        nomeNorm: string,
+        emailNorm: string,
+        telDigitos: string,
+        id: string,
+      ) => {
+        if (emailNorm) loteNomeEmail.set(nomeNorm + SEP + emailNorm, id);
+        if (telDigitos) loteNomeTelefone.set(nomeNorm + SEP + telDigitos, id);
+      };
 
       for (const bruta of linhas) {
         const nome = bruta.nome.trim().slice(0, 200);
@@ -268,9 +293,58 @@ export class CandidatosImportService {
           origem: "IMPORTACAO" as const,
         };
 
+        // Chaves normalizadas (lower/trim/sem acento) para o dedup sem CPF, dos dois lados.
+        const nomeNorm = normalizarNomeParaMerge(nome);
+        const emailNorm = (dto.email ?? "").trim().toLowerCase();
+        const telDigitos = (dto.telefone ?? "").replace(/\D/g, "");
+
+        // RÉGUA 1: só para linha SEM CPF (com CPF o dedup é o unique parcial do banco, abaixo).
+        if (!cpf) {
+          const idNoLote =
+            (emailNorm && loteNomeEmail.get(nomeNorm + SEP + emailNorm)) ||
+            (telDigitos && loteNomeTelefone.get(nomeNorm + SEP + telDigitos)) ||
+            undefined;
+          if (idNoLote) {
+            reaproveitadosSemCpf += 1;
+            idsParaVincular.push(idNoLote);
+            registrarNoLote(nomeNorm, emailNorm, telDigitos, idNoLote);
+            relatorio.push({ linha: bruta.linha, nome, status: "REAPROVEITADO" });
+            continue;
+          }
+        }
+
         try {
+          /*
+           * RÉGUA 2: AUTO-MERGE contra a base histórica, SÓ por NOME + E-MAIL (telefone NÃO funde, por
+           * veto do `seguranca`), e SÓ sobre captura sem CPF, sem histórico, não anonimizada nem de
+           * banco de talentos. As travas vivem em `reaproveitarCapturaSemCpf` (porta única): sem e-mail
+           * ele devolve `null` e cai na criação normal, que vira "possível duplicata" para revisão futura.
+           */
+          if (!cpf && emailNorm) {
+            const reusadoId = await this.candidatos.reaproveitarCapturaSemCpf(
+              { nomeNorm, emailNorm },
+              {
+                nome: dto.nome,
+                email: dto.email,
+                telefone: dto.telefone,
+                dataNascimento: dto.dataNascimento,
+                cidade: dto.cidade,
+                uf: dto.uf,
+              },
+              autor,
+            );
+            if (reusadoId) {
+              reaproveitadosSemCpf += 1;
+              idsParaVincular.push(reusadoId);
+              registrarNoLote(nomeNorm, emailNorm, telDigitos, reusadoId);
+              relatorio.push({ linha: bruta.linha, nome, status: "REAPROVEITADO" });
+              continue;
+            }
+          }
+
           const ficha = await this.candidatos.criar(dto, autor);
           idsParaVincular.push(ficha.id);
+          registrarNoLote(nomeNorm, emailNorm, telDigitos, ficha.id);
           const status: StatusLinhaImportCandidato = cpf ? "IMPORTADO" : "SEM_CPF";
           if (cpf) novos += 1;
           else semCpf += 1;
@@ -281,7 +355,10 @@ export class CandidatosImportService {
             // CPF já existe: REAPROVEITA. `criar` lança ANTES de inserir, então nada foi criado nem
             // sobrescrito. O id vem do próprio conflito, para poder vincular à vaga depois.
             duplicadosCpf += 1;
-            if (reaproveitadoId) idsParaVincular.push(reaproveitadoId);
+            if (reaproveitadoId) {
+              idsParaVincular.push(reaproveitadoId);
+              registrarNoLote(nomeNorm, emailNorm, telDigitos, reaproveitadoId);
+            }
             relatorio.push({ linha: bruta.linha, nome, status: "REAPROVEITADO" });
           } else {
             // §A.6: motivo FIXO, nunca `err.message` (pode espelhar dado da linha).
@@ -310,12 +387,15 @@ export class CandidatosImportService {
         contagem: {
           total: linhas.length,
           novos,
+          // `duplicadosCpf` segue sendo SÓ o reaproveitamento por CPF, fiel ao nome do campo. O
+          // reaproveitamento SEM CPF (dedup no lote + auto-merge por nome+e-mail) entra no total de
+          // `reaproveitados` abaixo, não aqui, para não mentir que houve colisão de CPF.
           duplicadosCpf,
           semCpf,
           invalidos,
         },
         importados,
-        reaproveitados: duplicadosCpf,
+        reaproveitados: duplicadosCpf + reaproveitadosSemCpf,
         vinculados,
         ignorados: invalidos,
         linhas: relatorio,

@@ -52,6 +52,12 @@ export interface BuscaCandidatos {
   /** Telefone por dígitos, busca parcial. §A.6: viaja NO CORPO do POST, como o CPF. */
   telefone?: string;
   /**
+   * E-mail, busca parcial. §A.6: é dado pessoal, então viaja NO CORPO do POST, como CPF e telefone,
+   * nunca em URL/query string. É FILTRO, não coluna (§A.6 filter-without-display): a lista nunca
+   * devolve o e-mail de volta, do mesmo jeito que já não devolve CPF nem telefone.
+   */
+  email?: string;
+  /**
    * DE QUAL SISTEMA A PESSOA VEIO, e SÓ isso (fechamento da fundação, 17/09/2026).
    *
    * O TIPO DEIXOU DE SER `string` de propósito. `BANCO_TALENTOS` morava nesta lista e não era
@@ -131,6 +137,7 @@ export function buscarCandidatos(
   if (filtros.nome?.trim()) body.nome = filtros.nome.trim();
   if (filtros.cpf?.trim()) body.cpf = filtros.cpf.trim();
   if (filtros.telefone?.trim()) body.telefone = filtros.telefone.trim();
+  if (filtros.email?.trim()) body.email = filtros.email.trim();
   if (filtros.origem) body.origem = filtros.origem;
   if (filtros.vagaId) body.vagaId = filtros.vagaId;
   // ESCOPO/CLIENTE/ETAPA viajam ao servidor (paginacao no servidor): entram na base da busca. Campo

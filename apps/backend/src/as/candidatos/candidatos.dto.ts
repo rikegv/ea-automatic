@@ -309,6 +309,18 @@ export class BuscarCandidatosDto {
   @MaxLength(20)
   telefone?: string;
 
+  /**
+   * E-MAIL, no corpo (§A.6: dado pessoal nunca viaja em query). Busca PARCIAL, igual à do telefone:
+   * achar pelo trecho do e-mail é o uso real, e o e-mail NÃO é chave de identidade como o CPF, então
+   * a busca parcial aqui não é vazamento (a lista, aliás, não devolve e-mail). O `@Transform` apara;
+   * o service compara `lower(trim())` dos dois lados com `like`, por parâmetro ligado (nunca concatenado).
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(180)
+  email?: string;
+
   @IsOptional()
   @IsIn(AS_CANDIDATO_ORIGEM as unknown as string[])
   origem?: AsCandidatoOrigem;

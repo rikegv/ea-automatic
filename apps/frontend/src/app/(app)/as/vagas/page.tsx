@@ -118,6 +118,7 @@ import {
   somarPosicoesOficiais,
   temGenteNaEtapa,
   temGenteNoDesfecho,
+  vagaNaFaixa,
   textoBuscavel,
   totalDePaginas,
 } from "@/lib/as-vagas-lista";
@@ -587,6 +588,18 @@ export default function CentralDeVagasPage() {
   const [fSegmento, setFSegmento] = useState<string[]>([]);
   const [fComercial, setFComercial] = useState<string[]>([]);
 
+  /**
+   * ─ A FAIXA DE POSIÇÕES OFICIAIS (mín/máx): O MESMO PAR DE PONTAS DO PERÍODO ───────────────────
+   *
+   * Recorta pela coluna "Posições" oficiais (a meta de contratação da vaga, `posicoesOficiais`), que
+   * é a mesma conta que o card de posições soma (`somarPosicoesOficiais`), então filtro e card nunca
+   * discordam. Guardado como STRING, como o período logo abaixo: `<input type=number>` devolve
+   * string, e vazio é "sem ponta", não zero. A vaga em rascunho (sem posições oficiais) sai quando há
+   * ponta escolhida, pelo mesmo motivo da data: quem pergunta "entre X e Y posições" não está pedindo
+   * a que ainda não tem meta dimensionada.
+   */
+  const [posicoesMin, setPosicoesMin] = useState("");
+  const [posicoesMax, setPosicoesMax] = useState("");
   const [abertaDe, setAbertaDe] = useState("");
   const [abertaAte, setAbertaAte] = useState("");
   /**
@@ -1745,20 +1758,12 @@ export default function CentralDeVagasPage() {
       if (setComercial.size && !setComercial.has(String(v.comercial.id ?? SEM_COMERCIAL)))
         return false;
       /*
-       * O PERÍODO COMPARA STRING COM STRING, e isso é proposital: `dataAbertura` é `yyyy-mm-dd`, uma
-       * data pura, e nessa forma a ordem alfabética É a ordem cronológica. Converter para `Date`
-       * traria fuso para dentro de uma comparação que não tem hora, e a vaga aberta no dia da ponta
-       * cairia fora do intervalo por três horas de diferença.
-       *
-       * A VAGA SEM DATA (rascunho) SAI quando há período escolhido: quem pergunta "abriu entre estas
-       * datas" não está pedindo as que ainda não abriram.
+       * A FAIXA (posições mín/máx e período de abertura) é um PREDICADO PURO em `lib/as-vagas-lista`
+       * (`vagaNaFaixa`), testado nas bordas lá. Recorta posições pela meta oficial (a mesma conta do
+       * card), compara data como string ISO (sem fuso), bordas inclusivas, e a vaga sem meta/data
+       * (rascunho) sai quando há qualquer ponta escolhida. As duas faixas são "E".
        */
-      if (abertaDe || abertaAte) {
-        const d = v.dataAbertura?.slice(0, 10);
-        if (!d) return false;
-        if (abertaDe && d < abertaDe) return false;
-        if (abertaAte && d > abertaAte) return false;
-      }
+      if (!vagaNaFaixa(v, { posicoesMin, posicoesMax, abertaDe, abertaAte })) return false;
       return true;
     };
     const filtradasParaCards = rows.filter(passa);
@@ -1773,7 +1778,14 @@ export default function CentralDeVagasPage() {
      * sistema (segue nos cards, na pesquisa e sob o filtro de status), só fica fora da visão de
      * trabalho e do total de ativas (§A.27).
      */
-    const mostrarEncerradas = encerradaEntraNaVisaoDeTrabalho(termo.trim() !== "", setStatus.size);
+    // A FAIXA (posições/data) conta como filtro ativo, igual ao status: com só uma faixa escolhida,
+    // a encerrada que casa a pergunta volta à visão de trabalho (item 2, §A.27).
+    const faixaAtiva = !!(posicoesMin || posicoesMax || abertaDe || abertaAte);
+    const mostrarEncerradas = encerradaEntraNaVisaoDeTrabalho(
+      termo.trim() !== "",
+      setStatus.size,
+      faixaAtiva,
+    );
     const filtradas = mostrarEncerradas
       ? filtradasParaCards
       : filtradasParaCards.filter((v) => !vagaEncerrada(v.status, catalogoStatus));
@@ -1792,6 +1804,8 @@ export default function CentralDeVagasPage() {
     fSla,
     fSegmento,
     fComercial,
+    posicoesMin,
+    posicoesMax,
     abertaDe,
     abertaAte,
     catalogoStatus,
@@ -1968,6 +1982,7 @@ export default function CentralDeVagasPage() {
     (fSegmento.length ? 1 : 0) +
     (fComercial.length ? 1 : 0) +
     (fEtapas.length ? 1 : 0) +
+    (posicoesMin || posicoesMax ? 1 : 0) +
     (abertaDe || abertaAte ? 1 : 0);
 
   const limparFiltros = useCallback(() => {
@@ -1981,6 +1996,8 @@ export default function CentralDeVagasPage() {
     setFSegmento([]);
     setFComercial([]);
     setFEtapas([]);
+    setPosicoesMin("");
+    setPosicoesMax("");
     setAbertaDe("");
     setAbertaAte("");
   }, []);
@@ -2368,6 +2385,37 @@ export default function CentralDeVagasPage() {
               <p className="mt-1 text-[11.5px] text-faint">
                 Traz as vagas com alguém em seleção na etapa escolhida, a mesma conta dos cards. É o
                 mesmo controle do clique no card.
+              </p>
+            </FiltroCampo>
+            {/* ─ POSIÇÕES (faixa numérica mín/máx), §A.35: `<input type=number>` é controle do
+                navegador, não lista de opção, então é aceito. O par de pontas segue o mesmo molde do
+                período: `max` numa e `min` na outra, para o próprio campo impedir intervalo invertido.
+                Recorta pela meta oficial, a mesma conta do card de posições. */}
+            <FiltroCampo label="Posições">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  className="ds-input"
+                  placeholder="Mínimo"
+                  aria-label="Posições a partir de"
+                  value={posicoesMin}
+                  max={posicoesMax || undefined}
+                  onChange={(e) => setPosicoesMin(e.target.value)}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  className="ds-input"
+                  placeholder="Máximo"
+                  aria-label="Posições até"
+                  value={posicoesMax}
+                  onChange={(e) => setPosicoesMax(e.target.value)}
+                />
+              </div>
+              <p className="mt-1 text-[11.5px] text-faint">
+                Conta pelas posições oficiais da vaga, a mesma do card de posições. Com uma faixa
+                escolhida, a vaga em rascunho fica de fora: ela ainda não tem meta de posições.
               </p>
             </FiltroCampo>
             <FiltroCampo label="Data De Abertura">
