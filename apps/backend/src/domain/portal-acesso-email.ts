@@ -59,8 +59,12 @@ export const CODIGO_TTL_MS = 10 * 60_000;
  */
 export const CODIGO_TENTATIVAS_LIMITE = 5;
 
-/** Três pedidos por hora e dez por dia, POR E-MAIL. O balde é o hash, nunca o endereço. */
-export const SOLICITACOES_POR_HORA = 3;
+/**
+ * Cinco pedidos por hora e dez por dia, POR E-MAIL. O balde é o hash, nunca o endereço.
+ * (Diretor, 16/10/2026: subiu de 3 para 5 por hora, porque o candidato legítimo erra o código e
+ * pede de novo; o diário por e-mail segue em 10.)
+ */
+export const SOLICITACOES_POR_HORA = 5;
 export const SOLICITACOES_POR_DIA = 10;
 export const SOLICITACAO_JANELA_MS = 60 * 60_000;
 export const SOLICITACAO_JANELA_DIA_MS = 24 * 60 * 60_000;

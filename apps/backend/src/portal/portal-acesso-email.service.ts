@@ -314,6 +314,11 @@ export class PortalAcessoEmailService {
     const resposta: SolicitacaoDeCodigoResposta = {
       identificado: false,
       expiraEmMinutos: Math.round(CODIGO_TTL_MS / 60_000),
+      // Nasce FALSE como `identificado`. Só vira TRUE quando o pedido é barrado pelo TETO (por hora
+      // ou por dia), para a tela separar "pediu códigos demais, aguarde" de "e-mail não identificado".
+      // O teto é contado por hash e checado ANTES da resolução, então esta flag não distingue e-mail
+      // que existe de e-mail que não existe (§A.6, não vira oráculo). Ver DIARIO 2026-10-16.
+      limiteAtingido: false,
     };
 
     this.exigirConfiguracao();
@@ -341,13 +346,17 @@ export class PortalAcessoEmailService {
         motivoCodigo: "ACESSO_EMAIL_TETO",
         janela: "HORA",
       });
+      resposta.limiteAtingido = true;
       return resposta;
     }
 
     await this.registrar("PORTAL_ACESSO_EMAIL_SOLICITADO", contexto, {});
 
     // (b) A contagem durável, nas duas janelas.
-    if (await this.tetoDeSolicitacoesEstourado(emailHash, contexto)) return resposta;
+    if (await this.tetoDeSolicitacoesEstourado(emailHash, contexto)) {
+      resposta.limiteAtingido = true;
+      return resposta;
+    }
 
     /*
      * A RESOLUÇÃO, E ELA É PELA FICHA DA ADMISSÃO, NUNCA POR CPF E NÃO MAIS PELO FUNIL.

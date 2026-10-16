@@ -5289,6 +5289,15 @@ export interface SolicitacaoDeCodigoResposta {
    */
   identificado: boolean;
   expiraEmMinutos: number;
+  /**
+   * `true` quando o pedido foi barrado pelo TETO de códigos (por hora ou por dia), e NÃO porque o
+   * e-mail é desconhecido. A tela usa este bit para dizer a verdade ("você pediu códigos demais,
+   * aguarde") em vez de "e-mail não identificado", que mandava o candidato legítimo conferir um
+   * e-mail que estava certo. NÃO é oráculo: o teto é contado por hash do e-mail e disparado ANTES da
+   * resolução, então ele vale igual para endereço que existe e para o que não existe, e esta flag
+   * sobe nos dois casos sem revelar qual é qual. É só um booleano: nenhum dado da pessoa viaja aqui.
+   * Decisão do diretor (16/10/2026), ver DIARIO. */
+  limiteAtingido: boolean;
 }
 
 /** Resposta de `POST portal/acesso-email/confirmar`. NÃO carrega nada da pessoa (proibição O10). */

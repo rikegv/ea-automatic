@@ -210,6 +210,15 @@ function Titulo({ titulo, apoio }: { titulo: string; apoio: string }) {
 const MSG_EMAIL_NAO_IDENTIFICADO =
   "E-mail não identificado. Confira o e-mail digitado ou fale com o RH.";
 
+/**
+ * DECISÃO DO DIRETOR (16/10/2026): o TETO de códigos tem mensagem PRÓPRIA, que diz a verdade (pediu
+ * códigos demais, aguarde), e NÃO "e-mail não identificado", que mandava o candidato com e-mail certo
+ * conferir um e-mail que estava certo. O backend sinaliza o teto por `limiteAtingido`, e ele sobe
+ * igual para e-mail que existe e para o que não existe (não vira oráculo). §A.11: sem travessão.
+ */
+const MSG_EMAIL_TETO =
+  "Você pediu muitos códigos em pouco tempo. Aguarde alguns minutos e tente novamente, ou fale com o RH.";
+
 export function AcessoPorEmail({
   aoIrParaLink,
   aoAbrirSessao,
@@ -240,6 +249,8 @@ export function AcessoPorEmail({
   const [manutencao, setManutencao] = useState(false);
   /** E-mail não identificado (decisão do diretor 14/10): mostra a mensagem e oferece o RH. */
   const [naoIdentificado, setNaoIdentificado] = useState(false);
+  /** Teto de códigos atingido (decisão do diretor 16/10): mensagem própria, com a opção do RH. */
+  const [limitado, setLimitado] = useState(false);
   /** Recado neutro que não é erro (o teto do pedido de código, por exemplo). */
   const [recado, setRecado] = useState<string | null>(null);
 
@@ -293,6 +304,7 @@ export function AcessoPorEmail({
       setRecado(null);
       setManutencao(false);
       setNaoIdentificado(false);
+      setLimitado(false);
       try {
         const r = await apiFetch<SolicitacaoDeCodigoResposta>(ROTA_SOLICITAR_CODIGO, {
           method: "POST",
@@ -307,6 +319,15 @@ export function AcessoPorEmail({
             setRecado(FRASE_PEDIDO_NO_TETO);
             return;
           }
+          // DECISÃO DO DIRETOR (16/10): o TETO tem mensagem PRÓPRIA. Quando o backend diz
+          // `limiteAtingido`, o e-mail pode estar certíssimo, a pessoa só pediu códigos demais: a tela
+          // diz isso, e não "e-mail não identificado" (que a mandava conferir um e-mail certo). O bit
+          // sobe igual para e-mail que existe e para o que não existe, então não vira oráculo.
+          if (r?.limiteAtingido) {
+            setLimitado(true);
+            setErro(MSG_EMAIL_TETO);
+            return;
+          }
           // DECISÃO DO DIRETOR (14/10): e-mail não identificado NÃO abre o campo do código, para não
           // dar a sensação de que um código foi enviado. Fica no passo do e-mail, com a mensagem e a
           // opção de falar com o RH.
@@ -315,6 +336,7 @@ export function AcessoPorEmail({
           return;
         }
         setNaoIdentificado(false);
+        setLimitado(false);
         const minutos = Number(r?.expiraEmMinutos);
         setExpiraEm(Number.isFinite(minutos) && minutos > 0 ? Date.now() + minutos * 60_000 : null);
         setAgora(Date.now());
@@ -454,7 +476,7 @@ export function AcessoPorEmail({
 
         {manutencao ? <AvisoManutencao /> : erro ? <Aviso tom="atencao">{erro}</Aviso> : null}
 
-        {naoIdentificado ? <BotaoFalarComRh variante="compacto" /> : null}
+        {naoIdentificado || limitado ? <BotaoFalarComRh variante="compacto" /> : null}
 
         <form
           onSubmit={(e) => {
@@ -593,6 +615,7 @@ export function AcessoPorEmail({
               setErro(null);
               setRecado(null);
               setNaoIdentificado(false);
+              setLimitado(false);
               setExpiraEm(null);
             }}
             className="min-h-11 text-sm font-semibold text-portal-muted"

@@ -146,6 +146,25 @@ describe("1. porta de e-mail: identifica abre o código, nao identifica mostra a
     expect(document.body.textContent?.toLowerCase()).toContain("rh");
   });
 
+  it("TETO (identificado:false, limiteAtingido:true) mostra 'pediu códigos demais', NÃO 'não identificado', e oferece RH", async () => {
+    // DECISÃO DO DIRETOR (16/10/2026): o teto tem mensagem própria. O e-mail pode estar certíssimo; a
+    // pessoa só pediu códigos demais. A tela diz a verdade e não manda conferir um e-mail que está
+    // certo. O campo do código NÃO abre (nenhum código novo saiu), e o RH continua à mão.
+    apiFetch.mockResolvedValueOnce({ identificado: false, limiteAtingido: true, expiraEmMinutos: 10 });
+    render(<AcessoPorEmail />);
+    fireEvent.change(campo("portal-acesso-email"), { target: { value: EMAIL } });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar código" }));
+    await waitFor(() =>
+      expect(document.body.textContent?.toLowerCase()).toContain("muitos códigos"),
+    );
+    // NÃO diz "não identificado": o e-mail não é o problema, o teto é.
+    expect(document.body.textContent?.toLowerCase()).not.toContain("não identificado");
+    // Não abre o campo do código (nenhum código novo foi enviado).
+    expect(document.querySelector("#portal-acesso-codigo")).toBeNull();
+    // Oferece falar com o RH.
+    expect(document.body.textContent?.toLowerCase()).toContain("rh");
+  });
+
   it("o passo do CÓDIGO (e-mail identificado) não afirma que o código chegou nem nomeia o e-mail", async () => {
     await irAoCodigo();
     const texto = document.body.textContent?.toLowerCase() ?? "";

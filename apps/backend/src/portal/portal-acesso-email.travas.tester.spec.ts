@@ -482,16 +482,38 @@ describe("trava 3: a resposta de `solicitar` carrega SÓ o bit `identificado` e 
     expect(corpo).toMatch(/expiraEmMinutos:\s*Math\.round\(CODIGO_TTL_MS/);
   });
 
-  it("TODO `return` de `solicitar` devolve a variável `resposta`, e `identificado` é o ÚNICO campo que muda", () => {
+  it("TODO `return` de `solicitar` devolve a variável `resposta`, e só `identificado`/`limiteAtingido` mudam", () => {
     // Nenhum caminho devolve um objeto literal diferente (nada de `{ existe: true }` solto); todos
-    // devolvem `resposta`. A única escrita que a diferencia é `resposta.identificado = true`, no
-    // caminho do envio. Assim o que a tela aprende é só "identificou ou não", nada da pessoa.
+    // devolvem `resposta`. As únicas escritas que a diferenciam são `resposta.identificado = true` (no
+    // caminho do envio) e `resposta.limiteAtingido = true` (nos dois ramos do teto, decisão do diretor
+    // 16/10). Ambos são BOOLEANOS: o que a tela aprende é só "identificou ou não" e "bateu o teto ou
+    // não", nada da pessoa. Nenhum campo de dado pessoal pode ser escrito aqui.
     const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
     const retornos = [...corpo.matchAll(/return\s+([^;]+);/g)].map((m) => m[1].trim());
     expect(retornos.length, "método sem retorno, o teste perdeu o alvo").toBeGreaterThan(1);
     for (const r of retornos) expect(r, `retorno fora da variável resposta: ${r}`).toBe("resposta");
-    const escritas = [...corpo.matchAll(/resposta\.(\w+)\s*=/g)].map((m) => m[1]);
-    expect(escritas, "só `identificado` pode ser escrito na resposta").toEqual(["identificado"]);
+    const escritas = new Set([...corpo.matchAll(/resposta\.(\w+)\s*=/g)].map((m) => m[1]));
+    expect(
+      [...escritas].sort(),
+      "só `identificado` e `limiteAtingido` podem ser escritos na resposta",
+    ).toEqual(["identificado", "limiteAtingido"]);
+  });
+
+  it("o TETO marca `limiteAtingido` ANTES da resolução, então não vira oráculo de enumeração", () => {
+    // DECISÃO DO DIRETOR (16/10): o teto ganhou mensagem própria. Ela só é honesta e segura porque o
+    // teto é contado por HASH do e-mail e disparado ANTES de a porta resolver quem é: as duas escritas
+    // de `resposta.limiteAtingido = true` vêm antes da chamada ao resolver, então a flag sobe
+    // IDÊNTICA para e-mail que existe e para o que não existe. Mover qualquer uma delas para depois da
+    // resolução abriria o oráculo que o teto justamente não revela.
+    const corpo = corpoDoMetodo(fonteDe(SERVICO), "async solicitar(");
+    const posResolucao = corpo.indexOf("candidatosDeFunilPorEmailDaFichaDeAdmissao(");
+    expect(posResolucao, "a resolução sumiu, o teste perdeu o alvo").toBeGreaterThan(-1);
+    const tetos = [...corpo.matchAll(/resposta\.limiteAtingido\s*=\s*true/g)].map((m) => m.index ?? -1);
+    expect(tetos.length, "as duas marcações de teto (hora e dia) sumiram").toBe(2);
+    for (const pos of tetos)
+      expect(pos, "uma marcação de teto está DEPOIS da resolução (vira oráculo)").toBeLessThan(
+        posResolucao,
+      );
   });
 
   it("`resposta.identificado = true` mora DEPOIS das guardas e colado no envio (a POSIÇÃO é a régua)", () => {

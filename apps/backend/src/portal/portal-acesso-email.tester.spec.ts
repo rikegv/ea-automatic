@@ -1032,14 +1032,19 @@ describe("a confirmação do código não devolve NADA da pessoa (proibição O1
     expect(semChaveExtra).toBe(true);
   });
 
-  it("REQUISITO: a solicitação declara só `identificado` e `expiraEmMinutos`, nada da pessoa", () => {
+  it("REQUISITO: a solicitação declara só `identificado`, `expiraEmMinutos` e `limiteAtingido`, nada da pessoa", () => {
     // DECISÃO DO DIRETOR (14/10): a resposta passou a carregar `identificado` (abre ou não o campo do
-    // código), um custo de enumeração aceito em favor da usabilidade. O que ESTA régua ainda trava é
-    // que NENHUM dado da pessoa vaza por aqui: nada de "candidato", "nome", "elegivel". Só o bit e o
-    // prazo.
+    // código), um custo de enumeração aceito em favor da usabilidade. DECISÃO DO DIRETOR (16/10): ela
+    // ganhou `limiteAtingido`, um booleano que separa o TETO de "e-mail não identificado" (o teto é
+    // contado por hash e disparado antes da resolução, então não distingue e-mail que existe do que
+    // não existe; ver anti-oráculo abaixo). O que ESTA régua ainda trava é que NENHUM dado da pessoa
+    // vaza por aqui: nada de "candidato", "nome", "elegivel". Só os bits e o prazo.
     const campos = camposDaInterface("SolicitacaoDeCodigoResposta");
-    expect([...campos].sort()).toEqual(["expiraEmMinutos", "identificado"]);
-    type ChaveExtra = Exclude<keyof SolicitacaoDeCodigoResposta, "identificado" | "expiraEmMinutos">;
+    expect([...campos].sort()).toEqual(["expiraEmMinutos", "identificado", "limiteAtingido"]);
+    type ChaveExtra = Exclude<
+      keyof SolicitacaoDeCodigoResposta,
+      "identificado" | "expiraEmMinutos" | "limiteAtingido"
+    >;
     const semChaveExtra: ChaveExtra extends never ? true : false = true;
     expect(semChaveExtra).toBe(true);
   });
