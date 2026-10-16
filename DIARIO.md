@@ -22973,3 +22973,66 @@ manual do `portal-app` (a página do Portal público está fora do script). Comm
 **§A.49 convivência:** coordenado com a sessão do Portal (ela publicou o acesso-por-email no ínterim) e a do G.I; esta frente é 100% frontend da Central, não toca `src/gi/*`, `portal/*` nem backend.
 
 **ABERTO:** prova on-screen do Rike em produção (§A.13): abrir a Central, ver "Fechada"/"Cancelada" com contagem REAL, pesquisar uma vaga fechada e vê-la aparecer, clicar no card "Fechada" e ver as encerradas com histórico. Mudança de frontend, reversível. (Sem preview por OOM; homolog 3120 defasada.)
+
+---
+
+## 2026-10-16 (noite) — Porta de e-mail: removida a trava DIVERGENCIA_CADASTRO (e-mail e código = único validador)
+
+**Pedido do diretor (Rike).** O time relatou candidatos que, pelo caminho de e-mail, "não
+conseguiam acessar", e tinham de ter os dados cadastrados na mão. Validação pedida: *"candidato sem
+CPF entra no link, põe o e-mail, recebe o código, acessa, cadastra o CPF e a data, e inicia a
+entrega de documentos"*, com a diretriz *"o único validador é o e-mail, e não deve ser mais o CPF e
+a data"* (porque a ficha podia estar desatualizada por atraso e travar quem digitava o dado certo),
+e *"o lugar de consulta para validar é SEMPRE a ficha do candidato no ADM (`candidatos`), não em A&S
+(`as_candidatos`)"*.
+
+**Investigação (read-only, §A.27).** O passo `POST /api/portal/acesso-email/identidade` TRAVAVA por
+`DIVERGENCIA_CADASTRO` quando o CPF/data digitado divergia do gravado na ficha do FUNIL
+(`as_candidatos`), via `decisaoDaIdentidade` (`domain/portal-acesso-email.ts`) alimentada por
+`divergencias()` lendo `as_candidatos`. Medido em produção: **0 travas de divergência ativas, 0
+eventos DIVERGENCIA_CADASTRO** (o "não funciona" em massa era o TETO, corrigido de manhã em `4b3598d`),
+MAS o mecanismo estava armado para bater exatamente no cenário de atraso que o diretor descreveu (1
+dos 12 sem-CPF vivos com e-mail já tinha data no funil que travaria se digitasse diferente). Confirmou
+as duas falhas de desenho: (a) 2º validador além do e-mail; (b) consulta em A&S, não no ADM.
+
+**Decisão do diretor: REMOVER a trava.** O e-mail + código são o único portão; CPF e data viram
+CAPTURA. Manter só as travas de INTEGRIDADE (CPF com dígito válido, CPF de outro candidato), que o
+diretor confirmou ("o que você manteve tem coerência").
+
+**O que entrou (commit `19b3feb`).**
+- `domain/portal-acesso-email.ts`: removida a máquina de divergência (`divergencias`,
+  `CampoDivergente`, `soDigitos`, `dataNormalizada`); `decisaoDaIdentidade` não recebe mais
+  `divergentes` e não devolve `DIVERGENCIA_CADASTRO`. Precedência agora: `BILHETE_MORTO >
+  TRAVA_ANTERIOR > CPF_INVALIDO > CPF_DE_OUTRO_CANDIDATO > OK`.
+- `portal-acesso-email.service.ts`: `identidade()` não lê mais `ficha.cpf`/`ficha.dataNascimento` do
+  funil nem chama `divergencias()`; mantidos `anonimizadoEm`, `pg_advisory_xact_lock`, a consulta de
+  `CPF_DE_OUTRO_CANDIDATO` e o `catch` do 23505. Como a divergência era a ÚNICA leitura que ia ao
+  funil (A&S) para validar, removê-la também encerra o "consultar A&S em vez do ADM".
+- O catálogo `DIVERGENCIA_CADASTRO` FICA em `MOTIVOS_DA_TRAVA`/`shared-types`/`portal-evento` para as
+  travas históricas na tela do time; a porta só deixou de PRODUZI-lo.
+- Os 2 tester specs da porta atualizados (cobertura): o teste "divergência trava" virou o requisito
+  de que ela NÃO trava mais; a propriedade caiu de 48 para 16 combinações (sem a dimensão de
+  divergência); o invariante da trava 4 generalizou de "não nomeia o campo que divergiu" para "não
+  nomeia nenhum campo de dado pessoal".
+
+**Gate.** backend typecheck ✓; specs da porta ✓ (119 backend: 71 tester + 48 travas) + frontend
+portal-acesso-email ✓ (25). Suíte inteira do backend: **3 arquivos vermelhos, TODOS débito alheio
+pré-existente no origin/main** (`vagas.liberar-vaga-completa`, `esteira`, `portal-recorte-e-janela`);
+nenhum importa o que foi mexido (provado por grep), §A.14 não corrigidos.
+
+**`seguranca` (auditoria adversarial independente, §A.38): APROVADO**, sem veto, nos 5 pontos:
+(1) TRAVA 1 de pé, candidato vem só do vínculo do bilhete (`asCandidatoId`), zero import de
+`candidatos`/`candidato_cpf`; (2) anti-oráculo O5 intacto, recusa única (um só `new
+UnauthorizedException`), desfechos 6→5, sem canal de tempo novo; (3) §A.6 ok, `CAMPOS_PERMITIDOS` da
+trilha não alargada, sem coluna nova; (4) pior caso = portador autenticado sobrescrever o CPF/data da
+PRÓPRIA ficha do vínculo, SEM tomada de conta de terceiro (escrita `where eq(id, candidatoId)`,
+colisão barrada por CPF_DE_OUTRO + catch 23505); (5) sem código morto religável, gravação com colunas
+LITERAIS e `anonimizado_em is null`.
+
+**Validação do diretor:** aprovou a postura ("o que você manteve tem coerência, podemos seguir com a
+publicação em produção"). Deploy autorizado.
+
+**Deploy:** mudança **backend-only** (nenhum arquivo de frontend tocado), então o `portal-app`
+público (3021, serve `.next-prod`) NÃO precisa de rebuild manual: a nova postura vem da API do
+backend. Publicação só pelo `publicar-producao.sh` (builda backend do origin/main, troca artefato,
+restart + health). Código: `19b3feb`.
