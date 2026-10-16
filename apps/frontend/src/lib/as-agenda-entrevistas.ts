@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AsAgendaDia, AsAgendaHorario } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
-import { carregarConsultores } from "@/lib/as-vaga-edicao";
 
 export type { AsAgendaDia, AsAgendaHorario, AsAgendaPessoa } from "@ea/shared-types";
 
@@ -36,10 +35,17 @@ export interface ConsultorDaAgenda {
 }
 
 /**
- * A LISTA DE CONSULTORES da página 1 e do campo "Consultor da entrevista" (complemento): a MESMA do
- * seletor de transferência de responsável (`GET /as/vagas/consultores`, os usuários ativos com papel
- * de consultor de A&S). Reaproveita o catálogo que já existe, não cria um segundo.
+ * A LISTA DE CONSULTORES da página 1 e do campo "Consultor da entrevista": quem tem ACESSO DE A&S,
+ * sem quem só tem ADM liberado (OST de 16/10/2026). Catálogo PRÓPRIO (`GET /as/vagas/consultores-agenda`),
+ * separado do seletor de transferência de responsável de propósito: a transferência responde "quem
+ * pode receber uma vaga" e anda em par com a trava dela, que não está nesta OST.
  */
+export function carregarConsultoresDaAgenda(
+  token?: string | null,
+): Promise<ConsultorDaAgenda[]> {
+  return apiFetch<ConsultorDaAgenda[]>("/as/vagas/consultores-agenda", { token });
+}
+
 export function useConsultoresDaAgenda(token: string | null): {
   consultores: ConsultorDaAgenda[];
   carregando: boolean;
@@ -52,7 +58,7 @@ export function useConsultoresDaAgenda(token: string | null): {
   useEffect(() => {
     let vivo = true;
     setCarregando(true);
-    carregarConsultores(token)
+    carregarConsultoresDaAgenda(token)
       .then((lista) => {
         if (vivo) setConsultores(lista);
       })

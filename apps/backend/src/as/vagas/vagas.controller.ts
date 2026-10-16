@@ -140,6 +140,19 @@ export class VagasController {
   }
 
   /**
+   * OS CONSULTORES DA AGENDA DE ENTREVISTAS e do campo "Consultor da entrevista" (OST de 16/10/2026):
+   * quem tem acesso de A&S, sem quem só tem ADM liberado. Catálogo PRÓPRIO, separado de `consultores`
+   * (transferência de responsável) de propósito (§A.14): só a agenda e o agendamento consomem este.
+   *
+   * Mesmo regime das rotas irmãs: caminho fixo ANTES do `@Get(":id")`, sem `@Roles` (leitura de id e
+   * nome de usuário interno; o menu `as-vagas` do `MenuGuard` restringe o módulo, igual a `consultores`).
+   */
+  @Get("consultores-agenda")
+  consultoresDaAgendaDeEntrevistas() {
+    return this.vagas.consultoresDaAgendaDeEntrevistas();
+  }
+
+  /**
    * OS RECRUITERS QUE PODEM RECEBER UMA VAGA: o catálogo do seletor de recruiter da edição da vaga
    * liberada (05/10/2026). Mesmo regime de `consultores`: caminho fixo ANTES do `@Get(":id")`, sem
    * `@Roles` (leitura de id e nome de usuário interno; o menu `as-vagas` restringe).

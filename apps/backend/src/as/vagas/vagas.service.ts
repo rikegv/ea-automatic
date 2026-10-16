@@ -6,7 +6,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
   AsCidade,
@@ -64,6 +64,7 @@ import {
   escalasCatalogo,
   motivosContratacao,
   usuarios,
+  usuarioAreas,
   asVagaStatusEventos,
   vagaBeneficio,
   vagaClienteCorrecoes,
@@ -4527,6 +4528,39 @@ export class VagasService {
       .select({ id: usuarios.id, nome: usuarios.nome })
       .from(usuarios)
       .where(and(eq(usuarios.ativo, true), eq(usuarios.papelAs, "CONSULTOR")))
+      .orderBy(asc(usuarios.nome));
+  }
+
+  /**
+   * ─ OS CONSULTORES DA AGENDA DE ENTREVISTAS (OST Central das Vagas, 16/10/2026) ────────────────
+   *
+   * ELA EXISTE E NÃO REUSA `consultoresParaTransferencia` DE PROPÓSITO (§A.14). A transferência de
+   * responsável da vaga responde "quem pode receber uma vaga" e a sua lista anda EM PAR com a trava
+   * `consultorDeDestino` (ativo + papel A&S de CONSULTOR); mexer naquela lista mudaria o seletor da
+   * transferência, que NÃO está nesta OST, e obrigaria a mexer na trava já validada (§A.26). Aqui a
+   * pergunta é outra, da agenda e do campo "Consultor da entrevista": quem TEM ACESSO DE A&S.
+   *
+   * O CRITÉRIO QUE A OST PEDIU: consultor ATIVO com papel A&S de CONSULTOR **e com acesso de A&S**.
+   * Quem só tem ADM liberado SAI. "Ter acesso de A&S" é ter a área `AS` em `usuario_areas` (a mesma
+   * segmentação que o `MenuGuard` usa), ou ser SUPER_ADMIN, que está acima da segmentação de área
+   * (schema de `usuario_areas`) e por isso enxerga A&S por construção. Ausência de linha é
+   * fail-closed: sem área `AS`, não entra.
+   *
+   * §A.6: id e nome de usuário INTERNO, e mais nada, a mesma projeção de `consultoresParaTransferencia`.
+   */
+  async consultoresDaAgendaDeEntrevistas(): Promise<{ id: string; nome: string }[]> {
+    const temAcessoAs = sql<boolean>`EXISTS (SELECT 1 FROM ${usuarioAreas} ua
+      WHERE ua.usuario_id = ${usuarios.id} AND ua.area = 'AS')`;
+    return this.db
+      .select({ id: usuarios.id, nome: usuarios.nome })
+      .from(usuarios)
+      .where(
+        and(
+          eq(usuarios.ativo, true),
+          eq(usuarios.papelAs, "CONSULTOR"),
+          or(eq(usuarios.papel, "SUPER_ADMIN"), temAcessoAs),
+        ),
+      )
       .orderBy(asc(usuarios.nome));
   }
 
