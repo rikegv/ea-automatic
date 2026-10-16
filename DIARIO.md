@@ -22818,3 +22818,52 @@ fornecedor foi liberado (§A.48, mas o valor final é false, então não se apli
 **§A.49 convivência:** coordenado com a sessão do incidente G.I (henrique-77); esta frente NÃO toca `src/gi/*` (só lê `usuarios`/`usuario_areas`). O incidente do G.I, aliás, se resolveu nesse ínterim (era latência de promoção, não perda de dado; apiSinc=false segue correto, §A.48).
 
 **ABERTO:** validação do Rike em PRODUÇÃO com os consultores reais (gatilho da OST). Item B da mesma OST (trocar cliente de vaga liberada só SUPERADMIN) em construção nesta sessão, registro próprio quando concluído.
+
+---
+
+## 2026-10-16 (tarde) — P0: "Exportar Excel" das abas da Esteira voltou a gerar arquivo (`0d7b539`)
+
+**Backend-only, sem migration.** Fix `0d7b539` em cima de `3020e9b` (origin/main), publicado por
+`publicar-producao.sh` (pristino de origin/main). Health backend/frontend 200.
+
+**Sintoma (produção, regressão da Onda 3 de 15/10):** o botão "Exportar Excel" em
+Auditoria/Exame/Cadastro/Integração não gerava nada ("nada acontece"), sem erro na tela.
+
+**Causa raiz (medida, não deduzida).** A Onda 3 (seleção de colunas) passou a marcar
+Nome/Telefone/E-mail como `obrigatoria: true` no objeto `ColunaExport` do front, e o
+`ExportarExcelButton` manda o objeto INTEIRO da coluna no corpo de `POST /relatorio/xlsx`. O
+`ColunaXlsxDto` do backend NÃO declarava `obrigatoria`; o `ValidationPipe` global roda com
+`forbidNonWhitelisted: true` (`main.ts`), e a validação ANINHADA herda essa opção, então o payload
+era rejeitado com **HTTP 400 "property obrigatoria should not exist"**. O `exportar()` do botão
+engole o erro num `catch {}` silencioso, por isso a tela não reagia. Provado: (1) `class-validator`
+contra o DTO real das colunas com `obrigatoria` → 400, sem → ok; (2) no servidor vivo (abaixo).
+
+**Por que IFractal e o Gerenciador do Portal NÃO quebraram (conferido):** o IFractal não marca
+nenhuma coluna como `obrigatoria` (manda o objeto sem o campo) → valida e exporta. O Gerenciador do
+Portal usa rota PRÓPRIA server-side (`GET /esteira/portal-painel/candidatos/relatorio?colunas=<chaves>`),
+mandando só as CHAVES no querystring, nunca o objeto de coluna → intacto. A Integração usa as mesmas
+`COMUNS` da Esteira, logo estava quebrada também (mesma causa única).
+
+**Conserto (cirúrgico).** `ColunaXlsxDto` passa a aceitar `@IsOptional() @IsBoolean() obrigatoria?`
+(`apps/backend/src/relatorio/relatorio.dto.ts`). O gerador `gerarXlsxGenerico` já IGNORAVA o campo
+(usa só `chave`/`rotulo`/`largura`), e a whitelist continua barrando prop genuinamente desconhecida.
+**Frontend intocado** (a seleção de colunas e o split de substatus da Onda 3 seguem iguais, §A.27).
+
+**Gate.** typecheck + ESLint limpos. Spec de regressão nova `relatorio.dto.tester.spec.ts` (4 verdes)
+sob as MESMAS opções do pipe de produção (whitelist + forbidNonWhitelisted): aceita `obrigatoria`,
+recusa `obrigatoria` não-booleano, recusa prop desconhecida. Suíte backend completa com só as 3
+falhas estruturais PRÉ-EXISTENTES (fingerprints de `CARDS_DO_PAINEL`/`RECORTES_DO_PAINEL_PORTAL` e da
+tabela `vagas`/depara-cliente — nenhuma toca `relatorio`), zero regressão.
+
+**seguranca: APROVADO.** Auditoria adversarial: aceitar `obrigatoria` é metadado inerte no fio, o
+gerador não o lê, não alarga nenhuma superfície de PII, não toca auth/RBAC/guards; a whitelist segue
+fechada ao desconhecido. Dívida pré-existente (CPF/telefone/e-mail no payload da listagem, que este
+endpoint ecoa no arquivo) NÃO foi tocada nem piorada, continua registrada e fora de escopo.
+
+**Prova (§A.13, backend-only + OOM da VM).** Backend patched em porta de teste contra o banco de
+homolog; `POST /relatorio/xlsx` com os payloads REAIS das 3 abas (colunas com `obrigatoria: true` +
+opcionais marcadas + CPF) → **HTTP 201 + xlsx válido** com os cabeçalhos obrigatórios (Nome
+Completo/Telefone/E-mail) presentes e linha de dado (dados SINTÉTICOS, §A.43); controle: payload com
+prop desconhecida ainda **400**. Sem preview pesado de frontend (OOM, por instrução da OST); o front
+é intocado e o defeito era 100% o 400 do backend. Pós-deploy, o artefato servido
+(`ea-release-portal/apps/backend/dist/relatorio/relatorio.dto.js`) já contém `obrigatoria`/`IsBoolean`.
