@@ -23202,3 +23202,56 @@ por cargo de propósito. Plano: tabela nova `grupo_cliente_cargo_meta` (migratio
 ganha a seção "Vagas Por Cargo" (catálogo de cargos com busca), a tabela por cargo passa a mostrar
 Vagas/Faltam, `tester` independente (frente grande); legado mantém o total único até cadastrar por
 cargo. Em construção na sequência.
+
+## 2026-10-16 (sessão remote-control) — Alto Volume por grupo, ajuste 5: meta POR CARGO (`1432261`) EM PRODUÇÃO
+
+**OST (continuação):** ajuste 5 dos 5 da tela Controle Gerencial / Alto Volume por grupo. Os ajustes
+1 a 4 subiram antes (`e27b33f`/`be3446d`, entrada acima). O ajuste 5 foi alinhado com o diretor por
+pergunta estruturada ANTES de construir (§A.27): ele escolheu **meta própria por cargo** (o total do
+grupo vira a SOMA das metas por cargo) e **editada no cadastro de grupo**. Validado nos prints e
+autorizado ("pode subir").
+
+**O que entrou:**
+- **Banco:** tabela nova `grupo_cliente_cargo_meta` (grupo_id, cargo_id, meta int, `UNIQUE(grupo_id,
+  cargo_id)`), migration **aditiva 0163** (`CREATE TABLE IF NOT EXISTS` + índice único). Produção nasce
+  com a tabela vazia; nada muda até alguém cadastrar meta por cargo.
+- **Backend** (`grupos-cliente.service.ts`): `analise()` passou a fazer a UNIÃO dos cargos com
+  admissão e dos cargos com meta, então **cargo com meta e zero na esteira APARECE** (vagas=meta,
+  naEsteira=0, faltam=meta); `porCargo` ganhou `vagas`/`faltam` (null sem meta, nunca zero);
+  `totais.meta` = soma das metas por cargo, com fallback no total único do legado. Novos
+  `listarMetasCargo` e `definirMetaCargo` (upsert meta>=1 / delete quando null; SINCRONIZA
+  `grupos_cliente.meta` = soma; remover a ÚLTIMA meta por cargo NÃO zera o total, fica no legado).
+  Rotas `GET`/`PUT :id/metas-cargo` no regime leitura-aberta/escrita-pelo-menu-clientes.
+- **Frontend:** tabela por cargo do Controle Gerencial mostra Vagas/Faltam por linha; livreto de
+  grupos ganhou o modal "Vagas Por Cargo" (catálogo de cargos com busca, salva no blur, não fecha ao
+  clicar fora §A.41), e o total único vira só leitura ("soma das vagas por cargo") quando há meta por
+  cargo.
+
+**Agentes (§A.38):** `tester` INDEPENDENTE (outra cabeça, não o autor; o agente `tester` do catálogo
+não existe neste harness, usei um agente de propósito geral como testador independente): escreveu
+`grupo-cargo-meta.tester.spec.ts`, **20 testes, 0 gaps**, cobrindo os dois casos difíceis (cargo com
+meta sem admissão; remover a última meta mantém o total). `seguranca` **NÃO acionado**: meta é número
+de negócio, sem CPF/PII/auth/RBAC/credencial. Observação do tester (não é bug, é a regra do diretor):
+ao remover a última meta por cargo o total único fica no último valor somado, não cai para zero.
+
+**Reconciliação de teste:** os fakes de `grupos-cliente.meta-e-analise.spec.ts` e
+`grupo-dash-analise.tester.spec.ts` ganharam `innerJoin` e a resolução da 3ª consulta (metas por
+cargo, reconhecida pela coluna `meta` sem `naEsteira`), e a asserção "porCargo não traz vagas/faltam"
+virou "traz nulos sem meta". **78 testes verdes** no diretório.
+
+**Prova (§A.13):** preview isolado (2º backend do worktree dist :3119 contra `ea_automatic_homolog`
+com a 0163 aplicada + `next dev` :3130; homolog 3120/3111 intocado; derrubado depois). Medido ao vivo:
+CORIFEU com Atendente I meta 150 (129 na esteira, faltam 21) e Ajudante de Processo meta 20 (0 na
+esteira, faltam 20, prova da união), total do grupo 170; `PUT` sincronizou o total (175 e de volta
+170). Prints enviados ao diretor. Seed sintético revertido (§A.43).
+
+**Deploy (§A.49):** push a `origin/main` **`1432261`** sob flag READY (§A.7). Backup `pg_dump` do prod
+(`ea-backup-producao-20261016-195329-antes-0163.dump`), migration 0163 aplicada à mão em `ea_automatic`
+via `db:migrate` (só a 0163 pendente, tabela criada, 0 linhas) ANTES da troca do artefato.
+`publicar-producao.sh` buildou de origin/main em worktree pristino; **health 200/200**, prod serve
+`1432261`. Rota nova `/admin/grupos-cliente/:id/metas-cargo` responde 401 (existe) e a tabela está no
+ar. *Pegadinha do deploy: a 1ª tentativa abortou no passo 2 porque o registro do worktree `ea-build`
+tinha sido podado por operação concorrente de outra sessão (dir existia, não registrado); re-rodar
+pegou o caminho de reuso e publicou. Produção nunca ficou sem artefato (a troca é de segundos no fim).*
+
+**Frente dos 5 ajustes CONCLUÍDA, tudo em produção.** Nada aberto.
