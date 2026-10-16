@@ -23036,3 +23036,69 @@ publicação em produção"). Deploy autorizado.
 público (3021, serve `.next-prod`) NÃO precisa de rebuild manual: a nova postura vem da API do
 backend. Publicação só pelo `publicar-producao.sh` (builda backend do origin/main, troca artefato,
 restart + health). Código: `19b3feb`.
+
+---
+
+## 2026-10-16 (sessão henrique-6a, remote-control) — Central das Vagas: REABRIR vaga FECHADA + reabrir vira consultor+ EM PRODUÇÃO (`2c60ab6`)
+
+**OST do diretor:** permitir REABRIR vaga FECHADA/CANCELADA na Central das Vagas, do nível consultor
+para cima, com candidatos e histórico preservados e rastreio de quem reabriu.
+
+**Investigação antes (§A.14/§A.27/§A.40), achado que mudou a premissa:** a ação "Reabrir vaga" JÁ
+EXISTIA, mas só para vaga **CANCELADA** (papel CANCELAMENTO) e **ENTREGUE** (papel ENTREGA), e só
+Master/SUPER_ADMIN. Vaga **FECHADA** fora deixada de fora DE PROPÓSITO (comentário em
+`vagas.service.ts`: "FECHADA continua sem porta de volta, decisão do diretor, frente futura"). E NÃO
+existe papel "CONSULTOR" no RBAC: PAPEL = COMUM|MASTER|SUPER_ADMIN; "consultor" = COMUM; não há nível
+abaixo de COMUM (quem não tem o menu `as-vagas` nem vê a Central). Então "consultor+" = todos que já
+acessam a Central (mesmo gate de fechar/cancelar, que não têm @Roles).
+
+**Decisão do diretor (AskUserQuestion):** reabrir vira **consultor+ para TODOS os casos** (FECHADA,
+CANCELADA e ENTREGUE), uniforme. Alinha o "desfazer" com o "fazer" (fechar/cancelar já são consultor+).
+
+**Causa/semântica da FECHADA (medida):** `fechar()` NÃO move nem descarta candidatos (ao contrário do
+`cancelar`, que move vivos ao Stand By). Grava `status=FECHADA`, `encerradaEm=now` (relógio de
+retenção), `vagasFechadas/Banco` (contagem congelada), `dataFechamento`, `salarioFechamento`,
+`dataPrevistaInicio`, `enviarParaAdmissao`, `fechamentoForcado*`. Logo reabrir FECHADA = limpar esses
+carimbos + `status=ABERTA` + carimbo de reabertura + evento de trilha, **sem tocar candidatos** (ficam
+preservados). `encerradaEm=null` reprotege os vivos (mesma régua do cancelamento). Contagem re-deriva
+do status; Alto Volume não lê status de vaga (§A.27 intacto).
+
+**Construção distribuída (§A.39/§A.40), 3 agentes em paralelo + 2 de auditoria:**
+- **backend:** `podeReabrir` aceita COMUM; `@Roles` removido das rotas `POST :id/reabrir` e
+  `GET :id/reabrir-previa` (menu-gated, como fechar/cancelar); novo `reabrirDoFechamento` no `reabrir()`
+  (ramo FECHAMENTO) que limpa os carimbos do fechamento, volta a ABERTURA, grava trilha + autoria da
+  sessão, sem mover candidato. Checklist §A.40: único escritor dos campos de fechamento é
+  `vagas.service.ts`; `salarioFechamento` é lido na ponte de admissão como `?? salarioAbertura` (limpar
+  devolve ao comportamento de aberta); CANCELAMENTO/ENTREGA byte-a-byte intactos.
+- **frontend:** ação "Reabrir vaga" aparece nas FECHADAS (`papelReabrivel` ganha FECHAMENTO);
+  `podeReabrir={true}` no modal; terceiro modo `deFechamento` (sem campo de prazo, sem lista de seleção,
+  prévia vazia); `fraseDaReaberturaDeFechamento()` nova; ajuda `reabrir-uma-vaga.ts` atualizada (hoje
+  dizia o oposto: "vaga fechada não passa", "é ação de Master"), `revisadoEm` 2026-10-16.
+- **tester (independente §A.38):** 16 testes novos da FECHADA (`vagas.reabrir-de-fechada...`) + reconciliou
+  os 9 specs que codificavam o contrato antigo (rota, comportamental, de-entregue) e o contrato
+  executável `reabrir-vaga.tester-fake.ts` (regra J estreitada: só ABERTURA/não-terminal recusa;
+  bloco RBAC vira "COMUM reabre, autoria da sessão"), com o meta-teste do contrato (impl de referência +
+  mutantes) mantido verde e ainda matando mutante.
+- **seguranca (§A.38, risco RBAC+§A.6): APROVADO** com arquivo:linha. Remover @Roles é seguro porque
+  o `MenuGuard` enforça área AS + menu `as-vagas` independentemente de @Roles; travas de
+  seleção/capacidade são estruturais e não leem papel; prévia não traz CPF/contato; `encerradaEm=null`
+  reprotege; autoria vem da sessão (DTO sem campo de papel/autor); CANCELAMENTO/ENTREGA intactos.
+
+**Gate (conferido pelo coordenador):** typecheck back+front limpos, eslint exit 0, zero travessão
+(§A.11). `vitest src/as/vagas/` = **941 passam, 1 falha**. A falha é ALHEIA e pré-existente:
+`vagas.liberar-vaga-completa.spec.ts > SÓ NOVE ARQUIVOS` tem hardcoded o nome antigo
+`as/depara-cliente/fila-de-cliente.service.ts` (linha 769), renomeado por OUTRA sessão para
+`depara-cliente.service.ts` (commitado em HEAD). Meu diff não adiciona nem remove arquivo escritor de
+`vagas`. Dívida da sessão do rename, fora do escopo (§A.14), a coordenar com quem fez.
+
+**Deploy (§A.49):** worktree pristino `ea-cv-consultor-cliente`, commit rebaseado para `2c60ab6` sobre
+os 2 commits do Portal (`19b3feb`/`159e29a`, zero colisão). Push ff `159e29a..2c60ab6`,
+`publicar-producao.sh` (build pristino do origin/main), health backend 3011/api/health 200 + frontend
+3010/login 200. Sanity: `reabrir-previa` e `reabrir` respondem 401 sem auth (rotas vivas). Coordenado
+com Portal e G.I (henrique-77); zero toque em `src/gi/*`, `portal/*`.
+
+**ABERTO:** prova on-screen do diretor em produção (§A.13): abrir uma vaga FECHADA na Central, ver a
+ação "Reabrir vaga", reabrir e conferir que volta para Aberta com candidatos+histórico preservados, e
+que um consultor comum consegue reabrir. NÃO foi possível prova visual local (OOM; homolog 3120
+defasada), então a validação on-screen é passo do diretor na produção, mesma régua das frentes
+anteriores desta sessão. Reversível (frontend + mutação de status, sem perda de dado).
