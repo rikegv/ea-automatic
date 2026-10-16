@@ -23255,3 +23255,31 @@ tinha sido podado por operação concorrente de outra sessão (dir existia, não
 pegou o caminho de reuso e publicou. Produção nunca ficou sem artefato (a troca é de segundos no fim).*
 
 **Frente dos 5 ajustes CONCLUÍDA, tudo em produção.** Nada aberto.
+
+---
+
+## 2026-10-16 (sessão henrique-6a, remote-control) — Atração/Central das Vagas: 4 ajustes (1 bug de dados + 3 de busca/filtro)
+
+**OST:** reabrir vaga já estava no ar; esta é outra frente da Central. Quatro itens. EM PRODUÇÃO `e15b939` (deploy `publicar-producao.sh`, health 3011/3010 = 200/200, backup `*.bak-20261016-212350`). Worktree pristino off origin/main, rebase limpo sobre a sessão Alto Volume por grupo (`d79e6ea`), zero colisão.
+
+**Fluxo distribuído (§A.38/§A.39/§A.40):** coordenador investigou alcance (2 Explore), `seguranca` auditou o PLANO antes do 1º despacho (pegou 2 vetos reais sem uma linha de código), backend+frontend+tester em paralelo, `seguranca` re-auditou o CÓDIGO. Pulso: todos declarados.
+
+**ITEM 1 (BUG de dados): importação duplicava candidato sem CPF.**
+- CAUSA (medida): o import (`candidatos-import.service.ts`) dedupava SÓ por CPF (`candidatos.service.ts` dentro de `if(cpf)`); `uq_as_candidatos_cpf` é parcial (cpf not null) e `uq_as_candidaturas_viva` é por (candidato_id, vaga_id). Sem CPF, cada linha virava pessoa nova → 3 linhas iguais = 3 fichas + 3 candidaturas na mesma vaga.
+- FOOTPRINT (medido no banco, PII-safe): ~33.190 fichas sem CPF; ~13,5k envolvidas em duplicata; AGUDO (mesma pessoa na MESMA vaga, chave nome+e-mail) = 3.276 grupos / 32 vagas / 4.506 candidaturas redundantes; só-telefone no agudo = 0 (100% tem e-mail).
+- DECISÃO DO DIRETOR (AskUserQuestion): chave de auto-fusão = **nome + e-mail** (telefone só → revisão, NÃO funde); reaproveita e **sobrescreve** a ficha com a planilha; limpeza = **só o agudo (42/32 vagas)**.
+- VETOS DO `seguranca` (acatados no código): telefone não é identidade (`candidatos.dto.ts:300-310`) → fora do auto-merge; overwrite só via `editar` (guarda `anonimizado_em is null` inescapável, CPF nunca escrito); guarda de ficha-rica (`NOT EXISTS as_candidaturas` + cpf null + anonimizado null + banco_talentos false); hard-delete PROIBIDO na limpeza (FK `onDelete: cascade` apagaria candidaturas/entrevistas).
+- CONSERTO (forward-fix): porta `reaproveitarCapturaSemCpf` (match nome+email, bound params) + dedup dentro do lote por nome+(email OU telefone). Reusa status `REAPROVEITADO`, sem tocar shared-types.
+- **LIMPEZA NÃO EXECUTADA:** migração reversível (repontar + inativar, nunca apagar) é passo separado, aguarda GO do diretor sobre os números do dry-run.
+
+**ITEM 2 (busca/filtro): pesquisa da vaga por todas as colunas.** A busca de texto JÁ cobria todas as colunas. Adicionados filtros de FAIXA para Posições (nº) e Data De Abertura (datas, a de datas já existia). Predicado puro `vagaNaFaixa` extraído p/ `lib/as-vagas-lista.ts`; `encerradaEntraNaVisaoDeTrabalho` ganhou 3º arg `faixaAtiva` → encerrada reaparece com faixa ativa (régua da "vaga some" preservada, §A.27).
+
+**ITEM 3: busca de candidato por e-mail.** `email` no DTO de busca + `like` lower/trim bound param (`buscar` e `matchDoTermoDaVaga`), no MESMO WHERE de lista e KPI. E-mail é FILTRO, FORA da projeção (§A.6). "Ver Candidatos" da vaga passou a casar nome/telefone/e-mail.
+
+**ITEM 4: seleção por ";".** `condicoesDaVaga` divide `busca` por ";" (OR, trim, descarta vazios, CAP 25, cada termo bound param), âncora `eq(vagaId)` top-level; termo único byte-idêntico aos 5 leitores. Frontend: botão "Somar à seleção" (não reusou `selecionarTodosDoFiltro`, que é substitutivo) acumula sem limpar.
+
+**GATE:** backend candidatos 908/908; frontend lib 159/159; faixa 13/13; tester independente 46 verde (5 specs novos); typecheck backend+frontend verde. seguranca **APROVADO** nos 4 itens no código (anti-anonimização de pé, CPF nunca escrito, telefone nunca funde, bound params, e-mail fora da projeção, âncora de vaga). Reconciliei o fake do autor (`candidatos-import.service.spec.ts`) com o novo `reaproveitarCapturaSemCpf` (stub null).
+
+**RED ALHEIO (não meu, pré-existente):** `vagas.liberar-vaga-completa.spec.ts > SÓ NOVE ARQUIVOS` segue vermelho desde o refactor `e734b75` (07/10, rename `fila-de-cliente`→`depara-cliente`, lista do spec encolheu 9→8). Confirmado que precede meu commit. Aguarda decisão do diretor (despachar tester p/ reconciliar o nome stale).
+
+**ABERTO:** (1) validação on-screen do diretor em produção (import sem dup; busca por e-mail/";"; filtros de faixa); (2) GO do diretor para a limpeza do agudo (dry-run pronto); (3) decisão sobre o red alheio `liberar-vaga-completa`.
