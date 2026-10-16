@@ -23102,3 +23102,59 @@ ação "Reabrir vaga", reabrir e conferir que volta para Aberta com candidatos+h
 que um consultor comum consegue reabrir. NÃO foi possível prova visual local (OOM; homolog 3120
 defasada), então a validação on-screen é passo do diretor na produção, mesma régua das frentes
 anteriores desta sessão. Reversível (frontend + mutação de status, sem perda de dado).
+
+---
+
+## 2026-10-16 — G.I: payload `inclusaoOK=true` + `codigoFuncionario` de 6 dígitos + endereço do VT (`cb636cf`)
+
+**Diagnóstico definitivo do suporte do G.I (Gilberto), encerra o vai-e-volta do apiSinc.** O "sumiço"
+matinal das listas de pré-admissão NÃO era o `apiSinc` nem a colisão de chave: era a **rotina de
+limpeza do G.I no primeiro acesso do dia, que apaga os registros com `inclusaoOK = 0`**. O EA OMITIA
+esse campo no payload, então ele chegava `false` (default do contrato) e a fila era varrida na manhã
+seguinte. `inclusaoOK` é campo `boolean` do contrato (`openapi/v1.json`, `TB_FuncionarioSelecaoAPI`),
+SEPARADO do `apiSincAdmissaoDigital`: o apiSinc decide a PROMOÇÃO ao Cadastro (§A.48, segue `false`), o
+`inclusaoOK` decide a PERMANÊNCIA (não ser varrido). A premissa de 05/10 ("false some em <10min") era o
+sintoma desta varredura lido como efeito do apiSinc. A §A.48 continua correta; faltava `inclusaoOK=true`.
+
+**Três consertos (commit `cb636cf`, worktree limpo `ea-gi-payload-fix` do origin/main):**
+1. `montarFuncionarioSelecao` emite `inclusaoOK: true` FIXO (não por `opcoes`: invariante; `0` é apagado).
+   `apiSinc` segue `false` intacto por todos os caminhos.
+2. `codigoFuncionarioSinteticoGi` passou de 10 dígitos (faixa `[1e9,2e9)`) para **6 dígitos** (`[1e5,1e6)`),
+   exigência do G.I (aceita no máximo 6). Unicidade prática (900k valores); matrícula real cadastrada
+   depois pelo time.
+3. `GiLeitorService.lerPessoa` cai no endereço residencial do `formularios_vt` mais recente quando
+   `admissao_dados_gi.end_*` está vazio (precedência de bloco, nunca mistura). O residencial do VT não
+   chegava ao G.I: vazio em 34 de 50 enviadas.
+
+**Gate:** build (typecheck) limpo; 633 testes de GI/payload/contrato verdes; travas novas em
+`gi-inclusao-codfunc.tester.spec.ts`, contrato-schema atualizado para 57 chaves (`inclusaoOK` no SCHEMA),
+`gi-codfuncionario` para 6 dígitos. **`seguranca` (agente independente, o nomeado não existe na sessão
+remote-control) APROVADO**, sem achado bloqueante (ressalva baixa: unicidade do código é prática,
+~0,14% no volume vivo). §A.38 declarado.
+
+**Deploy (§A.49/§A.25):** push ff `c3d811d..cb636cf` para origin/main (flag `.claude/state/READY_gi_payload`
+removida após), `publicar-producao.sh` (build pristino do origin/main), health backend 3011/api/health 200
++ frontend 3010/login 200, backup `*.bak-20261016-185712`.
+
+**Reenvio corrigido (autorizado pelo diretor):** todos os "para cadastrar" (MANUAL + vivo + auditoria
+concluída + não pausado), incluindo a admissão que estava em estudo pelo G.I. Resultado: **47 GI_ENVIADO**
+(novos selId 284-330), **3 recusas legítimas** `GI_SEM_EMPRESA_FILIAL` (ver abaixo), 0 falhas. Prova
+read-only no `FuncionarioSelecao/GetAll`: os 47 presentes, **todos com `apiSinc=false` E `inclusaoOK=true`**.
+Os antigos (selId 228/235-275, `inclusaoOK=0`) serão varridos (superados). Prova final = o diretor ver no
+Cadastro e os registros NÃO sumirem na virada do dia.
+
+**Caso empresa/filial (3 recusas) = tipo de serviço, NÃO padding do código de cliente.**
+`resolverEmpresaFilialGi` casa o vínculo (`cliente_vinculos`) pelo tipo de serviço do contrato. Os
+clientes MEIWA (cód 66) e SONOVA (cód 53558) só têm vínculo TERCEIRO; as 3 admissões recusadas são
+Temporário → sem vínculo TEMPORÁRIO → `GI_SEM_EMPRESA_FILIAL`. Varredura: 0 admissões vivas falham por
+diferença de zero à esquerda, então um normalizador de padding (66→00066) não desbloquearia ninguém; o
+`codigoCliente` enviado é numérico e já resolveu o cliente dos enviados. Corrige a classificação antiga
+de uma dessas recusas como "cliente sem par no catálogo". Conserto = criar o vínculo TEMPORÁRIO do
+cliente ou corrigir o tipo de contrato; **decisão do diretor: o time ajusta no cadastro.**
+
+**ABERTO:** (1) prova do diretor na tela de Cadastro do G.I na virada do dia (permanência = `inclusaoOK`
+funcionou). (2) 3 débitos pré-existentes VERMELHOS no origin/main achados na suíte completa
+(`domain/esteira` ORDEM_STATUS, `domain/portal-recorte-e-janela`, `as/vagas/vagas.liberar-vaga-completa`
+"9 arquivos escrevem em vagas"); nenhum referencia os arquivos desta frente (provado), são de outras
+frentes (o de vagas cheira a resíduo da "Reabrir vaga"); não travam o build do G.I. (3) proposta de
+emenda da §A.48 citando a dimensão `inclusaoOK` ao lado do apiSinc, aguardando o diretor.
