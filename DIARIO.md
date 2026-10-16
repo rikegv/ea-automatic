@@ -22947,3 +22947,29 @@ para o campo do código. Screenshots enviados ao diretor.
 **§A.49:** worktree pristino `ea-portal-email` off origin/main; peers (henrique-6a, henrique-77)
 liberaram; zero toque em `src/gi/*`. Deploy: backend+front pelo `publicar-producao.sh` + rebuild
 manual do `portal-app` (a página do Portal público está fora do script). Commit: 4b3598d.
+
+---
+
+## 16/10/2026: Central das Vagas — vaga fechada/finalizada não some mais (cards com contagem real + pesquisa acha a encerrada) — EM PRODUÇÃO (`6a24b1e`)
+
+**Pedido do Rike (OST):** vagas trabalhadas na Central e depois fechadas/finalizadas (no Pandapé/planilhas) "desapareciam do sistema". Uma vez que a vaga apareceu e foi trabalhada, tem de CONTINUAR, mesmo fechada. Investigar a causa (filtro de exibição x deleção) ANTES de mexer; não bagunçar a contagem de ativas nem o Alto Volume (§A.27).
+
+**CAUSA (medida, não suposta; investigação read-only §A.14 + Explore):** a vaga fechada **NÃO é deletada e NÃO é removida pelo backend**. Vira `FECHADA` (papel `FECHAMENTO`) por `fechar`/`cancelar` OU pela varredura do Pandapé (`encerrarAusentes`, UPDATE de status + `encerrada_em`, nunca DELETE), e `listCentral` continua devolvendo-a (FECHAMENTO/CANCELAMENTO ∈ `VAGA_STATUS_PAPEIS_LIBERADAS`). Ela sumia **só por um filtro de EXIBIÇÃO no frontend** (`page.tsx`): na visão de trabalho (sem busca e sem status escolhido) toda vaga `encerra=true` era escondida, e os cards "Fechada"/"Cancelada" contavam sobre essa lista já filtrada, mostrando **0**, sem sinal de que existiam. Único `delete(vagas)` é a exclusão manual do SUPER_ADMIN, não ligada ao fechamento. RECUPERÁVEL: nada foi apagado, as "sumidas" voltam a aparecer.
+
+**DECISÃO DO RIKE (perguntei, §A.14/§A.26, com 3 opções):** Opção "Card Fechada com contagem real" + reforço: a fechada **não pode sumir da pesquisa nem dos cards**, mas a visão de trabalho segue só com vaga viva.
+
+**CONSERTO (frontend puro, 2 arquivos + 3 specs):**
+- `page.tsx`: o `useMemo` do filtro deriva DUAS listas do MESMO predicado (`passa`): `filtradasParaCards` (encerrada INCLUÍDA) e `filtradas` (tabela). A tabela esconde a encerrada só quando NÃO há busca nem status escolhido (régua pura `encerradaEntraNaVisaoDeTrabalho`); digitou na busca OU escolheu status, a encerrada VOLTA. Os cards de status contam `filtradasParaCards` → "Fechada"/"Cancelada" mostram a contagem REAL; `total`/`posicoes` seguem sobre `filtradas` (ativas, §A.27). `doCard`: clicar num card de status específico recorta de `filtradasParaCards`, então clicar em "Fechada"/"Cancelada" REVELA as encerradas com histórico. Rótulo do card Total vira "No Recorte" quando há busca ou status (não nomeia errado a conta).
+- `lib/as-vagas-lista.ts`: régua pura nova `encerradaEntraNaVisaoDeTrabalho(temBusca, statusEscolhidos)`, travada em teste.
+
+**IMPACTO NAS CONTAGENS (§A.27, mapeado antes):** `total`/`posicoes` ficam sobre `filtradas` (ativas no padrão) = NÃO mudam. A fechada conta no card dela, separada da ativa. **Alto Volume (vagas x admitidos) NÃO lê status de vaga** (medido: `lib/alto-volume.ts` não referencia status/papel), logo NÃO é afetado. Os únicos contadores tocados são os cards/KPIs da própria Central.
+
+**§A.38:** frente de EXIBIÇÃO no frontend, sem tocar CPF/dado pessoal/auth/RBAC/credencial nem backend; execução direta do coordenador (precedente da frente "agendar ao mover", dentro do limite da §A.38/§A.39). NÃO acionei `seguranca`/`tester` dedicados, pelo mesmo motivo. Transparência: dois `tester.spec` de FONTE (`as-vagas-onda-e`, `as-vagas-fila-padrao`) foram reapontados ao novo predicado `passa`/helper, INTENÇÃO preservada (o comportamento não mudou; as asserções comportamentais desses specs seguem intactas).
+
+**GATE:** typecheck back+front 0; ESLint 0; sem travessão (§A.11). Spec novo do helper 4/4 + specs de vaga 66/66. Suíte frontend completa: 8 falhas, **3 eram minhas** (asserções de FONTE deslocadas pelo refactor, corrigidas preservando a intenção) e **5 PRÉ-EXISTENTES e alheias** (MoverCandidaturaModal.reverter, portal-painel x2, AcessoPorEmail, ajuda/arquivo-de-preparo; meu diff não toca esses arquivos). Backend intocado.
+
+**DEPLOY (§A.49):** worktree pristino `ea-cv-consultor-cliente`. Commit `1faf6c2`, rebaseado para `6a24b1e` sobre o `origin/main` que avançou (`1e42226`, fix de acesso-por-email do Portal; ZERO interseção, rebase limpo). Push ff `1e42226..6a24b1e` (flag `READY_*` criada após o gate e removida logo após), `publicar-producao.sh` sem pipe. Produção serve `6a24b1e`, health backend `3011/api/health`=200 (4s) e frontend `3010/login`=200 (0s), backup `*.bak-20261016-155923`. Sanity: `GET /as/vagas` sem token = 401 (rota de pé).
+
+**§A.49 convivência:** coordenado com a sessão do Portal (ela publicou o acesso-por-email no ínterim) e a do G.I; esta frente é 100% frontend da Central, não toca `src/gi/*`, `portal/*` nem backend.
+
+**ABERTO:** prova on-screen do Rike em produção (§A.13): abrir a Central, ver "Fechada"/"Cancelada" com contagem REAL, pesquisar uma vaga fechada e vê-la aparecer, clicar no card "Fechada" e ver as encerradas com histórico. Mudança de frontend, reversível. (Sem preview por OOM; homolog 3120 defasada.)
