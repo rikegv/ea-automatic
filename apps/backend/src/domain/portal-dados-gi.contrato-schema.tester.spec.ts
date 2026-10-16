@@ -135,6 +135,17 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "boolean"
       ]
     },
+    // ACRESCENTADO em 16/10/2026, colado do contrato real do fornecedor
+    // (https://apigeral.gi.app.br/openapi/v1.json, propriedade `inclusaoOK`). `boolean`, `default false`;
+    // na tela/base do G.I aparece como 1/0. O ENVIO USA SEMPRE `true`: `false`/`0` faz o G.I APAGAR o
+    // registro na limpeza diária do primeiro acesso (suporte do G.I). A chave sai SEMPRE. Ver
+    // `FuncionarioSelecao.inclusaoOK`.
+    "inclusaoOK": {
+      "default": false,
+      "type": [
+        "boolean"
+      ]
+    },
     "agencia": {
       "default": "",
       "maxLength": 10,
@@ -1507,8 +1518,13 @@ describe("ponto 9: tipoContrato (D/I) e o PRAZO, acoplado ao vinculo, e nao o no
     // que o suporte do G.I pediu (Empresa-Filial-CodigoFuncionario). Com `0` em todos, os registros
     // colidem na mesma chave e o sincronizador do G.I perde o resto; o EA passa a mandar um código
     // SINTÉTICO único por admissão (`codigoFuncionarioSinteticoGi`). A chave sai SEMPRE, nunca omitida.
-    expect(Object.keys(montarCheio())).toHaveLength(56);
-    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(56);
+    //
+    // DE 56 PARA 57 em 16/10/2026, e o 57o é nomeável: `inclusaoOK`, a flag de INCLUSÃO. O suporte do
+    // G.I diagnosticou que registro com `inclusaoOK = 0` é APAGADO pela rotina de limpeza do primeiro
+    // acesso do dia; o EA OMITIA o campo (chegava `false`/`0`) e as pré-admissões sumiam toda manhã.
+    // Passa a sair SEMPRE `true`. Campo SEPARADO do `apiSincAdmissaoDigital` (promoção vs permanência).
+    expect(Object.keys(montarCheio())).toHaveLength(57);
+    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(57);
   });
 
   it("nenhum campo de SITUACAO trabalhista ou DESCONTO e emitido", () => {

@@ -1191,7 +1191,7 @@ export interface FuncionarioSelecao {
    */
   codigoCliente: number | null;
 
-  // ══ A OPÇÃO DE SINCRONISMO (allowlist 3, de UM campo só) ════════════════════════════════════════
+  // ══ AS OPÇÕES DE ENVIO (allowlist 3: sincronismo + inclusão) ════════════════════════════════════
 
   /**
    * `apiSincAdmissaoDigital`: para QUAL lado o G.I sincroniza a pré-admissão que acabou de receber.
@@ -1215,6 +1215,20 @@ export interface FuncionarioSelecao {
    * que provam o recorte.
    */
   apiSincAdmissaoDigital: boolean;
+
+  /**
+   * `inclusaoOK`: flag de INCLUSÃO do registro. `boolean` no contrato do fornecedor (`default false`);
+   * na tela e na base do G.I ele aparece como `1`/`0`.
+   *
+   * ⚠️ TEM DE SAIR SEMPRE `true`, e isto é CORRETUDE, não política. Diagnóstico do suporte do G.I
+   * (Gilberto, 16/10/2026): o G.I roda uma rotina de LIMPEZA no PRIMEIRO acesso do dia que APAGA os
+   * registros com `inclusaoOK = 0` (false). Enquanto o EA OMITIA o campo, ele chegava `false` (o default
+   * do contrato) e a pré-admissão era varrida toda manhã, antes de o time ver (foi o "sumiço" das
+   * listas). Com `true` o registro NÃO é varrido. É SEPARADO do `apiSincAdmissaoDigital` (campos
+   * distintos do contrato): o apiSinc decide a PROMOÇÃO ao Cadastro (§A.48), este decide a PERMANÊNCIA.
+   * Por isso sai `true` FIXO no montador, nunca por opção e nunca `false`.
+   */
+  inclusaoOK: boolean;
 }
 
 /**
@@ -1242,12 +1256,14 @@ export const OPCOES_DE_ENVIO_GI_PADRAO: OpcoesDeEnvioGi = {
   codigoFuncionario: 0,
 };
 
-/** Base da faixa SINTÉTICA do `codigoFuncionario`: bem acima dos códigos reais do G.I (matrículas de
- * 5 a 6 dígitos medidas), e com teto dentro de `int32` (o campo aceita, medido ao vivo em 15/10/2026
- * com 1.87e9/1.93e9). A faixa `[1e9, 2e9)` dá ~1 bilhão de valores, então a colisão entre admissões é
- * desprezível, e o número nunca se confunde com um funcionário real já cadastrado. */
-const COD_FUNC_SINT_BASE = 1_000_000_000;
-const COD_FUNC_SINT_SPAN = 1_000_000_000;
+/** Base da faixa SINTÉTICA do `codigoFuncionario`: EXATAMENTE 6 DÍGITOS (`[100000, 1000000)`), porque o
+ * suporte do G.I (16/10/2026) exige que o `CodigoFuncionario` tenha NO MÁXIMO 6 dígitos (o EA mandava 10,
+ * medido na chave da Tatiana `001-004-1246128578`). A faixa `[1e5, 1e6)` dá 900 mil valores: a colisão
+ * entre as poucas pré-admissões vivas é baixa, e não faz mal cair na faixa das matrículas reais, porque a
+ * matrícula REAL é cadastrada DEPOIS pelo time (este número é só um CRACHÁ de diferenciação na
+ * pré-admissão, estável por admissão). `int32`, sempre positivo e sempre com 6 dígitos. */
+const COD_FUNC_SINT_BASE = 100_000;
+const COD_FUNC_SINT_SPAN = 900_000;
 
 /**
  * O `codigoFuncionario` SINTÉTICO de uma admissão: estável (mesma admissão, mesmo número, então reenviar
@@ -1592,6 +1608,10 @@ export function montarFuncionarioSelecao(
     // que é o default do fornecedor. O campo é `boolean` NÃO-anulável no contrato, então a chave existe
     // sempre e nunca sai `null`: chave que aparece e desaparece faz o GI receber formatos diferentes.
     apiSincAdmissaoDigital: o.apiSincAdmissaoDigital === true,
+    // INCLUSÃO: SEMPRE `true` (ver `FuncionarioSelecao.inclusaoOK`). `false`/`0` faz o G.I APAGAR o
+    // registro na limpeza diária do primeiro acesso (suporte do G.I, 16/10/2026). Fixo aqui, FORA de
+    // `opcoes`: não existe caso legítimo de enviar `0`, então não é opção, é invariante do envio.
+    inclusaoOK: true,
   };
 }
 

@@ -23,25 +23,30 @@ afterEach(() => vi.restoreAllMocks());
 const ADM = "66666666-6666-6666-6666-666666666666";
 const ESTADO_VIVO = { farolGlobal: "EM_ADMISSAO", pausadaEm: null, origem: "MANUAL" };
 
-describe("codigoFuncionarioSinteticoGi: estavel, unico, faixa alta dentro de int32", () => {
+describe("codigoFuncionarioSinteticoGi: estavel, unico na pratica, 6 digitos", () => {
   it("ESTAVEL: mesma admissao => mesmo codigo (reenviar nao cria chave nova)", () => {
     expect(codigoFuncionarioSinteticoGi(ADM)).toBe(codigoFuncionarioSinteticoGi(ADM));
   });
 
-  it("na FAIXA [1e9, 2e9) e inteiro (acima dos codigos reais, cabe em int32)", () => {
+  it("tem EXATAMENTE 6 digitos, faixa [1e5, 1e6) (exigencia do suporte do G.I, 16/10/2026)", () => {
     for (const id of [ADM, "11111111-2222-3333-4444-555555555555", "abcdef01-0000-0000-0000-000000000001"]) {
       const c = codigoFuncionarioSinteticoGi(id);
       expect(Number.isInteger(c)).toBe(true);
-      expect(c).toBeGreaterThanOrEqual(1_000_000_000);
-      expect(c).toBeLessThan(2_000_000_000);
-      expect(c).toBeLessThan(2_147_483_647); // int32
+      expect(c).toBeGreaterThanOrEqual(100_000);
+      expect(c).toBeLessThan(1_000_000);
+      expect(String(c)).toHaveLength(6); // o G.I aceita no maximo 6 digitos; o EA mandava 10
     }
   });
 
-  it("UNICO na pratica: 1000 ids distintos geram 1000 codigos distintos", () => {
+  it("UNICO na pratica para o volume vivo: 1000 ids geram >= 990 codigos distintos", () => {
+    // Em 6 digitos o espaco e [1e5, 1e6) = 900 mil valores, entao a unicidade e PRATICA, nao absoluta
+    // (o pombal de 10 digitos foi trocado pela exigencia do G.I de 6). Para as poucas dezenas de
+    // pre-admissoes vivas a colisao e desprezivel; mesmo com 1000 ids a dispersao fica >= 99%, e a
+    // matricula REAL (unica de verdade) e cadastrada depois pelo time. A funcao e determinista, entao
+    // este numero nao e flaky: as mesmas 1000 strings dao sempre o mesmo resultado.
     const set = new Set<number>();
     for (let i = 0; i < 1000; i++) set.add(codigoFuncionarioSinteticoGi(`id-${i}-${ADM}`));
-    expect(set.size).toBe(1000);
+    expect(set.size).toBeGreaterThanOrEqual(990);
   });
 });
 

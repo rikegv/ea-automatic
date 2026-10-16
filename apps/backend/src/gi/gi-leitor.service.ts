@@ -1,8 +1,15 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissaoDadosGi, admissoes, candidatos, clienteVinculos, dadosVagaFolha } from "../db/schema";
+import {
+  admissaoDadosGi,
+  admissoes,
+  candidatos,
+  clienteVinculos,
+  dadosVagaFolha,
+  formulariosVt,
+} from "../db/schema";
 import {
   baseDoCodClienteComSufixo,
   baseNumericaDoCodCliente,
@@ -132,7 +139,42 @@ export class GiLeitorService {
       .limit(1);
 
     if (!linha) return null;
-    return montarPessoaParaGi(linha.cand as CandidatoParaGi, linha.dados as DadosGiParaPessoa);
+
+    // ENDEREÇO DO FORMULÁRIO DE VT (§A.17): o endereço residencial é preenchido pelo candidato no
+    // formulário de VT (`formularios_vt`), mas o envio ao G.I lê de `admissao_dados_gi.end_*`. Quando
+    // esses campos estão vazios (a maioria das admissões vivas, medido em 16/10/2026: 34 de 50 enviadas)
+    // e existe um VT preenchido, o endereço do VT PREENCHE o bloco, para o G.I não receber a residência
+    // em branco (foi o caso da Tatiana). Precedência de BLOCO, nunca por campo: ou o endereço do EA
+    // (quando tem logradouro/CEP) ou o do VT inteiro, nunca os dois misturados. O VIGENTE é o VT MAIS
+    // RECENTE (`criado_em` desc: cada envio é uma declaração nova do candidato, ver o schema).
+    const dados = (linha.dados ?? {}) as DadosGiParaPessoa;
+    const temEnderecoEa = !!((dados.endLogradouro ?? "").trim() || (dados.endCep ?? "").trim());
+    if (!temEnderecoEa) {
+      const [vt] = await this.db
+        .select({
+          cep: formulariosVt.cep,
+          logradouro: formulariosVt.logradouro,
+          numero: formulariosVt.numero,
+          complemento: formulariosVt.complemento,
+          bairro: formulariosVt.bairro,
+          cidade: formulariosVt.cidade,
+          uf: formulariosVt.uf,
+        })
+        .from(formulariosVt)
+        .where(eq(formulariosVt.admissaoId, admissaoId))
+        .orderBy(desc(formulariosVt.criadoEm))
+        .limit(1);
+      if (vt && ((vt.logradouro ?? "").trim() || (vt.cep ?? "").trim())) {
+        dados.endCep = vt.cep;
+        dados.endLogradouro = vt.logradouro;
+        dados.endNumero = vt.numero;
+        dados.endComplemento = vt.complemento;
+        dados.endBairro = vt.bairro;
+        dados.endCidade = vt.cidade;
+        dados.endUf = vt.uf;
+      }
+    }
+    return montarPessoaParaGi(linha.cand as CandidatoParaGi, dados);
   }
 
   /**
