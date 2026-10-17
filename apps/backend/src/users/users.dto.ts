@@ -7,6 +7,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   MinLength,
 } from "class-validator";
@@ -53,6 +54,20 @@ export class CriarUsuarioDto {
   @IsOptional()
   @IsIn(PAPEIS_AS)
   papelAs?: PapelAs;
+
+  /**
+   * ESPELHAMENTO NA CRIAÇÃO (OPCIONAL): id do usuário-FONTE cujos menus serão copiados para o novo
+   * usuário, no lugar do padrão do papel. Ausente é o estado normal: quem não espelha nasce com o
+   * padrão do papel, exatamente como antes.
+   *
+   * É só o id da FONTE, não a lista de menus: a cópia crua nunca trafega pela rede. A controller lê os
+   * códigos da fonte no backend e os passa pelo `definirMenusDoUsuario`, que recorta pelo papel e pela
+   * área do ALVO. Assim espelhar um SUPER_ADMIN sobre um COMUM resulta nos menus já recortados, nunca
+   * nos menus crus do SUPER_ADMIN.
+   */
+  @IsOptional()
+  @IsUUID()
+  espelharDeUsuarioId?: string;
 }
 
 export class AtualizarUsuarioDto {
@@ -130,4 +145,17 @@ export class DefinirMenusDto {
   @ArrayUnique()
   @IsIn(AREAS, { each: true })
   areas?: Area[];
+}
+
+/**
+ * ESPELHAMENTO NA EDIÇÃO: copia os menus de um usuário-FONTE sobre um usuário-alvo que JÁ existe.
+ *
+ * Só o id da fonte entra no corpo; a lista de menus nunca trafega. A controller lê os códigos da
+ * fonte no backend e os aplica pelo `definirMenusDoUsuario`, que recorta pelo papel e pela área do
+ * ALVO. Espelhar, por definição, é SUBSTITUIR: o alvo passa a enxergar o que a fonte enxerga (depois
+ * do recorte), não a união do que já tinha com o da fonte.
+ */
+export class EspelharMenusDto {
+  @IsUUID()
+  deUsuarioId!: string;
 }

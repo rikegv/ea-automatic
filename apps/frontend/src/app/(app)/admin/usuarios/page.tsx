@@ -1,10 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AREA,
   AREA_LABEL,
-  PAPEL_AS,
   PAPEL_AS_LABEL,
   type Area,
   type Papel,
@@ -15,12 +13,14 @@ import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Select";
 import { Pill } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfigMenusModal } from "@/components/admin/ConfigMenusModal";
+import { GestaoUsuarioModal } from "@/components/admin/GestaoUsuarioModal";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Usuario {
@@ -49,38 +49,12 @@ const PAPEL_ROTULO: Record<Papel, string> = {
 // "Comum/Master/Super Admin" por alfabética não diz nada sobre o nível de acesso.
 const PAPEL_RANK: Record<Papel, number> = { SUPER_ADMIN: 0, MASTER: 1, COMUM: 2 };
 
-const PAPEL_OPTIONS = [
-  { value: "COMUM", label: "Comum" },
-  { value: "MASTER", label: "Master" },
-  { value: "SUPER_ADMIN", label: "Super Admin" },
-];
-
-/**
- * PAPEL DE A&S no seletor. O valor vazio é opção de verdade, não placeholder: é como se tira o papel
- * de quem saiu da frente de vagas, e é o estado em que quase todo mundo fica.
- */
-const PAPEL_AS_OPTIONS = [
-  { value: "", label: "Sem papel de A&S" },
-  ...PAPEL_AS.map((p) => ({ value: p, label: PAPEL_AS_LABEL[p] })),
-];
-
 // Ordenação da coluna Papel De A&S: quem tem lado primeiro, sem papel por último, porque a coluna
 // existe para achar as pessoas da frente de vagas no meio da lista inteira.
 const PAPEL_AS_RANK: Record<string, number> = { CONSULTOR: 0, RECRUITER: 1 };
 function rankPapelAs(p?: PapelAs | null): number {
   return p ? PAPEL_AS_RANK[p] : 2;
 }
-
-// NINGUÉM NASCE SEM ÁREA (decisão do diretor): o formulário já vem com a Admissão marcada, que é a
-// área de todo mundo hoje. Sem isso, o usuário novo entraria num sistema mudo pelo fail-closed.
-const EMPTY = {
-  nome: "",
-  email: "",
-  papel: "COMUM" as Papel,
-  areas: ["ADM"] as Area[],
-  // Vazio de propósito: o papel de A&S se concede a quem entra na frente de vagas, não a todo mundo.
-  papelAs: "" as "" | PapelAs,
-};
 
 // Ordenação da coluna Área: quem está sem área primeiro, porque é o estado que pede ação.
 function rankArea(areas?: Area[]): number {
@@ -92,6 +66,51 @@ function fmtData(d?: string | null): string {
   if (!d) return "não informado";
   const dt = new Date(d);
   return Number.isNaN(+dt) ? "não informado" : dt.toLocaleDateString("pt-BR");
+}
+
+/** Normaliza para busca: minúsculas, sem acento. Mesma régua da busca dos seletores do sistema. */
+function norm(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+// ── Opções dos filtros (CONSTANTES, enums fixos; não derivam das linhas carregadas, §A.37) ──────
+const FILTRO_PAPEL_OPTS = [
+  { value: "COMUM", label: "Comum" },
+  { value: "MASTER", label: "Master" },
+  { value: "SUPER_ADMIN", label: "Super Admin" },
+];
+// "SEM" é opção de verdade: é como se pergunta "quem não tem papel de A&S", metade da pergunta.
+const FILTRO_PAPEL_AS_OPTS = [
+  { value: "CONSULTOR", label: "Consultor" },
+  { value: "RECRUITER", label: "Recruiter" },
+  { value: "SEM", label: "Sem Papel De A&S" },
+];
+const FILTRO_STATUS_OPTS = [
+  { value: "ativo", label: "Ativo" },
+  { value: "inativo", label: "Inativo" },
+];
+// "SEM" casa com quem tem `areas` vazio (o fail-closed visível).
+const FILTRO_AREA_OPTS = [
+  { value: "ADM", label: AREA_LABEL.ADM },
+  { value: "AS", label: AREA_LABEL.AS },
+  { value: "SEM", label: "Sem Área" },
+];
+
+/**
+ * A ÁREA do filtro, por usuário. O SUPER_ADMIN enxerga "Todas As Áreas", então casa com qualquer área
+ * concreta selecionada (ADM/AS), mas NÃO com "Sem Área", porque "todas" não é o mesmo que "nenhuma".
+ * "Sem Área" casa só com quem de fato tem `areas` vazio.
+ */
+function casaArea(u: Usuario, sel: string[]): boolean {
+  if (sel.length === 0) return true;
+  return sel.some((s) => {
+    if (s === "SEM") return u.papel !== "SUPER_ADMIN" && (u.areas ?? []).length === 0;
+    if (u.papel === "SUPER_ADMIN") return true; // todas as áreas casa com qualquer área concreta
+    return (u.areas ?? []).includes(s as Area);
+  });
 }
 
 /**
@@ -145,6 +164,11 @@ function SenhaTemporaria({ senha, onFechar }: { senha: string; onFechar: () => v
  * Admin: Gestão de usuários (OST-EA-GESTAO-USUARIOS). Criação com senha temporária, edição de
  * dados/papel, ativar/desativar (soft delete = bloqueio de login, preserva histórico) e reset de
  * senha. Restrito a Master / Super Admin (gating herdado do AdminLayout).
+ *
+ * Frente "Melhorias no Menu de Usuários": a criação e a edição deixaram de ser um formulário no topo
+ * e uma edição inline na linha, e passaram para um MODAL (`GestaoUsuarioModal`), aberto pelo botão
+ * "Criar Novo Usuário" e pelo ícone de editar da linha. A tela ganhou busca por nome/e-mail e filtros
+ * avançados (Papel, Área, Papel De A&S, Status), todos client-side sobre as linhas já carregadas.
  */
 export default function UsuariosPage() {
   const { token, user: atual } = useAuth();
@@ -152,22 +176,18 @@ export default function UsuariosPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Criação
-  const [form, setForm] = useState(EMPTY);
-  const [saving, setSaving] = useState(false);
-
   // Senha temporária a exibir (criação ou reset)
   const [senhaGerada, setSenhaGerada] = useState<string | null>(null);
 
-  // Edição inline
-  const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({
-    nome: "",
-    email: "",
-    papel: "COMUM" as Papel,
-    papelAs: "" as "" | PapelAs,
-  });
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // Modal de criar/editar: null = fechado; senão o modo, e o usuário quando é edição.
+  const [modal, setModal] = useState<{ modo: "criar" | "editar"; usuario?: Usuario } | null>(null);
+
+  // ── Busca + filtros (client-side, sobre as linhas já carregadas) ───────────────────────────────
+  const [busca, setBusca] = useState("");
+  const [fPapel, setFPapel] = useState<string[]>([]);
+  const [fArea, setFArea] = useState<string[]>([]);
+  const [fPapelAs, setFPapelAs] = useState<string[]>([]);
+  const [fStatus, setFStatus] = useState<string[]>([]);
 
   // ConfirmDialogs
   const [toggleAlvo, setToggleAlvo] = useState<Usuario | null>(null);
@@ -193,6 +213,29 @@ export default function UsuariosPage() {
     void load();
   }, [load]);
 
+  // Contagem de filtros ativos (grupos com ao menos uma seleção): alimenta o badge do FiltroTrigger.
+  const filtrosAtivos = [fPapel, fArea, fPapelAs, fStatus].filter((f) => f.length > 0).length;
+  function limparFiltros() {
+    setFPapel([]);
+    setFArea([]);
+    setFPapelAs([]);
+    setFStatus([]);
+  }
+
+  // LINHAS FILTRADAS: busca (nome+e-mail, normalizando acento/caixa) e os quatro filtros. É esta lista
+  // que alimenta a ordenação; a tabela, as colunas e a ordenação seguem exatamente como antes.
+  const filtradas = useMemo(() => {
+    const q = norm(busca.trim());
+    return rows.filter((u) => {
+      if (q && !norm(u.nome).includes(q) && !norm(u.email).includes(q)) return false;
+      if (fPapel.length > 0 && !fPapel.includes(u.papel)) return false;
+      if (fStatus.length > 0 && !fStatus.includes(u.ativo ? "ativo" : "inativo")) return false;
+      if (fPapelAs.length > 0 && !fPapelAs.includes(u.papelAs ?? "SEM")) return false;
+      if (!casaArea(u, fArea)) return false;
+      return true;
+    });
+  }, [rows, busca, fPapel, fStatus, fPapelAs, fArea]);
+
   // Ordenação clicável (OST visual, leva das 11 tabelas). Papel e Status ordenam por RANK, não
   // alfabética. A coluna de ações não entra: é controle, não dado.
   const colunas = useMemo<ColOrd<Usuario>[]>(
@@ -208,65 +251,7 @@ export default function UsuariosPage() {
     ],
     [],
   );
-  const ord = useOrdenacao(colunas, rows);
-
-  async function criar(e: FormEvent) {
-    e.preventDefault();
-    if (!form.nome.trim() || !form.email.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const r = await apiFetch<{ usuario: Usuario; senhaTemporaria: string }>("/admin/usuarios", {
-        method: "POST",
-        token,
-        body: {
-          nome: form.nome.trim(),
-          email: form.email.trim(),
-          papel: form.papel,
-          areas: form.areas,
-          // Vazio não vai como string vazia: o backend espera ausente ou um dos dois papéis.
-          papelAs: form.papelAs || undefined,
-        },
-      });
-      setForm(EMPTY);
-      setSenhaGerada(r.senhaTemporaria);
-      await load();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Erro ao criar usuário.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function iniciarEdicao(u: Usuario) {
-    setEditId(u.id);
-    setEditForm({ nome: u.nome, email: u.email, papel: u.papel, papelAs: u.papelAs ?? "" });
-  }
-
-  async function salvarEdicao(id: string) {
-    if (!editForm.nome.trim() || !editForm.email.trim()) return;
-    setBusyId(id);
-    setError(null);
-    try {
-      await apiFetch(`/admin/usuarios/${id}`, {
-        method: "PATCH",
-        token,
-        body: {
-          nome: editForm.nome.trim(),
-          email: editForm.email.trim(),
-          papel: editForm.papel,
-          // NULL LIMPA o papel; por isso o vazio vira `null` e não `undefined`, que preservaria.
-          papelAs: editForm.papelAs || null,
-        },
-      });
-      setEditId(null);
-      await load();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Erro ao salvar usuário.");
-    } finally {
-      setBusyId(null);
-    }
-  }
+  const ord = useOrdenacao(colunas, filtradas);
 
   async function confirmarToggle() {
     if (!toggleAlvo) return;
@@ -313,96 +298,6 @@ export default function UsuariosPage() {
         subtitle="Cadastro, papéis e acesso: senha temporária na criação e no reset; desativar bloqueia o login sem apagar o histórico."
       />
 
-      {/* ── Criar usuário ──────────────────────────────────────────────── */}
-      <GlassCard
-        as="form"
-        onSubmit={criar}
-        className="mb-5 grid gap-3 p-4 md:grid-cols-[1fr_1fr_180px_190px_auto] md:items-end"
-      >
-        <div>
-          <span className="ds-label">Nome</span>
-          <input
-            required
-            placeholder="Nome completo"
-            value={form.nome}
-            onChange={(e) => setForm({ ...form, nome: e.target.value })}
-            className="ds-input"
-          />
-        </div>
-        <div>
-          <span className="ds-label">E-mail</span>
-          <input
-            required
-            type="email"
-            placeholder="voce@empresa.com"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            className="ds-input"
-          />
-        </div>
-        <div>
-          <span className="ds-label">Papel</span>
-          <Select
-            value={form.papel}
-            onChange={(v) => setForm({ ...form, papel: v as Papel })}
-            ariaLabel="Papel do novo usuário"
-            options={PAPEL_OPTIONS}
-          />
-        </div>
-        {/* PAPEL DE A&S: campo NOVO e independente do Papel ao lado. Um responde o que a pessoa pode
-            fazer no sistema, este responde que lado da vaga ela ocupa na frente de A&S. */}
-        <div>
-          <span className="ds-label">Papel De A&S</span>
-          <Select
-            value={form.papelAs}
-            onChange={(v) => setForm({ ...form, papelAs: v as "" | PapelAs })}
-            ariaLabel="Papel de A&S do novo usuário"
-            options={PAPEL_AS_OPTIONS}
-          />
-        </div>
-        {/* ÁREA na criação: é o que impede alguém de nascer sem área e cair no fail-closed. Caixas e
-            não um Select porque o modelo é LISTA (o usuário híbrido atende as duas frentes). */}
-        <div>
-          <span className="ds-label">Área</span>
-          <div className="flex flex-wrap gap-2 pt-1">
-            {AREA.map((a) => (
-              <label
-                key={a}
-                className={
-                  "flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-[13px] transition " +
-                  (form.areas.includes(a)
-                    ? "bg-[var(--surface-2)] text-text"
-                    : "text-dim hover:bg-[var(--surface-2)]")
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={form.areas.includes(a)}
-                  onChange={() =>
-                    setForm({
-                      ...form,
-                      areas: form.areas.includes(a)
-                        ? form.areas.filter((x) => x !== a)
-                        : [...form.areas, a],
-                    })
-                  }
-                  className="h-4 w-4 flex-none accent-[var(--accent)]"
-                />
-                {AREA_LABEL[a]}
-              </label>
-            ))}
-          </div>
-        </div>
-        <Button
-          type="submit"
-          // Sem área o botão não habilita: o backend recusa, e barrar aqui explica antes de errar.
-          disabled={saving || !form.nome.trim() || !form.email.trim() || form.areas.length === 0}
-          className="py-2.5"
-        >
-          {saving ? "Criando…" : "Criar usuário"}
-        </Button>
-      </GlassCard>
-
       {senhaGerada && <SenhaTemporaria senha={senhaGerada} onFechar={() => setSenhaGerada(null)} />}
 
       {error && (
@@ -414,12 +309,89 @@ export default function UsuariosPage() {
         </p>
       )}
 
+      {/* ── Barra: busca + filtros + criar ─────────────────────────────────────────────────────────
+          No lugar do antigo formulário do topo. A busca ocupa a largura; o ícone de filtro com o badge
+          de ativos e o botão de criar ficam na ponta. */}
+      <div className="mb-5 flex items-center gap-3">
+        <div className="relative flex-1">
+          {/* Lupa inline: o conjunto de ícones do design system (`Icon`) não tem uma, e esta é
+              puramente decorativa (o input já tem aria-label). currentColor + traço, no mesmo tom dos
+              demais ícones, para não destoar. */}
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+          <input
+            type="search"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Buscar por nome ou e-mail"
+            aria-label="Buscar por nome ou e-mail"
+            className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] pl-9 pr-3.5 text-sm text-text outline-none transition placeholder:text-faint focus:border-[var(--accent)]"
+          />
+        </div>
+
+        <FiltroTrigger count={filtrosAtivos} onLimpar={limparFiltros}>
+          <FiltroCampo label="Papel">
+            <MultiSelect
+              values={fPapel}
+              onChange={setFPapel}
+              options={FILTRO_PAPEL_OPTS}
+              placeholder="Todos os papéis"
+              ariaLabel="Filtrar por papel"
+            />
+          </FiltroCampo>
+          <FiltroCampo label="Área">
+            <MultiSelect
+              values={fArea}
+              onChange={setFArea}
+              options={FILTRO_AREA_OPTS}
+              placeholder="Todas as áreas"
+              ariaLabel="Filtrar por área"
+            />
+          </FiltroCampo>
+          <FiltroCampo label="Papel De A&S">
+            <MultiSelect
+              values={fPapelAs}
+              onChange={setFPapelAs}
+              options={FILTRO_PAPEL_AS_OPTS}
+              placeholder="Qualquer um"
+              ariaLabel="Filtrar por papel de A&S"
+            />
+          </FiltroCampo>
+          <FiltroCampo label="Status">
+            <MultiSelect
+              values={fStatus}
+              onChange={setFStatus}
+              options={FILTRO_STATUS_OPTS}
+              placeholder="Todos os status"
+              ariaLabel="Filtrar por status"
+            />
+          </FiltroCampo>
+        </FiltroTrigger>
+
+        <Button
+          onClick={() => setModal({ modo: "criar" })}
+          className="flex-none gap-1.5 py-2.5"
+        >
+          <Icon name="plus" className="h-4 w-4" />
+          Criar Novo Usuário
+        </Button>
+      </div>
+
       {/* ── Lista de usuários ──────────────────────────────────────────── */}
       <GlassCard className="overflow-hidden p-2">
         {/* A COLUNA NOVA APERTOU A TABELA, então ela passa a rolar na horizontal em vez de espremer
-            (§A.20): com oito colunas no espaço de sete, o campo de nome da edição inline ficava com
-            uns 120px e cortava o que a pessoa estava digitando. Rolar é o que a §A.13 manda fazer no
-            lugar de encolher. */}
+            (§A.20). Rolar é o que a §A.13 manda fazer no lugar de encolher. */}
         <div className="overflow-x-auto">
           <table className="ds-table min-w-[1280px]">
             <thead>
@@ -461,49 +433,25 @@ export default function UsuariosPage() {
                     Nenhum usuário cadastrado.
                   </td>
                 </tr>
+              ) : ord.itens.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-faint">
+                    Nenhum usuário encontrado para a busca ou os filtros.
+                  </td>
+                </tr>
               ) : (
                 ord.itens.map((u) => {
-                  const editando = editId === u.id;
-                  const busy = busyId === u.id;
                   const ehAtual = atual?.id === u.id;
                   return (
                     <tr key={u.id}>
                       <td className="align-top">
-                        {editando ? (
-                          <input
-                            className="ds-input !py-2"
-                            value={editForm.nome}
-                            onChange={(e) => setEditForm({ ...editForm, nome: e.target.value })}
-                            aria-label="Nome"
-                          />
-                        ) : (
-                          <span className="text-text">{u.nome}</span>
-                        )}
+                        <span className="text-text">{u.nome}</span>
                       </td>
                       <td className="align-top">
-                        {editando ? (
-                          <input
-                            type="email"
-                            className="ds-input !py-2"
-                            value={editForm.email}
-                            onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                            aria-label="E-mail"
-                          />
-                        ) : (
-                          <span className="text-dim">{u.email}</span>
-                        )}
+                        <span className="text-dim">{u.email}</span>
                       </td>
                       <td className="align-top">
-                        {editando ? (
-                          <Select
-                            value={editForm.papel}
-                            onChange={(v) => setEditForm({ ...editForm, papel: v as Papel })}
-                            ariaLabel="Papel"
-                            options={PAPEL_OPTIONS}
-                          />
-                        ) : (
-                          <span className="text-[13.5px] text-text">{PAPEL_ROTULO[u.papel]}</span>
-                        )}
+                        <span className="text-[13.5px] text-text">{PAPEL_ROTULO[u.papel]}</span>
                       </td>
                       {/* ÁREA: só LEITURA aqui, para o diretor auditar de relance quem está em quê sem
                         abrir um modal por pessoa. A edição vive no modal de permissão, junto dos
@@ -524,20 +472,10 @@ export default function UsuariosPage() {
                           )}
                         </div>
                       </td>
-                      {/* PAPEL DE A&S: tag na leitura e seletor na edição, o mesmo par que a coluna
-                        Papel já usa. "Sem Papel De A&S" é estado normal, não pendência, então a tag
-                        é neutra e não amarela: quem não trabalha em A&S não tem nada a resolver. */}
+                      {/* PAPEL DE A&S: "Sem Papel De A&S" é estado normal, não pendência, então a tag é
+                        neutra e não amarela: quem não trabalha em A&S não tem nada a resolver. */}
                       <td className="align-top">
-                        {editando ? (
-                          <Select
-                            value={editForm.papelAs}
-                            onChange={(v) =>
-                              setEditForm({ ...editForm, papelAs: v as "" | PapelAs })
-                            }
-                            ariaLabel="Papel de A&S"
-                            options={PAPEL_AS_OPTIONS}
-                          />
-                        ) : u.papelAs ? (
+                        {u.papelAs ? (
                           <Pill tone="in">{PAPEL_AS_LABEL[u.papelAs]}</Pill>
                         ) : (
                           <Pill tone="nt">Sem Papel De A&S</Pill>
@@ -549,79 +487,52 @@ export default function UsuariosPage() {
                       <td className="align-top text-[13px] text-dim">{fmtData(u.criadoEm)}</td>
                       <td className="align-top text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {editando ? (
-                            <>
-                              <button
-                                type="button"
-                                disabled={busy || !editForm.nome.trim() || !editForm.email.trim()}
-                                onClick={() => salvarEdicao(u.id)}
-                                className="grid h-8 w-8 place-items-center rounded-lg text-ok transition hover:bg-[var(--surface-2)] disabled:opacity-50"
-                                title="Salvar"
-                                aria-label="Salvar usuário"
-                              >
-                                <Icon name="check" className="h-[18px] w-[18px]" />
-                              </button>
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => setEditId(null)}
-                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)]"
-                                title="Cancelar"
-                                aria-label="Cancelar edição"
-                              >
-                                <Icon name="x" className="h-[18px] w-[18px]" />
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => iniciarEdicao(u)}
-                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                                title="Editar"
-                                aria-label="Editar usuário"
-                              >
-                                <Icon name="pen" className="h-[17px] w-[17px]" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfigAlvo(u)}
-                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                                title="Configurar menus de acesso"
-                                aria-label="Configurar menus de acesso"
-                              >
-                                <Icon name="layers" className="h-[17px] w-[17px]" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setResetAlvo(u)}
-                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                                title="Resetar Senha"
-                                aria-label="Resetar Senha"
-                              >
-                                <Icon name="clock" className="h-[17px] w-[17px]" />
-                              </button>
-                              <button
-                                type="button"
-                                disabled={ehAtual}
-                                onClick={() => setToggleAlvo(u)}
-                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
-                                title={
-                                  ehAtual
-                                    ? "Você não pode desativar a própria conta"
-                                    : u.ativo
-                                      ? "Desativar (bloquear login)"
-                                      : "Reativar"
-                                }
-                                aria-label={u.ativo ? "Desativar usuário" : "Reativar usuário"}
-                              >
-                                <Icon
-                                  name={u.ativo ? "logout" : "check"}
-                                  className="h-[17px] w-[17px]"
-                                />
-                              </button>
-                            </>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => setModal({ modo: "editar", usuario: u })}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                            title="Editar"
+                            aria-label="Editar usuário"
+                          >
+                            <Icon name="pen" className="h-[17px] w-[17px]" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfigAlvo(u)}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                            title="Configurar menus de acesso"
+                            aria-label="Configurar menus de acesso"
+                          >
+                            <Icon name="layers" className="h-[17px] w-[17px]" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setResetAlvo(u)}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                            title="Resetar Senha"
+                            aria-label="Resetar Senha"
+                          >
+                            <Icon name="clock" className="h-[17px] w-[17px]" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={ehAtual}
+                            onClick={() => setToggleAlvo(u)}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                            title={
+                              ehAtual
+                                ? "Você não pode desativar a própria conta"
+                                : u.ativo
+                                  ? "Desativar (bloquear login)"
+                                  : "Reativar"
+                            }
+                            aria-label={u.ativo ? "Desativar usuário" : "Reativar usuário"}
+                          >
+                            <Icon
+                              name={u.ativo ? "logout" : "check"}
+                              className="h-[17px] w-[17px]"
+                            />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -632,6 +543,22 @@ export default function UsuariosPage() {
           </table>
         </div>
       </GlassCard>
+
+      {/* Modal de criar / editar usuário (frente "Melhorias no Menu de Usuários") */}
+      {modal && (
+        <GestaoUsuarioModal
+          modo={modal.modo}
+          usuario={modal.usuario}
+          usuarios={rows}
+          token={token ?? undefined}
+          onClose={() => setModal(null)}
+          onSalvo={(senha) => {
+            setModal(null);
+            if (senha) setSenhaGerada(senha);
+            void load();
+          }}
+        />
+      )}
 
       {/* Ativar / desativar (soft delete = bloqueio de login, preserva histórico) */}
       <ConfirmDialog

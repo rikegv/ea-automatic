@@ -1,9 +1,24 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Put,
+} from "@nestjs/common";
 import type { AuthUser } from "../auth/auth.types";
 import { CurrentUser, Roles } from "../auth/decorators";
 import { MenusService } from "../auth/menus.service";
 import { codigosPadraoDoPapel } from "../domain/menus";
-import { AtualizarUsuarioDto, CriarUsuarioDto, DefinirMenusDto } from "./users.dto";
+import {
+  AtualizarUsuarioDto,
+  CriarUsuarioDto,
+  DefinirMenusDto,
+  EspelharMenusDto,
+} from "./users.dto";
 import { UsersService } from "./users.service";
 
 /**
@@ -90,11 +105,41 @@ export class UsersController {
 
   @Post()
   async criar(@Body() dto: CriarUsuarioDto) {
+    // VALIDAR A FONTE DO ESPELHAMENTO ANTES DE QUALQUER EFEITO, e a ordem é o conserto: validar
+    // depois de o usuário já ter sido inserido e as áreas gravadas deixava, num id inexistente, um
+    // usuário meia-provisionado (com áreas e ZERO menu) persistido num request que devolveu 400.
+    // Checar no topo faz a criação ser tudo ou nada.
+    if (dto.espelharDeUsuarioId) {
+      const fonte = await this.users.findById(dto.espelharDeUsuarioId);
+      if (!fonte) {
+        throw new BadRequestException("Usuário de origem do espelhamento não encontrado");
+      }
+    }
+
     const res = await this.users.criar(dto);
     // NINGUÉM NASCE SEM ÁREA (decisão do diretor): sem isto, todo usuário novo cairia no fail-closed e
     // entraria num sistema mudo. O dto exige a área, e ela é gravada ANTES dos menus, porque é ela que
     // recorta o padrão do papel logo abaixo.
     const areas = await this.menus.definirAreasDoUsuario(res.usuario.id, dto.areas);
+
+    // ESPELHAMENTO OPCIONAL: quando o diretor escolhe nascer copiando outro usuário, os menus vêm da
+    // FONTE em vez do padrão do papel. A existência da fonte já foi validada no topo, antes de criar.
+    if (dto.espelharDeUsuarioId) {
+      // O RECORTE É O PONTO: passam os CÓDIGOS da fonte, mas o papel e as áreas do ALVO. O
+      // `definirMenusDoUsuario` descarta código inexistente, tira os bloqueados do COMUM, tira os
+      // exclusivos de SUPER_ADMIN quando o alvo não é SUPER_ADMIN e recorta pela área viva do alvo.
+      // Assim espelhar um SUPER_ADMIN sobre um COMUM nunca vaza menu que o alvo não poderia ter: o
+      // resultado é sempre o já recortado pelo papel e pela área do alvo, nunca a cópia crua.
+      const codigosFonte = [...(await this.menus.codigosDoUsuario(dto.espelharDeUsuarioId))];
+      const aplicados = await this.menus.definirMenusDoUsuario(
+        res.usuario.id,
+        codigosFonte,
+        dto.papel,
+        areas,
+      );
+      return { ...res, areas, menusEspelhados: aplicados.length };
+    }
+
     // Novo usuário nasce com o PADRÃO do papel (decisão do diretor, 24/07/2026): o COMUM enxerga toda
     // a Operação por padrão, em vez de nascer sem menu nenhum. Administração segue concessão pontual.
     //
@@ -108,6 +153,47 @@ export class UsersController {
       areas,
     );
     return { ...res, areas };
+  }
+
+  /**
+   * ESPELHAMENTO NA EDIÇÃO: copia os menus de um usuário-FONTE sobre um usuário-alvo que JÁ existe.
+   * Herda o `@Roles("SUPER_ADMIN")` da classe, como toda esta tela.
+   *
+   * É SUBSTITUIÇÃO DELIBERADA, que é a própria semântica de "espelhar": o alvo passa a enxergar o que
+   * a fonte enxerga, não a união do que já tinha com o da fonte. Usar o `definirMenusDoUsuario` (que
+   * troca o conjunto inteiro) e não o `salvarSelecaoDaTela` (que preserva o que a tela não conhecia) é
+   * intencional: aqui não há uma tela declarando escopo, há um gesto explícito de "deixe igual ao
+   * daquele usuário".
+   *
+   * O RECORTE continua sendo o ponto: passam os CÓDIGOS da fonte com o papel e as áreas do ALVO, então
+   * espelhar um SUPER_ADMIN sobre um COMUM resulta nos menus já recortados pelo papel e pela área do
+   * alvo, nunca a cópia crua.
+   */
+  @Post(":id/espelhar")
+  async espelharMenus(@Param("id") id: string, @Body() dto: EspelharMenusDto) {
+    // Espelhar um usuário sobre ele mesmo não faz nada útil e quase sempre é engano da tela; recusar
+    // com mensagem clara evita um "salvei e nada mudou" sem explicação.
+    if (dto.deUsuarioId === id) {
+      throw new BadRequestException("Escolha um usuário diferente para espelhar");
+    }
+    // Alvo inexistente é 404 (o recurso da rota não existe); fonte inexistente é 400 (o corpo aponta
+    // para alguém que não há). Nenhuma das mensagens cita nome nem e-mail de terceiro (§A.6).
+    const alvo = await this.users.findById(id);
+    if (!alvo) throw new NotFoundException("Usuário não encontrado");
+    const fonte = await this.users.findById(dto.deUsuarioId);
+    if (!fonte) {
+      throw new BadRequestException("Usuário de origem do espelhamento não encontrado");
+    }
+
+    const codigosFonte = [...(await this.menus.codigosDoUsuario(dto.deUsuarioId))];
+    const areasAlvo = [...(await this.menus.areasDoUsuario(id))];
+    const aplicados = await this.menus.definirMenusDoUsuario(
+      id,
+      codigosFonte,
+      alvo.papel,
+      areasAlvo,
+    );
+    return { ok: true, total: aplicados.length };
   }
 
   @Patch(":id")
