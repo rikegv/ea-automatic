@@ -386,10 +386,18 @@ describe("comerciais: a listagem de NOMES fica atrás do menu, e não há classe
  *
  * ESTE TESTE É A LISTA PINADA do que sobrou, e quebrar ao acrescentar ou remover um código é o
  * comportamento desejado: entrar ou sair daqui é decisão do diretor (§A.23), nunca efeito colateral.
+ *
+ * `solicitacoes-gestao` (OST Central de Solicitações) entrou depois, e NÃO por conceder permissão: a
+ * controller é `@Roles("SUPER_ADMIN")` e, enquanto a rota é só-super-admin, deixá-la concedível a um
+ * COMUM/MASTER mostraria a porta e a trancaria no guard. Fica aqui pela mesma régua formal das duas.
  */
 describe("o que continua NÃO concedível depois desta frente", () => {
-  it("sobraram exatamente as duas telas que CONCEDEM permissão", () => {
-    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual(["usuarios", "menu-areas"]);
+  it("sobraram as duas telas que CONCEDEM permissão, mais a gestão de solicitações", () => {
+    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
+      "usuarios",
+      "menu-areas",
+      "solicitacoes-gestao",
+    ]);
     for (const c of MENUS_SOMENTE_SUPER_ADMIN) {
       expect(restricaoDeConcessao(c)).toBe("SO_SUPER_ADMIN");
     }

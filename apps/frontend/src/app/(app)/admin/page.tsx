@@ -368,6 +368,19 @@ export const CARDS: {
     title: "Central De Ajuda",
     desc: "O manual do sistema: passo a passo por tela, com busca.",
   },
+  {
+    /*
+     * GESTÃO DE SOLICITAÇÕES (Central De Solicitações): o card faz o menu ser ENCONTRADO, e o registro
+     * no backend faz ele EXISTIR para o diretor liberar. ÍCONE `alert` (a fila de pedidos que esperam
+     * decisão da gestão), distinto do `bulb` que a porta do usuário usa na barra. §A.23: filtrado por
+     * `temMenu`, nasce só para o SUPER_ADMIN.
+     */
+    href: "/admin/central-solicitacoes",
+    codigo: "solicitacoes-gestao",
+    icon: "alert",
+    title: "Gestão De Solicitações",
+    desc: "Atenda e acompanhe as solicitações abertas pelos usuários.",
+  },
 ];
 
 /** Normaliza para busca: minúsculas, sem acento (mesmo comportamento das outras buscas). */

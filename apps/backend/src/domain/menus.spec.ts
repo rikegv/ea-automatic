@@ -352,8 +352,19 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
      * ESTA LISTA CONTINUA PINADA POR INTEIRO, e falhar ao acrescentar ou remover um código é o
      * comportamento desejado: entrar ou sair daqui é decisão do diretor (§A.23), nunca efeito
      * colateral de uma frente.
+     *
+     * ─ A TERCEIRA (OST Central de Solicitações) ─────────────────────────────────────────────────
+     *
+     * `solicitacoes-gestao` entrou pela MESMA razão formal das duas acima, e não por conceder
+     * permissão: a controller `SolicitacoesGestaoController` é `@Roles("SUPER_ADMIN")`. Enquanto a
+     * rota é só-super-admin, deixá-la concedível a um COMUM/MASTER mostraria a porta na tela de
+     * permissões e a trancaria no guard, que é pior do que não mostrar. Por isso ela fica aqui.
      */
-    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual(["usuarios", "menu-areas"]);
+    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
+      "usuarios",
+      "menu-areas",
+      "solicitacoes-gestao",
+    ]);
   });
 
   it("SUPER_ADMIN continua recebendo `usuarios`", () => {

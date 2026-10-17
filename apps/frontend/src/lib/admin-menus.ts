@@ -47,6 +47,10 @@ export const ADMIN_MENUS = [
   "usuarios",
   "menu-areas",
   "assinante-empresa",
+  // GESTÃO DE SOLICITAÇÕES (Central De Solicitações): a TELA vive sob `/admin/central-solicitacoes`,
+  // então quem tiver só este menu precisa conseguir abrir a camada, senão o menu ficaria liberado e
+  // inalcançável (o layout de `/admin` responderia "Acesso Restrito"). §A.23: isto não concede nada.
+  "solicitacoes-gestao",
   /*
    * CENTRAL DE AJUDA: o MESMO caso do `ifractal` logo acima, e pelo mesmo motivo. A TELA vive FORA de
    * `/admin` (é o manual, lido por quem opera), mas a PORTA dela é um card do hub, porque o menu

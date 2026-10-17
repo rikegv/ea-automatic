@@ -3,6 +3,8 @@ import {
   PANDAPE_ENTRADA_DESFECHOS,
   PANDAPE_ENTRADA_MOTIVOS,
   PANDAPE_ENTRADA_ORIGENS,
+  SOLICITACAO_STATUS,
+  SOLICITACAO_TIPO,
 } from "@ea/shared-types";
 
 /** RBAC (CLAUDE.md §A.3): Comum (consultor) · Master · Super Admin. */
@@ -507,3 +509,19 @@ export const pandapeEntradaMotivoEnum = pgEnum("pandape_entrada_motivo", PANDAPE
 
 /** A ORIGEM do evento, carimbada no nascimento e IMUTÁVEL (reprocesso não reescreve para MANUAL). */
 export const pandapeEntradaOrigemEnum = pgEnum("pandape_entrada_origem", PANDAPE_ENTRADA_ORIGENS);
+
+// ── CENTRAL DE SOLICITAÇÕES (OST Central de Solicitações) ───────────────────────────────────────
+// Os dois enums das `solicitacoes`. Mesmos VALORES do vocabulário compartilhado (`@ea/shared-types`,
+// §A.39), que é o dono único da lista: digitá-los de novo faria banco e contrato divergirem no
+// primeiro valor acrescentado, e a divergência só apareceria num "invalid input value for enum" em
+// produção (mesmo cuidado dos enums do Pandapé acima).
+
+/** Tipo da solicitação: nova FUNCIONALIDADE ou BUG. */
+export const solicitacaoTipoEnum = pgEnum("solicitacao_tipo", SOLICITACAO_TIPO);
+
+/**
+ * Ciclo de status da solicitação (decisão do diretor):
+ * NOVO, EM_DUVIDA, APROVADO/REPROVADO, EM_ANDAMENTO, CONCLUIDO. Enum do Postgres (conjunto fechado),
+ * não texto com CHECK: texto livre vira grafias concorrentes do mesmo status e nenhuma contagem fecha.
+ */
+export const solicitacaoStatusEnum = pgEnum("solicitacao_status", SOLICITACAO_STATUS);

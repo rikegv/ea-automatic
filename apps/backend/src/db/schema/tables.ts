@@ -48,6 +48,8 @@ import {
   pandapeEntradaDesfechoEnum,
   pandapeEntradaMotivoEnum,
   pandapeEntradaOrigemEnum,
+  solicitacaoStatusEnum,
+  solicitacaoTipoEnum,
   periodicidadeBeneficioEnum,
   tipoIntegracaoEnum,
   papelAsEnum,
@@ -6594,5 +6596,88 @@ export const portalAcessoTravas = pgTable(
     ),
     /** A FILA: as travas ainda abertas, mais recentes primeiro. */
     idxAbertas: index("idx_portal_acesso_travas_abertas").on(t.destravadoEm, t.travadoEm),
+  }),
+);
+
+// ── CENTRAL DE SOLICITAÇÕES (OST Central de Solicitações) ───────────────────────────────────────
+// Qualquer usuário abre uma solicitação (nova funcionalidade ou bug) com tela/seção, descrição e
+// print obrigatório; a gestão (SUPER_ADMIN) decide o ciclo de status e conversa pela thread; o
+// solicitante recebe notificação até dar "Estou Ciente". Modelo espelhado em `naoConformidades` +
+// `frenteStatusEventos`: id por admissão/usuário, sem PII de candidato (só usuário interno) e a
+// IMAGEM nunca vive no banco, só a REFERÊNCIA do Drive (§A.6).
+
+/** A solicitação em si: tipo, origem (tela/seção), descrição, print no Drive e status do ciclo. */
+export const solicitacoes = pgTable("solicitacoes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tipo: solicitacaoTipoEnum("tipo").notNull(),
+  // Código da TELA no catálogo de solicitações (não é o código de menu do RBAC). O rótulo é
+  // resolvido do catálogo no momento da criação e CONGELADO aqui, para a linha não mudar de nome se
+  // o catálogo for revisado depois.
+  menuCodigo: varchar("menu_codigo", { length: 60 }).notNull(),
+  menuRotulo: varchar("menu_rotulo", { length: 120 }).notNull(),
+  submenu: varchar("submenu", { length: 120 }).notNull(),
+  descricao: text("descricao").notNull(),
+  // §A.6: REFERÊNCIA do Drive (url da pasta + id do arquivo), nunca o binário. Nulável: a criação
+  // grava depois de arquivar, e um arquivamento inerte (sem pasta configurada) deixa placeholder.
+  imagemDriveUrl: text("imagem_drive_url"),
+  imagemDriveFileId: text("imagem_drive_file_id"),
+  // Autor da solicitação. SEM cascade de propósito: apagar o usuário não pode levar embora o
+  // histórico de solicitações (mesmo cuidado de `nao_conformidades.consultor_id`).
+  solicitanteId: uuid("solicitante_id")
+    .notNull()
+    .references(() => usuarios.id),
+  status: solicitacaoStatusEnum("status").notNull().default("NOVO"),
+  criadoEm,
+  atualizadoEm,
+});
+
+/** Uma mensagem da conversa (thread) de uma solicitação. O autor pode ser o solicitante ou a gestão. */
+export const solicitacaoMensagens = pgTable(
+  "solicitacao_mensagens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    solicitacaoId: uuid("solicitacao_id")
+      .notNull()
+      .references(() => solicitacoes.id, { onDelete: "cascade" }),
+    autorId: uuid("autor_id")
+      .notNull()
+      .references(() => usuarios.id),
+    corpo: text("corpo").notNull(),
+    criadoEm,
+  },
+  (t) => ({
+    // A thread é lida sempre por solicitação, em ordem cronológica.
+    idxThread: index("idx_solicitacao_mensagens_solicitacao_criado").on(
+      t.solicitacaoId,
+      t.criadoEm,
+    ),
+  }),
+);
+
+/**
+ * Notificação na plataforma, para o usuário destinatário. Pinga a cada acesso e CONTINUA pendente
+ * até o "Estou Ciente" (baixa persistida em `cienteEm`, não supressão local). `solicitacaoId` é o
+ * vínculo opcional para o deep link; cascade no usuário e na solicitação porque a notificação não
+ * faz sentido sem os dois.
+ */
+export const notificacoes = pgTable(
+  "notificacoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    usuarioId: uuid("usuario_id")
+      .notNull()
+      .references(() => usuarios.id, { onDelete: "cascade" }),
+    titulo: text("titulo").notNull(),
+    corpo: text("corpo").notNull(),
+    rota: text("rota"),
+    solicitacaoId: uuid("solicitacao_id").references(() => solicitacoes.id, {
+      onDelete: "cascade",
+    }),
+    cienteEm: timestamp("ciente_em", { withTimezone: true }),
+    criadoEm,
+  },
+  (t) => ({
+    // A fila de pendentes: por usuário, filtrando `ciente_em IS NULL`, mais recentes primeiro.
+    idxPendentes: index("idx_notificacoes_usuario_ciente").on(t.usuarioId, t.cienteEm),
   }),
 );

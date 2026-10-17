@@ -176,9 +176,16 @@ describe("A chave RSA saiu do EA, e isso e medida", () => {
 describe("§A.6: URL, bilhete e nome do objeto nao sao PERSISTIDOS", () => {
   it("a tabela da cota nao tem coluna de URL, de bilhete nem de token", () => {
     const schema = readFileSync(join(SRC, "db", "schema", "tables.ts"), "utf8");
-    const inicio = schema.indexOf("portalCredenciais");
+    const inicio = schema.indexOf("export const portalCredenciais");
     expect(inicio).toBeGreaterThan(-1);
-    const bloco = schema.slice(inicio, schema.indexOf("});", inicio));
+    // Recorta EXATAMENTE a definição de `portalCredenciais` (a tabela da cota): do seu `export
+    // const` até o próximo `export const`. A tabela fecha com callback `(t) => ({...}))`, então
+    // casar o próximo `});` saltava para longe dela e varria tabelas seguintes, dando falso
+    // positivo em qualquer coluna `*_drive_url` legítima declarada adiante (referência do Drive é
+    // permitida, §A.6: ex. `contrato_assinado_drive_url`). O escopo correto é só a cota.
+    const resto = schema.slice(inicio + "export const portalCredenciais".length);
+    const prox = resto.indexOf("\nexport const");
+    const bloco = prox === -1 ? resto : resto.slice(0, prox);
     // So os NOMES DE COLUNA, nunca o comentario: o comentario fala de URL de proposito, para dizer
     // que ela NAO e guardada.
     const colunas = [...bloco.matchAll(/(?:varchar|text|integer|uuid|timestamp|boolean|jsonb)\("([a-z_]+)"/g)].map((m) => m[1]);

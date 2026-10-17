@@ -134,6 +134,17 @@ export const OPERACAO: NavDef[] = [
     codigo: "gerenciador",
     descricao: "Todas as admissões em tabela, com filtros e busca global.",
   },
+  // CENTRAL DE SOLICITAÇÕES (OST da Central): a porta para qualquer usuário pedir uma funcionalidade
+  // nova ou registrar um bug. Ícone `bulb` (a ideia/sugestão), que nenhum vizinho de Operação usa, e
+  // por isso distingue a linha na varredura da barra. §A.23: a linha não concede nada; quem enxerga
+  // o atalho é quem tem o menu `central-solicitacoes`, decisão do diretor.
+  {
+    href: "/central-solicitacoes",
+    icon: "bulb",
+    label: "Central De Solicitações",
+    codigo: "central-solicitacoes",
+    descricao: "Abra uma solicitação de nova funcionalidade ou registre um bug.",
+  },
 ];
 
 // Gerador de kit (motor de extração, OST): tela própria. Visibilidade agora pelo menu `gerador-kit`

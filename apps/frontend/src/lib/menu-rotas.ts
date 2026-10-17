@@ -63,6 +63,13 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // isto fecha a porta da tela.
   { prefixo: "/admin/entradas-pandape", codigo: "entradas-pandape" },
   { prefixo: "/admin/diagnostico", codigo: "diagnostico" },
+  // GESTÃO DE SOLICITAÇÕES (Central De Solicitações): governada pelo menu `solicitacoes-gestao`, que
+  // nasce só para o SUPER_ADMIN (§A.23). Sem esta linha o guard deixaria qualquer autenticado com
+  // algum menu administrativo abrir a URL direto, e a tela lista as solicitações abertas pelo time.
+  { prefixo: "/admin/central-solicitacoes", codigo: "solicitacoes-gestao" },
+  // CENTRAL DE SOLICITAÇÕES (usuário): governada pelo menu `central-solicitacoes`. Sem esta linha o
+  // guard deixaria qualquer autenticado abrir a URL direto, mesmo sem o menu liberado pelo diretor.
+  { prefixo: "/central-solicitacoes", codigo: "central-solicitacoes" },
   { prefixo: "/liberacao", codigo: "liberacao" },
   { prefixo: "/nova", codigo: "nova" },
   { prefixo: "/esteira", codigo: "esteira" },

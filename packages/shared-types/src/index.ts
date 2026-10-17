@@ -6273,3 +6273,261 @@ export interface AsVagaExclusaoPrevia {
    */
   voltaPelaVarredura: boolean;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Central de Solicitações (OST: nova funcionalidade + bug, com gestão de OS)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Vocabulário compartilhado pela tela do usuário (abrir e acompanhar), pela gestão
+// (SUPER_ADMIN) e pela notificação na plataforma. O coordenador é o dono deste bloco
+// (§A.39); backend e frontend consomem daqui, nunca redefinem.
+
+/** Os dois tipos de solicitação. */
+export const SOLICITACAO_TIPO = ["FUNCIONALIDADE", "BUG"] as const;
+export type SolicitacaoTipo = (typeof SOLICITACAO_TIPO)[number];
+
+/** Rótulos de exibição do tipo (§A.24 title case). */
+export const SOLICITACAO_TIPO_LABEL: Record<SolicitacaoTipo, string> = {
+  FUNCIONALIDADE: "Nova Funcionalidade",
+  BUG: "Bug",
+};
+
+/**
+ * Ciclo de status da OS (decisão do diretor):
+ * NOVO → EM_DUVIDA → APROVADO / REPROVADO → EM_ANDAMENTO → CONCLUIDO.
+ * (O glifo acima é só comentário de código; nenhum texto de UI usa travessão, §A.11.)
+ */
+export const SOLICITACAO_STATUS = [
+  "NOVO",
+  "EM_DUVIDA",
+  "APROVADO",
+  "REPROVADO",
+  "EM_ANDAMENTO",
+  "CONCLUIDO",
+] as const;
+export type SolicitacaoStatus = (typeof SOLICITACAO_STATUS)[number];
+
+/** Rótulos de exibição do status (§A.24 title case). */
+export const SOLICITACAO_STATUS_LABEL: Record<SolicitacaoStatus, string> = {
+  NOVO: "Novo",
+  EM_DUVIDA: "Em Dúvida",
+  APROVADO: "Aprovado",
+  REPROVADO: "Reprovado",
+  EM_ANDAMENTO: "Em Andamento",
+  CONCLUIDO: "Concluído",
+};
+
+/** Status terminais: a OS saiu da fila de resolução, o tempo parado congela. */
+export const SOLICITACAO_STATUS_TERMINAIS: readonly SolicitacaoStatus[] = [
+  "REPROVADO",
+  "CONCLUIDO",
+];
+
+/** Mínimo de caracteres da descrição. Abaixo disso o salvar fica bloqueado. */
+export const SOLICITACAO_DESCRICAO_MIN = 50;
+
+/**
+ * Uma tela do sistema e as seções dela, fonte dos DOIS seletores do fluxo de abrir
+ * solicitação (menu → submenu). O diretor escolheu "tela do sistema + catálogo de
+ * seções": a plataforma não tem modelo de submenu, então o segundo nível vive aqui,
+ * num catálogo que o diretor revisa. É dado estático de apresentação, não permissão
+ * (§A.23 não se aplica: isto não concede nada, só rotula de onde veio a solicitação).
+ */
+export interface SolicitacaoMenuCatalogo {
+  /** Slug estável da tela (não precisa casar com o código de menu do RBAC). */
+  codigo: string;
+  /** Nome da tela, title case (§A.24). */
+  rotulo: string;
+  /** Seções daquela tela, title case (§A.24). */
+  submenus: string[];
+}
+
+/**
+ * Catálogo de telas e seções do sistema. Montado a partir da navegação real
+ * (`lib/navegacao.ts` + os cards do Menu Gerencial). Revisável pelo diretor.
+ */
+export const SOLICITACAO_MENUS_CATALOGO: SolicitacaoMenuCatalogo[] = [
+  { codigo: "inicio", rotulo: "Início", submenus: ["Tela Inicial"] },
+  {
+    codigo: "controle-gerencial",
+    rotulo: "Controle Gerencial",
+    submenus: ["Indicadores Da Operação", "KPIs Consolidados", "Vagas Por Cargo"],
+  },
+  { codigo: "sala-de-espera", rotulo: "Sala De Espera", submenus: ["Fila"] },
+  {
+    codigo: "liberacao-admissional",
+    rotulo: "Liberação Admissional",
+    submenus: ["Fila De Liberação"],
+  },
+  {
+    codigo: "gerenciador-do-portal",
+    rotulo: "Gerenciador Do Portal",
+    submenus: ["Links Do Portal", "Pedidos De Ajuda"],
+  },
+  {
+    codigo: "nova-admissao",
+    rotulo: "Nova Admissão",
+    submenus: ["Cliente", "Cargo E Vaga", "Candidato"],
+  },
+  {
+    codigo: "esteira-admissional",
+    rotulo: "Esteira Admissional",
+    submenus: ["Auditoria", "Exame", "Cadastro", "Integração", "iFractal"],
+  },
+  {
+    codigo: "nao-conformidades",
+    rotulo: "Não Conformidades",
+    submenus: ["Lista", "Liberação"],
+  },
+  {
+    codigo: "gerenciador",
+    rotulo: "Gerenciador",
+    submenus: ["Tabela De Admissões", "Pendências Obrigatórias"],
+  },
+  {
+    codigo: "gerador-de-kit",
+    rotulo: "Gerador De Kit",
+    submenus: ["Geração", "Histórico"],
+  },
+  {
+    codigo: "ass-click",
+    rotulo: "Ass. Click",
+    submenus: ["Gestão Das Assinaturas"],
+  },
+  {
+    codigo: "beneficios",
+    rotulo: "Benefícios",
+    submenus: ["Fila", "Pacote Do Cliente"],
+  },
+  {
+    codigo: "liberar-vaga",
+    rotulo: "Liberar Vaga",
+    submenus: ["Fila De Revisão"],
+  },
+  {
+    codigo: "central-de-vagas",
+    rotulo: "Central De Vagas",
+    submenus: [
+      "Gestão De Candidatos",
+      "Gestão Da Vaga",
+      "Importação",
+      "Faróis E Filtros",
+    ],
+  },
+  {
+    codigo: "agenda-de-entrevistas",
+    rotulo: "Agenda De Entrevistas",
+    submenus: ["Livro Da Agenda", "Agendamento"],
+  },
+  {
+    codigo: "central-de-candidatos",
+    rotulo: "Central De Candidatos",
+    submenus: ["Lista De Candidatos", "Importação", "Central Do Candidato"],
+  },
+  {
+    codigo: "divergencias-da-ingestao",
+    rotulo: "Divergências Da Ingestão",
+    submenus: ["Lista"],
+  },
+  {
+    codigo: "menu-gerencial",
+    rotulo: "Menu Gerencial",
+    submenus: [
+      "Alto Volume",
+      "Clientes",
+      "Cargos",
+      "Escalas",
+      "Clínicas",
+      "Status Da Sala De Espera",
+      "Integração Por Cliente",
+      "Obrigatoriedade Por Cliente",
+      "Benefícios",
+      "Motivos De Declínio",
+      "Etapas Do Funil",
+      "Linhas De Serviço",
+      "Segmentos",
+      "Comerciais",
+      "Motivos De Cancelamento De Vaga",
+      "Status Da Vaga",
+      "iFractal",
+      "Tarifas De Transporte",
+      "Régua Documental",
+      "Regras Do Kit",
+      "Regras De Auditoria",
+      "Dicas Por Documento",
+      "Pastas Do Drive",
+      "Assinante Da Empresa",
+      "Diagnóstico Do Sistema",
+      "Usuários",
+      "Área Por Menu",
+      "Central De Ajuda",
+    ],
+  },
+];
+
+/** Uma mensagem da conversa (thread) da solicitação. */
+export interface SolicitacaoMensagemApi {
+  id: string;
+  corpo: string;
+  /** Nome de quem escreveu (usuário interno; não é PII de candidato). */
+  autorNome: string;
+  /** True quando foi a gestão (SUPER_ADMIN) que escreveu. */
+  autorEhGestao: boolean;
+  criadoEm: string;
+}
+
+/** Linha da lista, tanto na gestão quanto em "Minhas Solicitações". */
+export interface SolicitacaoResumoApi {
+  id: string;
+  tipo: SolicitacaoTipo;
+  menuCodigo: string;
+  menuRotulo: string;
+  submenu: string;
+  status: SolicitacaoStatus;
+  /** Descrição da solicitação (a gestão mostra truncada na coluna, inteira no modal). */
+  descricao: string;
+  /** Nome do solicitante (usuário interno). */
+  solicitanteNome: string;
+  criadoEm: string;
+  atualizadoEm: string;
+  /**
+   * Dias em aberto aguardando resolução. Conta de `criadoEm` até agora enquanto o
+   * status não é terminal; zero quando CONCLUIDO/REPROVADO.
+   */
+  diasParado: number;
+}
+
+/** A solicitação inteira, com imagem e a conversa. */
+export interface SolicitacaoDetalheApi extends SolicitacaoResumoApi {
+  descricao: string;
+  /** URL do print (inline via proxy do backend). Null se ainda não arquivou. */
+  imagemUrl: string | null;
+  mensagens: SolicitacaoMensagemApi[];
+}
+
+/**
+ * Ações da gestão sobre uma solicitação. Cada uma gera notificação ao solicitante.
+ * ENVIAR_DUVIDA carrega a pergunta no corpo; APROVAR/REPROVAR aceitam nota opcional.
+ */
+export const SOLICITACAO_ACAO_GESTAO = [
+  "APROVAR",
+  "REPROVAR",
+  "ENVIAR_DUVIDA",
+  "EM_ANDAMENTO",
+  "CONCLUIR",
+] as const;
+export type SolicitacaoAcaoGestao = (typeof SOLICITACAO_ACAO_GESTAO)[number];
+
+/**
+ * Uma notificação na plataforma. Pinga toda vez que o usuário entra e CONTINUA
+ * aparecendo até ele clicar "Estou Ciente" (a baixa é persistida no servidor, não é
+ * supressão local). O backend só devolve as pendentes (sem ciência).
+ */
+export interface NotificacaoApi {
+  id: string;
+  titulo: string;
+  corpo: string;
+  /** Deep link para a solicitação (ex.: /central-solicitacoes). Pode ser null. */
+  rota: string | null;
+  criadoEm: string;
+}

@@ -38,6 +38,7 @@ import { HealthService } from "./health/health.service";
 import { UsersModule } from "./users/users.module";
 import { VtModule } from "./vt/vt.module";
 import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
+import { CentralSolicitacoesModule } from "./central-solicitacoes/central-solicitacoes.module";
 
 @Module({
   imports: [
@@ -76,6 +77,8 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     // Portal→GI (peça 2 + gatilho da peça 3, INERTE). Sobe sem GI configurado; o expurgo dos dados
     // do GI roda sempre (minimização, §A.6). Ver `GiModule`.
     GiModule,
+    // Central de Solicitações: pedidos de funcionalidade/bug, thread, gestão do ciclo e notificações.
+    CentralSolicitacoesModule,
   ],
   controllers: [HealthController],
   providers: [

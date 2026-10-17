@@ -1446,6 +1446,50 @@ export const MENUS: MenuDef[] = [
       "DeParaClienteController.alternarAtivo",
     ],
   },
+  {
+    /**
+     * CENTRAL DE SOLICITAÇÕES (OST Central de Solicitações): qualquer usuário abre um pedido de
+     * nova funcionalidade ou de correção de bug. Menu de OPERAÇÃO, visível às duas áreas (ADM e AS),
+     * porque abrir solicitação é trabalho de todo mundo que usa o sistema.
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. O convergedor de boot registra o menu e para por aí; quem
+     * enxerga é decisão do diretor, na tela de liberação de menu por usuário.
+     *
+     * As notificações (`NotificacoesController`) NÃO são reivindicadas por menu nenhum, de propósito:
+     * elas valem para qualquer usuário autenticado (o sininho pinga para todos), e o `MenuGuard` deixa
+     * ABERTA toda operação que nenhum menu reivindica (regra 4 do guard).
+     *
+     * GRUPO `ADMIN`, E ISSO É A TRAVA DA §A.23, não arrumação de gaveta: `MENUS_PADRAO_COMUM` é
+     * DERIVADO de `grupo === "OPERACAO"` com nascimento em ADM, então um menu OPERACAO+ADM se
+     * CONCEDERIA sozinho a todo COMUM novo e em qualquer backfill, sem decisão do diretor. Em `ADMIN`
+     * ele fica fora do padrão e nasce só para o SUPER_ADMIN, como todo menu novo. A tela de usuário é
+     * para qualquer um, mas QUEM libera é o diretor; a barra lateral (lado do front) o mostra no
+     * grupo de operação por conta própria, independente deste `grupo`, que só rege a concessão.
+     */
+    codigo: "central-solicitacoes",
+    rotulo: "Central De Solicitações",
+    href: "/central-solicitacoes",
+    grupo: "ADMIN",
+    ordem: 57,
+    areas: ["ADM", "AS"],
+    operacoes: ["SolicitacoesController.*"],
+  },
+  {
+    /**
+     * GESTÃO DE SOLICITAÇÕES (OST Central de Solicitações): a visão do SUPER_ADMIN para aprovar,
+     * reprovar, enviar dúvida e mover o status das solicitações de todos. Grupo ADMIN.
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e ENTRA em `MENUS_SOMENTE_SUPER_ADMIN`: a controller é
+     * `@Roles("SUPER_ADMIN")`, então mostrar a porta para liberar a um COMUM e trancá-la no guard
+     * seria mentir sobre a permissão. Enquanto é rota só-super-admin, o menu não é concedível.
+     */
+    codigo: "solicitacoes-gestao",
+    rotulo: "Gestão De Solicitações",
+    href: "/admin/central-solicitacoes",
+    grupo: "ADMIN",
+    ordem: 58,
+    operacoes: ["SolicitacoesGestaoController.*"],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -1830,6 +1874,13 @@ export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
    */
   "usuarios",
   "menu-areas",
+  /*
+   * GESTÃO DE SOLICITAÇÕES (OST Central de Solicitações): a controller é `@Roles("SUPER_ADMIN")`, e
+   * nenhum menu reivindica operação de não-super-admin aqui. Enquanto a rota é só-super-admin, o menu
+   * entra nesta lista para nunca ser concedido a um COMUM/MASTER pela tela de permissões: mostrar a
+   * porta e trancá-la no guard é pior do que não mostrar (mesmo fundamento de `usuarios`/`menu-areas`).
+   */
+  "solicitacoes-gestao",
   /*
    * OS SETE CATÁLOGOS DE A&S SAÍRAM DAQUI, e saíram porque esta lista é aplicada ao RESULTADO por
    * `filtrarMenusPorPapel`: ela REMOVE o menu de quem não é SUPER_ADMIN, ou seja, torna o menu
