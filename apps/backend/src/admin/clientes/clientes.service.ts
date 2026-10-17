@@ -462,6 +462,23 @@ export class ClientesService {
   }
 
   /**
+   * Contratos (tipo_servico) que cada cliente JÁ tem, por `cod_cliente`. É o que deixa a régua da
+   * importação distinguir "cliente já tem ESTE contrato" (recusa) de "contrato de outro tipo"
+   * (soma), igual ao `create` do item "mesmo código, 2 contratos". §A.6: só código e tipo, sem CNPJ.
+   */
+  private async contratosExistentes(): Promise<Map<string, Set<string>>> {
+    const linhas = await this.db
+      .select({ cod: clienteVinculos.codCliente, tipo: clienteVinculos.tipoServico })
+      .from(clienteVinculos);
+    const mapa = new Map<string, Set<string>>();
+    for (const l of linhas) {
+      if (!mapa.has(l.cod)) mapa.set(l.cod, new Set());
+      mapa.get(l.cod)!.add(l.tipo);
+    }
+    return mapa;
+  }
+
+  /**
    * PRÉVIA: lê a planilha, casa as colunas e diz o que vai acontecer, SEM GRAVAR NADA.
    *
    * DUAS ETAPAS, e a primeira não escreve, pelo mesmo motivo das lojas e das matrículas: importação
@@ -488,8 +505,13 @@ export class ClientesService {
     }
 
     const existentes = await this.codigosExistentes();
-    const resultado = avaliarImportacao(grade, mapa, existentes, (i) =>
-      numeroDaLinhaNoArquivo(grade, i),
+    const contratos = await this.contratosExistentes();
+    const resultado = avaliarImportacao(
+      grade,
+      mapa,
+      existentes,
+      (i) => numeroDaLinhaNoArquivo(grade, i),
+      contratos,
     );
 
     return {
@@ -513,50 +535,66 @@ export class ClientesService {
    * §A.6: nada do conteúdo (CNPJ, razão social) é logado.
    */
   async confirmarImportacao(linhas: LinhaImportacaoClienteDto[]) {
-    // Reconstrói a grade a partir das linhas recebidas, com um cabeçalho fixo e conhecido, e deixa a
-    // MESMA régua da prévia decidir. O número da linha do arquivo vem do que a tela guardou.
+    // Reconstrói a grade a partir das linhas recebidas, com um cabeçalho fixo e conhecido (incluindo
+    // contrato e filial), e deixa a MESMA régua da prévia decidir, RE-RESOLVENDO o contrato no
+    // servidor. O número da linha do arquivo vem do que a tela guardou.
     const grade: GradeParaImportacao = {
-      cabecalho: ["codigo", "cnpj", "razao social", "nome operacao"],
+      cabecalho: ["codigo", "cnpj", "razao social", "nome operacao", "contrato", "filial"],
       linhas: linhas.map((l) => [
         l.codCliente ?? "",
         l.cnpj ?? "",
         l.razaoSocial ?? "",
         l.nomeOperacao ?? "",
+        l.contrato ?? "",
+        l.filial ?? "",
       ]),
     };
-    const mapa = { colCodigo: 0, colCnpj: 1, colRazao: 2, colOperacao: 3 };
+    const mapa = { colCodigo: 0, colCnpj: 1, colRazao: 2, colOperacao: 3, colContrato: 4, colFilial: 5 };
 
     const existentes = await this.codigosExistentes();
+    const contratos = await this.contratosExistentes();
     const { aEntrar, recusadas } = avaliarImportacao(
       grade,
       mapa,
       existentes,
       (i) => linhas[i]?.linha ?? i + 2,
+      contratos,
     );
 
+    // A GRAVAÇÃO REUSA O `create` (item "mesmo código, 2 contratos"): cada linha ou cria o cliente
+    // (e aplica o vínculo se veio contrato) ou, quando o código já existe com contrato de outro
+    // tipo, SOMA o vínculo. Reusar o `create` mantém uma régua só de escrita; um `insert` cru aqui
+    // duplicaria a lógica e divergiria dela. TOLERANTE: falha de uma linha vira recusa, não derruba
+    // o lote (não é transacional de propósito). §A.6: o erro não é logado.
     let entraram = 0;
+    let contratosSomados = 0;
     const recusadasFinais: LinhaRecusada[] = [...recusadas];
     for (const l of aEntrar) {
       try {
-        await this.db.insert(clientes).values({
+        const r = await this.create({
           codCliente: l.codCliente,
-          cnpj: l.cnpj,
+          cnpj: l.cnpj ?? undefined,
           razaoSocial: l.razaoSocial,
-          nomeOperacao: l.nomeOperacao,
+          nomeOperacao: l.nomeOperacao ?? undefined,
+          vinculoOpcaoId: l.vinculoOpcaoId ?? undefined,
         });
-        entraram += 1;
-      } catch {
-        // Conflito de PK por corrida (ou qualquer falha de gravação daquela linha): recusa aquela
-        // linha e segue, sem derrubar o lote. §A.6: o erro não é logado (poderia carregar o valor).
+        if (r.contratoAdicionado) contratosSomados += 1;
+        else entraram += 1;
+      } catch (e) {
         recusadasFinais.push({
           linha: l.linha,
           codCliente: l.codCliente,
-          motivo: "Código já cadastrado",
+          // Conflito/validação carregam a mensagem exata do `create` (código+rótulo, sem CNPJ, §A.6).
+          // Qualquer outra falha (ex.: 500 de FK) vira motivo neutro, nunca o enganoso "já cadastrado".
+          motivo:
+            e instanceof ConflictException || e instanceof BadRequestException
+              ? e.message
+              : "Linha recusada",
         });
       }
     }
 
-    return { relatorio: { entraram, recusadas: recusadasFinais } };
+    return { relatorio: { entraram, contratosSomados, recusadas: recusadasFinais } };
   }
 
   /**
@@ -566,7 +604,7 @@ export class ClientesService {
   async modeloImportacao(
     formato: "xlsx" | "csv",
   ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
-    const cabecalho = ["Código do Cliente", "CNPJ", "Razão Social", "Nome da Operação"];
+    const cabecalho = ["Código do Cliente", "CNPJ", "Razão Social", "Nome da Operação", "Contrato", "Filial"];
 
     if (formato === "csv") {
       // BOM utf-8 para o Excel abrir com acento certo; separador ponto e vírgula, padrão pt-BR.

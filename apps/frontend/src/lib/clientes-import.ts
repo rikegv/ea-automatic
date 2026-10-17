@@ -14,13 +14,19 @@
  */
 import { apiDownload, apiFetch, apiUpload } from "@/lib/api";
 
-/** Uma linha que será cadastrada (o backend validou que o código é novo). */
+/** Uma linha que será cadastrada (o backend validou o código e, quando há, o contrato). */
 export interface LinhaAEntrar {
   linha: number;
   codCliente: string;
   cnpj: string | null;
   razaoSocial: string;
   nomeOperacao: string | null;
+  // Contrato (vínculo) resolvido da planilha. `contrato`/`filial` são o texto cru que volta ao
+  // confirmar (o servidor re-resolve); `contratoRotulo` é só para a tabela mostrar o que entendeu.
+  contrato: string | null;
+  filial: string | null;
+  vinculoOpcaoId: string | null;
+  contratoRotulo: string | null;
 }
 
 /** Uma linha recusada, com o motivo legível por linha do arquivo. */
@@ -42,9 +48,9 @@ export interface PreviaImportacaoClientes {
   abasDisponiveis?: string[];
 }
 
-/** O relatório final, depois de confirmar. */
+/** O relatório final, depois de confirmar. `contratosSomados` = clientes que já existiam e ganharam um contrato novo. */
 export interface RelatorioImportacaoClientes {
-  relatorio: { entraram: number; recusadas: LinhaRecusada[] };
+  relatorio: { entraram: number; contratosSomados: number; recusadas: LinhaRecusada[] };
 }
 
 /** O corpo que o confirmar espera por linha. */
@@ -53,6 +59,8 @@ export interface LinhaConfirmar {
   cnpj?: string | null;
   razaoSocial: string;
   nomeOperacao?: string | null;
+  contrato?: string | null;
+  filial?: string | null;
   linha?: number;
 }
 
@@ -73,6 +81,9 @@ export function linhasParaConfirmar(aEntrar: LinhaAEntrar[]): LinhaConfirmar[] {
     cnpj: l.cnpj,
     razaoSocial: l.razaoSocial,
     nomeOperacao: l.nomeOperacao,
+    // Volta o contrato/filial CRUS: o servidor re-resolve e re-valida (não confia no id do cliente).
+    contrato: l.contrato,
+    filial: l.filial,
     linha: l.linha,
   }));
 }

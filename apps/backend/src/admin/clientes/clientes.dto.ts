@@ -142,6 +142,21 @@ export class LinhaImportacaoClienteDto {
   @MaxLength(200)
   nomeOperacao?: string;
 
+  /**
+   * Contrato e filial CRUS da planilha (texto que o time escreveu). O confirmar reconstrói a grade
+   * com estas duas colunas e RE-RESOLVE o vínculo no servidor (não confia no id que o cliente
+   * mandaria). Opcionais: linha sem contrato entra como antes.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  contrato?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  filial?: string;
+
   /** Número da linha no arquivo. Só informativo, para a tela referenciar a planilha da pessoa. */
   @IsOptional()
   @IsInt()

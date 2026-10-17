@@ -18,6 +18,7 @@
  */
 
 import { cnpjValido } from "../../domain/cnpj";
+import { VINCULO_OPCOES } from "./vinculo-opcoes";
 
 /** Só o que esta importação precisa da grade do leitor único. */
 export interface GradeParaImportacao {
@@ -25,21 +26,41 @@ export interface GradeParaImportacao {
   linhas: string[][];
 }
 
-/** O de/para de colunas resolvido pelo cabeçalho. `null` = coluna não encontrada. */
+/**
+ * O de/para de colunas resolvido pelo cabeçalho. `null` = coluna não encontrada.
+ *
+ * `colContrato`/`colFilial` são OPCIONAIS no tipo (e não só no arquivo): planilhas antigas e os
+ * testes que montam o mapa à mão continuam válidos sem as duas colunas, e `avaliarImportacao` lê
+ * `?? null`. A coluna de contrato traz o tipo (Temporário/Terceiro/Estágio/Interno/FOPAG) e a de
+ * filial o número (só Temporário/Terceiro variam o CNPJ por filial).
+ */
 export interface MapaColunasCliente {
   colCodigo: number | null;
   colCnpj: number | null;
   colRazao: number | null;
   colOperacao: number | null;
+  colContrato?: number | null;
+  colFilial?: number | null;
 }
 
-/** Uma linha que vai entrar no banco. `cnpj` e `nomeOperacao` são opcionais (coluna opcional). */
+/**
+ * Uma linha que vai entrar no banco. `cnpj` e `nomeOperacao` são opcionais (coluna opcional).
+ *
+ * O CONTRATO resolvido vive em `vinculoOpcaoId` (id do catálogo `VINCULO_OPCOES`, `null` = sem
+ * contrato na linha). `contratoRotulo` é só para a tela mostrar o que foi entendido. `contrato` e
+ * `filial` são o texto CRU da planilha, devolvidos para o confirmar reconstruir a grade e
+ * re-resolver no servidor (não se confia no id resolvido do cliente).
+ */
 export interface LinhaCliente {
   linha: number;
   codCliente: string;
   cnpj: string | null;
   razaoSocial: string;
   nomeOperacao: string | null;
+  contrato: string | null;
+  filial: string | null;
+  vinculoOpcaoId: string | null;
+  contratoRotulo: string | null;
 }
 
 /** Uma linha que não entra, com o motivo pronto para a tela. */
@@ -90,7 +111,82 @@ export function mapearColunas(cabecalho: string[]): MapaColunasCliente {
     colCnpj: achar(["cnpj"]),
     colRazao: achar(["razao social", "razao", "razaosocial"]),
     colOperacao: achar(["nome operacao", "nome da operacao", "operacao", "nome de operacao"]),
+    colContrato: achar(["contrato", "tipo de contrato", "tipo contrato", "vinculo", "tipo de servico"]),
+    colFilial: achar(["filial", "filial do contrato", "cnpj filial"]),
   };
+}
+
+/** tipo_servico do vínculo -> rótulo curto para a tela (§A.24 title case, §A.11 sem travessão). */
+const ROTULO_TIPO: Record<string, string> = {
+  TEMPORARIO: "Temporário",
+  TERCEIRO: "Terceirizado",
+  ESTAGIO: "Estágio",
+  INTERNO: "Interno",
+  FOPAG: "Fopag",
+};
+
+/**
+ * ─ RESOLVE O CONTRATO DA PLANILHA (tipo + filial) NUMA OPÇÃO DO CATÁLOGO ──────────────────────────
+ *
+ * Régua PURA, sem banco: o texto que o time escreve vira uma opção de `VINCULO_OPCOES` (o mesmo
+ * catálogo do seletor da tela), que carrega empresa Soulan, filial e, por consequência, o CNPJ.
+ *
+ *  - contrato VAZIO: linha sem contrato, válida (o cliente entra sem vínculo). `{ opcaoId: null }`.
+ *  - Temporário/Terceiro: o CNPJ muda por FILIAL, então a filial é obrigatória e precisa existir no
+ *    catálogo (ex.: Terceiro filial 4 existe, filial 9 não).
+ *  - Estágio e FOPAG: CNPJ fixo, filial ignorada.
+ *  - Interno: ADM por padrão; NEAT quando o texto do contrato disser "neat" (decisão do diretor).
+ *  - contrato desconhecido: erro legível, a linha é recusada (nunca lança).
+ */
+export function resolverVinculoDaPlanilha(
+  contrato: string,
+  filial: string,
+): { opcaoId: string | null; rotulo: string | null; erro: string | null } {
+  const bruto = (contrato ?? "").trim();
+  if (bruto === "") return { opcaoId: null, rotulo: null, erro: null };
+  const n = bruto
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+  const fil = (filial ?? "").trim();
+
+  let tipo: string | null = null;
+  if (n.includes("tempor")) tipo = "TEMPORARIO";
+  else if (n.includes("terceir") || n === "terc") tipo = "TERCEIRO";
+  else if (n.includes("estag")) tipo = "ESTAGIO";
+  else if (n.includes("intern")) tipo = "INTERNO";
+  else if (n.includes("fopag")) tipo = "FOPAG";
+  if (tipo === null) return { opcaoId: null, rotulo: null, erro: "Contrato inválido" };
+
+  let opcaoId: string | null = null;
+  if (tipo === "TEMPORARIO" || tipo === "TERCEIRO") {
+    if (fil === "") return { opcaoId: null, rotulo: null, erro: `Informe a filial do contrato ${ROTULO_TIPO[tipo]}` };
+    opcaoId = `${tipo === "TEMPORARIO" ? "TEMP" : "TERC"}_F${fil}`;
+  } else if (tipo === "ESTAGIO") {
+    opcaoId = "ESTAGIO";
+  } else if (tipo === "INTERNO") {
+    opcaoId = n.includes("neat") ? "INTERNO_NEAT" : "INTERNO_ADM";
+  } else {
+    opcaoId = "FOPAG";
+  }
+
+  if (!VINCULO_OPCOES.some((o) => o.id === opcaoId)) {
+    return { opcaoId: null, rotulo: null, erro: `Filial inválida para o contrato ${ROTULO_TIPO[tipo]}` };
+  }
+
+  // Rótulo curto e limpo para a tela, derivado de tipo + filial (não do label do catálogo, que leva
+  // CNPJ e travessão). Interno distingue a entidade para o time conferir.
+  let rotulo = ROTULO_TIPO[tipo];
+  if (tipo === "TEMPORARIO" || tipo === "TERCEIRO") rotulo = `${ROTULO_TIPO[tipo]}, filial ${fil}`;
+  else if (tipo === "INTERNO") rotulo = opcaoId === "INTERNO_NEAT" ? "Interno (NEAT)" : "Interno (ADM)";
+  return { opcaoId, rotulo, erro: null };
+}
+
+/** tipo_servico de uma opção do catálogo (para a régua de duplicata por contrato). */
+function tipoServicoDaOpcao(opcaoId: string | null): string | null {
+  if (opcaoId === null) return null;
+  return VINCULO_OPCOES.find((o) => o.id === opcaoId)?.tipoServico ?? null;
 }
 
 /** Pega o valor de uma coluna (por índice), já aparado. Coluna null ou célula ausente vira "". */
@@ -113,10 +209,19 @@ export function avaliarImportacao(
   codigosExistentes: Set<string>,
   /** O número da linha no arquivo para o índice `i` (default: i + 2, cabeçalho na linha 1). */
   numeroDaLinha: (i: number) => number = (i) => i + 2,
+  /**
+   * Contratos (tipo_servico) que cada cliente JÁ tem no banco. Default vazio: sem o mapa, nenhum
+   * cliente "já tem" contrato, e a régua cai no comportamento antigo (código existente = recusa).
+   * Com o mapa, código existente + contrato de OUTRO tipo deixa de ser recusa e passa a SOMAR o
+   * contrato (coerente com o `create` do item "mesmo código, 2 contratos").
+   */
+  contratosExistentes: Map<string, Set<string>> = new Map(),
 ): ResultadoImportacao {
   const aEntrar: LinhaCliente[] = [];
   const recusadas: LinhaRecusada[] = [];
   const jaCadastrados: string[] = [];
+  // Chave de duplicata na planilha = código + tipo de contrato. O mesmo código com DOIS contratos
+  // diferentes é legítimo (soma os dois); o mesmo código com o MESMO contrato é repetição.
   const vistosNaPlanilha = new Set<string>();
 
   for (let i = 0; i < grade.linhas.length; i += 1) {
@@ -127,6 +232,8 @@ export function avaliarImportacao(
     const razaoSocial = celula(linhaArquivo, mapa.colRazao);
     const cnpj = celula(linhaArquivo, mapa.colCnpj);
     const nomeOperacao = celula(linhaArquivo, mapa.colOperacao);
+    const contratoBruto = celula(linhaArquivo, mapa.colContrato ?? null);
+    const filialBruta = celula(linhaArquivo, mapa.colFilial ?? null);
 
     if (codCliente === "") {
       recusadas.push({ linha: numero, codCliente: null, motivo: "Código vazio" });
@@ -144,24 +251,53 @@ export function avaliarImportacao(
       recusadas.push({ linha: numero, codCliente, motivo: "CNPJ inválido" });
       continue;
     }
-    if (vistosNaPlanilha.has(codCliente)) {
-      recusadas.push({ linha: numero, codCliente, motivo: "Código repetido na planilha" });
+
+    // Contrato (opcional): resolve tipo + filial numa opção do catálogo. Texto inválido recusa a
+    // linha, sem lançar.
+    const vinc = resolverVinculoDaPlanilha(contratoBruto, filialBruta);
+    if (vinc.erro) {
+      recusadas.push({ linha: numero, codCliente, motivo: vinc.erro });
       continue;
     }
-    if (codigosExistentes.has(codCliente)) {
-      vistosNaPlanilha.add(codCliente);
-      jaCadastrados.push(codCliente);
-      recusadas.push({ linha: numero, codCliente, motivo: "Código já cadastrado" });
+    const tipo = tipoServicoDaOpcao(vinc.opcaoId);
+    const chaveDup = `${codCliente}|${tipo ?? ""}`;
+
+    if (vistosNaPlanilha.has(chaveDup)) {
+      recusadas.push({
+        linha: numero,
+        codCliente,
+        motivo: tipo ? "Código e contrato repetidos na planilha" : "Código repetido na planilha",
+      });
       continue;
     }
 
-    vistosNaPlanilha.add(codCliente);
+    if (codigosExistentes.has(codCliente)) {
+      // Código já existe. Sem contrato, é duplicata pura: recusa como antes. Com contrato, só recusa
+      // se o cliente JÁ tiver aquele tipo; se for de outro tipo, ENTRA para somar o contrato.
+      if (tipo === null) {
+        vistosNaPlanilha.add(chaveDup);
+        jaCadastrados.push(codCliente);
+        recusadas.push({ linha: numero, codCliente, motivo: "Código já cadastrado" });
+        continue;
+      }
+      if ((contratosExistentes.get(codCliente) ?? new Set()).has(tipo)) {
+        vistosNaPlanilha.add(chaveDup);
+        recusadas.push({ linha: numero, codCliente, motivo: `Cliente já tem o contrato ${vinc.rotulo}` });
+        continue;
+      }
+    }
+
+    vistosNaPlanilha.add(chaveDup);
     aEntrar.push({
       linha: numero,
       codCliente,
       cnpj: cnpj === "" ? null : cnpj,
       razaoSocial,
       nomeOperacao: nomeOperacao === "" ? null : nomeOperacao,
+      contrato: contratoBruto === "" ? null : contratoBruto,
+      filial: filialBruta === "" ? null : filialBruta,
+      vinculoOpcaoId: vinc.opcaoId,
+      contratoRotulo: vinc.rotulo,
     });
   }
 

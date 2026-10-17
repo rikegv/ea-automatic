@@ -35,12 +35,12 @@ function grade(linhas: string[][]): GradeParaImportacao {
 describe("mapearColunas", () => {
   it("casa os quatro rótulos canônicos", () => {
     const mapa = mapearColunas(["Código do Cliente", "CNPJ", "Razão Social", "Nome da Operação"]);
-    expect(mapa).toEqual({ colCodigo: 0, colCnpj: 1, colRazao: 2, colOperacao: 3 });
+    expect(mapa).toEqual({ colCodigo: 0, colCnpj: 1, colRazao: 2, colOperacao: 3, colContrato: null, colFilial: null });
   });
 
   it("casa variações sem acento, em caixa diferente e com outra ordem", () => {
     const mapa = mapearColunas(["RAZAO", "cod cliente", "nome operacao", "cnpj"]);
-    expect(mapa).toEqual({ colCodigo: 1, colCnpj: 3, colRazao: 0, colOperacao: 2 });
+    expect(mapa).toEqual({ colCodigo: 1, colCnpj: 3, colRazao: 0, colOperacao: 2, colContrato: null, colFilial: null });
   });
 
   it("deixa null a coluna que não existe (opcionais ausentes)", () => {
@@ -77,6 +77,10 @@ describe("avaliarImportacao: régua por linha", () => {
       cnpj: CNPJ_VALIDO_1,
       razaoSocial: "Alfa Ltda",
       nomeOperacao: "Operação Alfa",
+      contrato: null,
+      filial: null,
+      vinculoOpcaoId: null,
+      contratoRotulo: null,
     });
     // CNPJ e operação vazios viram null, não "".
     expect(r.aEntrar[1].cnpj).toBeNull();

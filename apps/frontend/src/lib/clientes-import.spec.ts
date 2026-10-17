@@ -37,12 +37,12 @@ describe("montarFormDataPrevia", () => {
 describe("linhasParaConfirmar", () => {
   it("manda só os campos do contrato, preservando a linha do arquivo", () => {
     const aEntrar: LinhaAEntrar[] = [
-      { linha: 2, codCliente: "A1", cnpj: "11.111.111/0001-11", razaoSocial: "Alfa", nomeOperacao: "Alfa Op" },
-      { linha: 3, codCliente: "B2", cnpj: null, razaoSocial: "Beta", nomeOperacao: null },
+      { linha: 2, codCliente: "A1", cnpj: "11.111.111/0001-11", razaoSocial: "Alfa", nomeOperacao: "Alfa Op", contrato: "Terceiro", filial: "4", vinculoOpcaoId: "TERC_F4", contratoRotulo: "Terceirizado, filial 4" },
+      { linha: 3, codCliente: "B2", cnpj: null, razaoSocial: "Beta", nomeOperacao: null, contrato: null, filial: null, vinculoOpcaoId: null, contratoRotulo: null },
     ];
     expect(linhasParaConfirmar(aEntrar)).toEqual([
-      { codCliente: "A1", cnpj: "11.111.111/0001-11", razaoSocial: "Alfa", nomeOperacao: "Alfa Op", linha: 2 },
-      { codCliente: "B2", cnpj: null, razaoSocial: "Beta", nomeOperacao: null, linha: 3 },
+      { codCliente: "A1", cnpj: "11.111.111/0001-11", razaoSocial: "Alfa", nomeOperacao: "Alfa Op", contrato: "Terceiro", filial: "4", linha: 2 },
+      { codCliente: "B2", cnpj: null, razaoSocial: "Beta", nomeOperacao: null, contrato: null, filial: null, linha: 3 },
     ]);
   });
 

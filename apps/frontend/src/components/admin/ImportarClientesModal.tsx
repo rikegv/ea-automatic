@@ -124,8 +124,11 @@ export function ImportarClientesModal({
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
         <span className="ds-label">Modelo Da Planilha</span>
         <p className="mt-1 text-[12px] text-dim">
-          O modelo tem Código do Cliente, CNPJ, Razão Social e Nome da Operação. Copie, preencha e
-          suba. Aceita .xlsx e .csv.
+          O modelo tem Código do Cliente, CNPJ, Razão Social, Nome da Operação, Contrato e Filial.
+          Contrato aceita Temporário, Terceiro, Estágio, Interno ou FOPAG; a Filial (número) é usada
+          em Temporário e Terceiro, que mudam o CNPJ por filial. Deixe o Contrato vazio para não
+          definir vínculo. O mesmo código com um contrato de outro tipo soma o contrato ao cliente.
+          Copie, preencha e suba. Aceita .xlsx e .csv.
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => void baixar("xlsx")} className="px-3 py-1.5 text-[13px]">
@@ -211,11 +214,12 @@ export function ImportarClientesModal({
                       <th className="text-center">Razão Social</th>
                       <th className="w-40 text-center">CNPJ</th>
                       <th className="text-center">Nome Da Operação</th>
+                      <th className="w-40 text-center">Contrato</th>
                     </tr>
                   </thead>
                   <tbody>
                     {previa.aEntrar.map((l) => (
-                      <tr key={`${l.linha}-${l.codCliente}`}>
+                      <tr key={`${l.linha}-${l.codCliente}-${l.vinculoOpcaoId ?? ""}`}>
                         <td className="text-center font-mono text-dim">{l.linha}</td>
                         <td className="text-center font-mono">
                           <Icone tom="ok" />
@@ -227,6 +231,9 @@ export function ImportarClientesModal({
                         </td>
                         <td className="text-dim">
                           {l.nomeOperacao ?? <span className="text-faint">não informado</span>}
+                        </td>
+                        <td className="text-dim">
+                          {l.contratoRotulo ?? <span className="text-faint">não informado</span>}
                         </td>
                       </tr>
                     ))}
@@ -273,7 +280,11 @@ export function ImportarClientesModal({
         <div className="mt-4 grid gap-3">
           <p className="rounded-lg border border-[var(--ok)] bg-[rgba(120,190,60,0.10)] px-3 py-2 text-xs text-[var(--ok)]">
             {relatorio.entraram} cliente{relatorio.entraram === 1 ? "" : "s"} cadastrado
-            {relatorio.entraram === 1 ? "" : "s"}.
+            {relatorio.entraram === 1 ? "" : "s"}
+            {relatorio.contratosSomados > 0
+              ? ` e ${relatorio.contratosSomados} contrato${relatorio.contratosSomados === 1 ? "" : "s"} somado${relatorio.contratosSomados === 1 ? "" : "s"} a cliente${relatorio.contratosSomados === 1 ? "" : "s"} existente${relatorio.contratosSomados === 1 ? "" : "s"}`
+              : ""}
+            .
           </p>
           {relatorio.recusadas.length > 0 && (
             <div className="grid gap-1">
