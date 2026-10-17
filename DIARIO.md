@@ -23303,3 +23303,23 @@ pegou o caminho de reuso e publicou. Produção nunca ficou sem artefato (a troc
 **Deploy (§A.49):** push a origin/main sob flag READY (§A.7); `publicar-producao.sh` buildou de origin/main em worktree pristino; health 3011/3010. **Sem migration** (mudança de DTO/serviço/tela, zero schema).
 
 **EM CONSTRUÇÃO (sobe em seguida, mesma sessão):** ITEM 3 — coluna de CONTRATO na planilha de importação em massa (pedido do diretor nesta sessão), para o import também somar o contrato ao cliente.
+
+## 2026-10-17 (sessão remote-control) — Clicksign: reconciliação periódica dos terminais ("assinado no Click, parado na plataforma") (`53a1cde`) EM PRODUÇÃO
+
+**O que o time relatou:** envelopes que, consultados na Clicksign, estavam ASSINADOS, mas na nossa tela não constavam assinados. Pediu uma varredura dos envelopes abertos na plataforma conferindo o estado real no Click.
+
+**Validação da API (primeiro, antes de construir).** A integração está saudável: `CLICKSIGN_API_BASE_URL=app.clicksign.com/api/v3` (produção), token válido (módulo ativo), scheduler do tick ligado a cada 2 min, 0 falhas. Fiz a varredura ao vivo dos 401 envelopes rastreados, comparando `clicksign_status` nosso vs status real no Click. Matriz: AGUARDANDO(6)→running ✅; ASSINADO(375)→closed ✅; CANCELADO(20)→12 canceled + 3 running ✅, **5 closed (assinados!) ❌**. Os 5 CANCELADO-mas-closed, com PDF assinado disponível e sem arquivamento no Drive, eram o relato do time.
+
+**Causa raiz.** O tick só varre `AGUARDANDO_ASSINATURA`. Quando o time cancela um envelope `running`, a Clicksign NÃO cancela de verdade (cancelamento best-effort do §A.5); o EA marca CANCELADO e PARA de consultá-lo. Se os signatários assinam mesmo assim, o envelope FECHA no Click e some da nossa varredura: "assinado no Click, parado na tela".
+
+**Decisões do diretor:** (1) reconciliar os 4 CANCELADO-closed com farol ADMISSAO_CONCLUIDA (contratos válidos); (2) o 5º, Janderson, é DECLÍNIO (farol DECLINOU): NÃO reconciliar, o time cancela o envelope dele na plataforma; (3) criar uma reconciliação periódica permanente.
+
+**Construção (`53a1cde`).** Job novo `reconciliar-fechados` + `ClicksignReconciliacaoScheduler` (espelha `ReconciliacaoReguaScheduler`: kill-switch `CLICKSIGN_RECONCILIACAO=off`, 1ª passada 3min, cadência 30min, só enfileira). O miolo `ClicksignSyncService.reconciliarFechados` seleciona os terminais (CANCELADO/EXPIRADO, com envelope, NÃO pausados, farol NÃO em DECLINOU/RESCISAO), reconfere no Click e, no `closed`, arquiva pelo MESMO `arquivarAssinado` (guarda §A.33 + §A.6 inteiras) virando ASSINADO. Roda no MESMO worker (concorrência 1, sob o limiter de requisição), sem corrida com o tick nem estouro do teto do provedor.
+
+**Declínio NUNCA vira ASSINADO, DUAS camadas reais:** o alvo exclui DECLINOU/RESCISAO no SELECT **e** uma guarda por item pula esse farol no laço. (O `deriveFarolGlobal` preserva o farol manual, mas só protege `farol_global`, não o `clicksign_status`; a guarda por item é o que de fato blinda a regra, achado do tester.) `recomputeFarolGlobal` preserva ADMISSAO_CONCLUIDA (farol manual).
+
+**GATE:** typecheck + lint verdes; **seguranca APROVADO** (sem PII/URL/envelope-id em log §A.6; guarda §A.33 é o mesmo caminho; exclusão de declínio dupla; serialização no worker); **tester independente 154/154** (13 novos em `clicksign-reconciliacao.spec.ts`), achou o gap da 2ª camada que a guarda por item fechou. Suíte backend: 9989 passam, 3 reds ALHEIOS pré-existentes (`vagas.liberar-vaga-completa.spec.ts`, rename do `depara-cliente` de outra sessão, não toca clicksign).
+
+**Deploy (§A.49):** push a origin/main sob flag READY (§A.7); `publicar-producao.sh` de worktree pristino (1º tentativa abortou no lock de deploy concorrente, re-rodou e publicou); health 3011/3010 OK. **Sem migration** (só código: job/serviço/scheduler). Backend bootou 02:11:54 com "Reconciliação Clicksign agendada".
+
+**PROVA EM PRODUÇÃO (1ª passada 02:14:54):** log `Reconciliação Clicksign: 7 terminal(is) reconferido(s), 4 assinado(s) recuperado(s), 0 falha(s)`. Os 4 (Pamela, Aline, Tiago, Gilson) → ASSINADO + Drive, farol ADMISSAO_CONCLUIDA preservado. Janderson → INTOCADO (CANCELADO, sem Drive, DECLINOU). Distribuição: ASSINADO 375→379, CANCELADO 20→16, AGUARDANDO 6. Daqui para frente a reconciliação roda sozinha a cada 30 min.
