@@ -23377,3 +23377,27 @@ Sequência dos 3 destravamentos que o diretor respondeu sobre a frente Central d
 **§A.49:** commit `b146e92` (só `domain/menus.ts`, 13+/9-), rebase limpo sobre o origin/main (behind 2 de outras sessões), push para main, deploy do worktree pristino. Produção servindo `b146e92`; health backend 3011 200 (4s) / frontend 3010 200 (1s); backup dos artefatos em `*.bak-20261017-103939`.
 
 **ABERTO (com o diretor):** (1) os ajustes dele no catálogo tela/seção; (2) a prova on-screen dele em produção (abrir solicitação com print indo ao Drive agora de verdade, e ver o menu aparecendo para um usuário COMUM).
+
+## 2026-10-17 — Melhorias no Menu de Usuários: busca + filtros + modal criar/editar + espelhamento (`5832b5a`) EM PRODUÇÃO
+
+O diretor (remote-control) pediu cinco melhorias na tela `admin/usuarios` (SUPER_ADMIN): caixa de pesquisa, filtros avançados, espelhamento de usuário, modal bonito para criar/editar e botão "Criar Novo Usuário". AskUserQuestion fechou o escopo: (a) filtros pelas quatro colunas (Papel, Área, Papel De A&S, Status); (b) espelhamento a partir de um usuário EXISTENTE; (c) na criação E na edição.
+
+**Operação distribuída (§A.39).** O coordenador investigou o alcance, fixou o contrato (API + arquivos disjuntos) e despachou backend e frontend em PARALELO; depois `seguranca` + `tester` em paralelo. Arquivos: backend `users.controller.ts` + `users.dto.ts`; frontend `admin/usuarios/page.tsx` (reescrita) + novo `GestaoUsuarioModal.tsx`; teste `users-espelhamento.tester.spec.ts`. Sem migration, `shared-types` intocado.
+
+**O que mudou.** (1) Busca por nome/e-mail e filtros multiselect (Papel/Área/Papel De A&S/Status), client-side, pelo componente compartilhado (§A.28/§A.35), opções de enum fixo (não derivadas das linhas). (2) Modal único de criar/editar (`GestaoUsuarioModal`) no lugar do formulário no topo e da edição inline (§A.41: não fecha ao clicar fora, Cancelar/Salvar, sem "X"); botão "Criar Novo Usuário". (3) ESPELHAMENTO: copia os menus de um usuário existente para o alvo, na criação (campo opcional `espelharDeUsuarioId` no `CriarUsuarioDto`) e na edição (endpoint novo `POST admin/usuarios/:id/espelhar`).
+
+**O ponto de RBAC.** O espelhamento passa os CÓDIGOS da fonte mas o PAPEL e as ÁREAS do ALVO para `definirMenusDoUsuario`, então o recorte (bloqueados do COMUM, exclusivos de SUPER_ADMIN, teto por área viva) vale por construção: espelhar um SUPER_ADMIN sobre um COMUM entrega só os menus que o COMUM poderia ter, nunca a lista crua. Não é auto-concessão da fábrica (§A.23): é ferramenta que o próprio SUPER_ADMIN opera, cada uso é decisão explícita dele. A administração de usuários continua SUPER_ADMIN (`@Roles` na classe, herdado pelo endpoint novo).
+
+**Conserto achado pelo tester.** Na criação com espelhamento, a validação da fonte vinha DEPOIS do insert, então um id inexistente deixava um usuário meia-provisionado (áreas gravadas + zero menu) persistido num request que devolvia 400. Movido para ANTES de criar: tudo ou nada. Teste reforçado trava o conserto.
+
+**Auditoria (§A.38).** O tipo `seguranca`/`tester` não existe no runtime desta sessão, então rodei cada um por um agente independente carregando o respectivo `.claude/agents/*.md` (preserva a independência: os construtores foram outros agentes). `seguranca` APROVADO, 5 hipóteses de ataque refutadas com arquivo:linha (sem escalada; `@Roles` herdado; sem PII em erro/log; substituição só com fonte escolhida; sem `in` burlável). `tester` independente: 8 specs de orquestração do controller (mocks, sem Postgres), 8 verdes.
+
+**Prova visual (§A.13).** Preview isolado do frontend (`next dev` :3126) contra o backend de homolog (:3111) via proxy strip-origin (o Next repassa o `Origin` do browser e o OriginGuard do homolog barraria), logado como super-admin (a conta sintética de captura promovida a SUPER_ADMIN só para a foto e revertida a COMUM depois, §A.43). Fotografei a lista (barra de busca + filtros + botão), o modal de filtros, o de criar (com "Espelhar Telas De") e o de editar: layout limpo, nada esmagado (§A.20). O SUPER_ADMIN recebe alertas de ping (Diagnóstico, Liberação) alheios à frente; ocultei-os por CSS só na foto.
+
+**Gate.** typecheck + lint limpos (backend e frontend); suíte completa do backend 10110 passaram, com os MESMOS 3 reds alheios pré-existentes no origin/main (`vagas.liberar-vaga-completa`, `esteira` ORDEM_STATUS, `portal-recorte-e-janela`), nenhum tocado (§A.14).
+
+**§A.49.** commit `5832b5a` (5 arquivos, `git add` nominal), ff sobre origin/main, push para main, deploy do worktree pristino (removi um `ea-build` órfão em `b146e92` antes de re-rodar). Produção servindo `5832b5a`; health backend 3011 200 (4s) / frontend 3010 200 (1s); backup `*.bak-20261017-125732`.
+
+**Nota de higiene (§A.46).** No preparo da prova visual, a senha da conta SINTÉTICA de homolog (`manual.captura@homolog.local`) apareceu num comando; rotacionei a senha dessa conta e atualizei a nota em sincronia. Conta sintética de homolog, sem impacto de produção.
+
+**ABERTO (com o diretor):** prova on-screen dele em produção (criar um usuário espelhando outro; conferir busca, filtros e o modal na 3010).
