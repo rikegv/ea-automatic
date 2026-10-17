@@ -23283,3 +23283,23 @@ pegou o caminho de reuso e publicou. Produção nunca ficou sem artefato (a troc
 **RED ALHEIO (não meu, pré-existente):** `vagas.liberar-vaga-completa.spec.ts > SÓ NOVE ARQUIVOS` segue vermelho desde o refactor `e734b75` (07/10, rename `fila-de-cliente`→`depara-cliente`, lista do spec encolheu 9→8). Confirmado que precede meu commit. Aguarda decisão do diretor (despachar tester p/ reconciliar o nome stale).
 
 **ABERTO:** (1) validação on-screen do diretor em produção (import sem dup; busca por e-mail/";"; filtros de faixa); (2) GO do diretor para a limpeza do agudo (dry-run pronto); (3) decisão sobre o red alheio `liberar-vaga-completa`.
+
+---
+
+## 2026-10-17 (sessão remote-control) — Clientes: modal completo de edição/cadastro + "mesmo código, 2 contratos"
+
+**OST (2 pedidos do diretor):** (1) editar cliente abrindo um MODAL completo (todos os campos), no lugar do formulário inline que rolava a tela e nem abria o CRUD inteiro; (2) cadastrar o MESMO código com CONTRATO diferente deixar de bloquear. Worktree pristino off origin/main (`frente-clientes-modal-contrato`). EM PRODUÇÃO feat **`2aa1a13`**.
+
+**Decisões do diretor (AskUserQuestion):** modal = TODOS os campos; "mesmo código, 2 contratos" = somar o contrato ao cliente existente pelo eixo `cliente_vinculos`, NÃO duplicar `cod_cliente` (é PK de régua/admissões/vagas/benefícios/lojas/grupos; o domínio já descartou duplicar a chave em `domain/vinculo.ts`).
+
+**ITEM 1 (modal completo).** `ClienteModal.tsx` (novo) + `cliente-tipos.ts` (tipos `Cliente`/`VinculoOpcao` compartilhados página↔modal). O form inline saiu; "editar" e o botão novo "Cadastrar Cliente" abrem o modal (§A.41 fecha por Cancelar/Salvar, nunca ao clicar fora; §A.35 Select do DS; §A.24 títulos em title case). A edição traz o CRUD inteiro, inclusive os 6 campos de padrão que NÃO eram editáveis em tela nenhuma (empresa do grupo, região, descrição da região, benefícios/escala/endereço padrão): adicionados a `UpdateClienteDto` **E** `CreateClienteDto` (os dois, por causa do `forbidNonWhitelisted`). iFractal (tipo de marcação) e Pagamento do Benefício ficam só na EDIÇÃO (o cadastro não os persiste; mostrá-los no cadastro seria campo que o salvar ignora).
+
+**ITEM 2 ("mesmo código, 2 contratos").** `CreateClienteDto` ganhou `vinculoOpcaoId`. `create` reescrito, 3 saídas: código NOVO → cria e aplica o vínculo se escolhido; código EXISTE + contrato de OUTRO tipo → ADICIONA o vínculo (reusa `definirVinculo`, upsert por tipo), devolve `contratoAdicionado=true` e a tela mostra aviso verde; código EXISTE + MESMO tipo → 409 "O cliente X já tem o contrato <rótulo>" (§A.6: só código + rótulo, nunca CNPJ); código EXISTE sem contrato → 409 "cod_cliente já cadastrado" (duplicata pura segue bloqueada). Importação em massa segue recusando código repetido (planilha não tem coluna de contrato) — vira o ITEM 3.
+
+**GATE:** typecheck backend+frontend verde, lint verde, `next build` de produção verde, **testes clientes 40/40** (tester independente escreveu `clientes-create-contrato.tester.spec.ts`, casos a–f + os 6 campos). **seguranca APROVADO** (CNPJ nunca em log/mensagem, RBAC/menu-gating intacto `ClientesController.create/update/definirVinculo`, nenhuma rota nova, caminho de escrita seguro, `forbidNonWhitelisted` ok). Validação visual: prints do build desta frente servido contra o backend da HOMOLOGAÇÃO (3111, dados sintéticos) por proxy que remove Origin; aprovados pelo diretor.
+
+**Edge conhecido (não-bloqueante, diretor decidiu deixar):** `create` não é transacional; cadastro novo + contrato deixaria o cliente sem vínculo só se faltasse o seed de entidades Soulan (produção tem). Conserto certo seria transação em `definirVinculo` (código validado), fora do escopo.
+
+**Deploy (§A.49):** push a origin/main sob flag READY (§A.7); `publicar-producao.sh` buildou de origin/main em worktree pristino; health 3011/3010. **Sem migration** (mudança de DTO/serviço/tela, zero schema).
+
+**EM CONSTRUÇÃO (sobe em seguida, mesma sessão):** ITEM 3 — coluna de CONTRATO na planilha de importação em massa (pedido do diretor nesta sessão), para o import também somar o contrato ao cliente.
