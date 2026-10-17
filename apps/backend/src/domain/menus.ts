@@ -1452,24 +1452,28 @@ export const MENUS: MenuDef[] = [
      * nova funcionalidade ou de correção de bug. Menu de OPERAÇÃO, visível às duas áreas (ADM e AS),
      * porque abrir solicitação é trabalho de todo mundo que usa o sistema.
      *
-     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. O convergedor de boot registra o menu e para por aí; quem
-     * enxerga é decisão do diretor, na tela de liberação de menu por usuário.
+     * §A.23, LIBERAÇÃO EXPLÍCITA DO DIRETOR (17/10/2026): este menu de usuário é liberado a TODOS. O
+     * diretor pediu, com todas as letras, "libera a Central De Solicitações para todos", então ele
+     * entra no PADRÃO do COMUM. É a exceção que a §A.23 prevê e exige: a fábrica não concede por conta
+     * própria, concede porque o diretor mandou, e o registro da concessão fica no DIARIO. A GESTÃO
+     * (`solicitacoes-gestao`) continua trancada só para o SUPER_ADMIN; quem vira padrão é apenas a tela
+     * de ABRIR solicitação, nunca a de administrá-las.
      *
      * As notificações (`NotificacoesController`) NÃO são reivindicadas por menu nenhum, de propósito:
      * elas valem para qualquer usuário autenticado (o sininho pinga para todos), e o `MenuGuard` deixa
      * ABERTA toda operação que nenhum menu reivindica (regra 4 do guard).
      *
-     * GRUPO `ADMIN`, E ISSO É A TRAVA DA §A.23, não arrumação de gaveta: `MENUS_PADRAO_COMUM` é
-     * DERIVADO de `grupo === "OPERACAO"` com nascimento em ADM, então um menu OPERACAO+ADM se
-     * CONCEDERIA sozinho a todo COMUM novo e em qualquer backfill, sem decisão do diretor. Em `ADMIN`
-     * ele fica fora do padrão e nasce só para o SUPER_ADMIN, como todo menu novo. A tela de usuário é
-     * para qualquer um, mas QUEM libera é o diretor; a barra lateral (lado do front) o mostra no
-     * grupo de operação por conta própria, independente deste `grupo`, que só rege a concessão.
+     * GRUPO `OPERACAO` + nascimento em ADM: é o que coloca o menu em `MENUS_PADRAO_COMUM` (derivado de
+     * `grupo === "OPERACAO"` com nascimento em ADM), então todo COMUM NOVO já nasce com ele e o
+     * backfill o entrega. Nasceu em `ADMIN` (só-super-admin, como todo menu novo) e foi PROMOVIDO a
+     * padrão nesta liberação; os usuários que já existiam receberam a concessão por script, uma vez,
+     * sob o pedido do diretor (DIARIO 17/10). A barra lateral do front já o mostrava no grupo de
+     * operação, independente deste `grupo`, que rege a concessão.
      */
     codigo: "central-solicitacoes",
     rotulo: "Central De Solicitações",
     href: "/central-solicitacoes",
-    grupo: "ADMIN",
+    grupo: "OPERACAO",
     ordem: 57,
     areas: ["ADM", "AS"],
     operacoes: ["SolicitacoesController.*"],
