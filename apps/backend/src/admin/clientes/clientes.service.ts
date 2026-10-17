@@ -247,17 +247,71 @@ export class ClientesService {
     return { ok: true };
   }
 
+  /**
+   * ─ CADASTRO DE CLIENTE, com o "MESMO CÓDIGO, OUTRO CONTRATO" destravado (decisão do diretor, 17/10)
+   *
+   * ┌─ O CÓDIGO CONTINUA SENDO A CHAVE ÚNICA (§A.3), e isto NÃO duplica cliente ──────────────────┐
+   * │ `cod_cliente` é a PK, lida por régua, admissões, vagas, benefícios, lojas e grupos. Dois     │
+   * │ clientes com o mesmo código exigiria trocar a chave (6 FKs, 4 uniques, 53 leituras, todas as │
+   * │ rotas), e esse caminho foi DESCARTADO no domínio (domain/vinculo.ts). O mesmo cliente operar │
+   * │ dois contratos usa o eixo que JÁ existe: `cliente_vinculos` (um vínculo por tipo de serviço).│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * As três saídas, e cada uma é deliberada:
+   *  - CÓDIGO NOVO: cria o cliente e, se veio um contrato, aplica o vínculo. Igual a antes quando
+   *    nenhum contrato é escolhido.
+   *  - CÓDIGO EXISTE, SEM contrato escolhido: duplicata pura, continua RECUSADA (409), porque sem o
+   *    contrato não há o que o segundo registro acrescente ao cliente.
+   *  - CÓDIGO EXISTE, COM contrato de OUTRO tipo: ADICIONA o vínculo ao cliente existente (o pedido
+   *    do diretor). COM contrato do MESMO tipo que o cliente já tem: aí sim é duplicata, RECUSA.
+   */
   async create(dto: CreateClienteDto) {
+    const { vinculoOpcaoId, ...dados } = dto;
+
+    // O contrato escolhido é conferido CEDO contra o catálogo, nos dois caminhos (código novo e
+    // existente): id fora do catálogo é 400, não um vínculo inventado.
+    const opcao = vinculoOpcaoId ? VINCULO_OPCOES.find((o) => o.id === vinculoOpcaoId) : null;
+    if (vinculoOpcaoId && !opcao) throw new BadRequestException("Opção de vínculo inválida.");
+
     const existing = await this.db.query.clientes.findFirst({
-      where: eq(clientes.codCliente, dto.codCliente),
+      where: eq(clientes.codCliente, dados.codCliente),
     });
-    if (existing) throw new ConflictException("cod_cliente já cadastrado");
-    // A MESMA CONFERÊNCIA DA EDIÇÃO, e ela precisa estar NAS DUAS PORTAS: `values(dto)` grava o
-    // corpo inteiro, então um id inexistente aqui viraria 500 de FK e um id INATIVO entraria
+
+    if (existing) {
+      // Sem contrato, segue sendo duplicata pura do código (a chave única), e continua bloqueada.
+      if (!opcao) throw new ConflictException("cod_cliente já cadastrado");
+      const rotulo =
+        ROTULO_TIPO_SERVICO[opcao.tipoServico as keyof typeof ROTULO_TIPO_SERVICO] ??
+        opcao.tipoServico;
+      // O cliente já tem ESSE tipo de contrato? Então é duplicata de verdade (mesmo código, mesmo
+      // contrato), e recusa com uma mensagem que diz o porquê. §A.6: a mensagem leva só o código e o
+      // rótulo do contrato, nunca CNPJ nem dado pessoal.
+      const [jaTem] = await this.db
+        .select({ id: clienteVinculos.id })
+        .from(clienteVinculos)
+        .where(
+          and(
+            eq(clienteVinculos.codCliente, dados.codCliente),
+            eq(clienteVinculos.tipoServico, opcao.tipoServico),
+          ),
+        );
+      if (jaTem) {
+        throw new ConflictException(`O cliente ${dados.codCliente} já tem o contrato ${rotulo}.`);
+      }
+      // Contrato de outro tipo: o mesmo cliente passa a operar os dois. `definirVinculo` faz o
+      // upsert por tipo (OST Onda 3, item 7) e resolve entidade + CNPJ pelo catálogo.
+      await this.definirVinculo(dados.codCliente, opcao.id);
+      return { ...existing, criado: false, contratoAdicionado: true, tipoServico: opcao.tipoServico };
+    }
+
+    // CÓDIGO NOVO. A MESMA CONFERÊNCIA DA EDIÇÃO, e ela precisa estar NAS DUAS PORTAS: `values(dados)`
+    // grava o corpo inteiro, então um id inexistente aqui viraria 500 de FK e um id INATIVO entraria
     // normalmente, criando cliente novo apontando para um segmento fora de circulação.
-    await this.conferirSegmentoEComercial(dto);
-    const [row] = await this.db.insert(clientes).values(dto).returning();
-    return row;
+    await this.conferirSegmentoEComercial(dados);
+    const [row] = await this.db.insert(clientes).values(dados).returning();
+    // Contrato escolhido no cadastro novo: aplica o vínculo logo após criar o cliente.
+    if (opcao) await this.definirVinculo(row.codCliente, opcao.id);
+    return { ...row, criado: true, contratoAdicionado: false, tipoServico: opcao?.tipoServico ?? null };
   }
 
   async update(codCliente: string, dto: UpdateClienteDto) {

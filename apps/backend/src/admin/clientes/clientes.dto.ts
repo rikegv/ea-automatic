@@ -59,6 +59,58 @@ export class CreateClienteDto {
   @IsInt()
   @Min(1)
   comercialId?: number | null;
+
+  /**
+   * ─ OS ATRIBUTOS DE PADRÃO DO CLIENTE (§A.3), AGORA TAMBÉM NO CADASTRO ─────────────────────────
+   *
+   * Empresa do grupo, região, descrição da região e os três padrões que pré-preenchem o wizard
+   * (benefícios, escala, endereço). Eram editáveis só pela carga 1B; a OST do modal completo os
+   * trouxe para a tela, e o `forbidNonWhitelisted` global exige que os DOIS DTOs os conheçam, pela
+   * mesma razão do `segmentoId`/`comercialId` acima: campo que o DTO não conhece recusa a requisição
+   * inteira com 400. Todos opcionais, cliente sem eles continua nascendo.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  empresaGrupo?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  regiao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  descricaoRegiao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  beneficiosPadrao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  escalaPadrao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  enderecoPadrao?: string | null;
+
+  /**
+   * ─ O CONTRATO (VÍNCULO) ESCOLHIDO JÁ NO CADASTRO, e é o que destrava o "mesmo código, 2 contratos"
+   *
+   * É o id de uma opção do catálogo de vínculos (`VINCULO_OPCOES`), o mesmo que a edição usa. Quando
+   * vem, o `create` resolve o tipo de serviço e, se o CÓDIGO JÁ EXISTE com OUTRO contrato, ADICIONA o
+   * vínculo ao cliente existente em vez de recusar (decisão do diretor, 17/10/2026). Opcional: cliente
+   * novo sem contrato nasce como antes, e o código novo sem vínculo não dispara nada.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  vinculoOpcaoId?: string;
 }
 
 /**
@@ -199,4 +251,42 @@ export class UpdateClienteDto {
   @IsInt()
   @Min(1)
   comercialId?: number | null;
+
+  /**
+   * ─ OS ATRIBUTOS DE PADRÃO DO CLIENTE (§A.3), EDITÁVEIS NO MODAL COMPLETO ──────────────────────
+   *
+   * Os mesmos seis campos do `Create`. Aceitam `null`, e isso é o LIMPAR: não mandar o campo é não
+   * mexer; mandar `null` apaga o padrão cadastrado por engano; mandar texto grava. Mesma régua dos
+   * campos de benefício logo acima. São atributos de negócio (empresa do grupo, região, padrões do
+   * wizard), sem PII.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  empresaGrupo?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  regiao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  descricaoRegiao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  beneficiosPadrao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  escalaPadrao?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  enderecoPadrao?: string | null;
 }
