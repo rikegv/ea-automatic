@@ -8,6 +8,7 @@ import {
   CLICKSIGN_QUEUE_OPTIONS,
   JOB_CRIAR_ENVELOPE,
   JOB_POLL_TICK,
+  JOB_RECONCILIAR,
   type CriarEnvelopeJobData,
 } from "./clicksign.queue";
 
@@ -91,6 +92,19 @@ export class ClicksignQueueService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     await this.queue.add(JOB_POLL_TICK, {});
+  }
+
+  /**
+   * Enfileira um `reconciliar-fechados`. No-op (logado) se a fila não subiu. Roda no MESMO worker
+   * (concorrência 1, sob o limiter de requisição do ClicksignApiService), então nunca concorre com o
+   * tick nem estoura o teto do provedor.
+   */
+  async enfileirarReconciliacao(): Promise<void> {
+    if (!this.queue) {
+      this.logger.warn("enfileirarReconciliacao ignorado: fila indisponível.");
+      return;
+    }
+    await this.queue.add(JOB_RECONCILIAR, {});
   }
 
   /**

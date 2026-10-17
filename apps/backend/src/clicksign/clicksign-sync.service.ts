@@ -11,7 +11,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Worker, type Job } from "bullmq";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, notInArray } from "drizzle-orm";
 import type IORedis from "ioredis";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -72,6 +72,7 @@ import {
   CLICKSIGN_WORKER_OPTIONS,
   JOB_CRIAR_ENVELOPE,
   JOB_POLL_TICK,
+  JOB_RECONCILIAR,
   type CriarEnvelopeJobData,
 } from "./clicksign.queue";
 
@@ -143,6 +144,10 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
   private async processarJob(job: Job): Promise<void> {
     if (job.name === JOB_POLL_TICK) {
       await this.processarTick();
+      return;
+    }
+    if (job.name === JOB_RECONCILIAR) {
+      await this.reconciliarFechados();
       return;
     }
     if (job.name === JOB_CRIAR_ENVELOPE) {
@@ -420,6 +425,84 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
           `expirados=${ag.expirados}, falhas=${ag.falhas}.`,
       );
     }
+  }
+
+  /**
+   * RECONCILIAÇÃO DOS TERMINAIS (o buraco do cancelamento best-effort, §A.5). O tick normal só varre
+   * AGUARDANDO_ASSINATURA, então um envelope que o EA marcou CANCELADO (ou EXPIRADO) e que os
+   * signatários assinaram MESMO ASSIM na Clicksign (o provedor não cancela um `running`) FECHA lá e
+   * nunca mais é consultado: fica "assinado no Click, não assinado na plataforma". Esta passada
+   * re-confere esses terminais e, quando o envelope está `closed`, ARQUIVA pelo MESMO caminho do tick
+   * (`arquivarAssinado`, com a guarda §A.33 e o §A.6 inteiros) e vira ASSINADO.
+   *
+   * DECLÍNIO NÃO É RECONCILIADO, com DUAS camadas REAIS sobre o caminho que vira ASSINADO. Decisão do
+   * diretor (17/10/2026): um envelope de declínio assinado por engano NÃO vira ASSINADO aqui; o time
+   * cancela o envelope dele na plataforma.
+   *  1. o alvo exclui `DECLINOU`/`RESCISAO` por farol no próprio SELECT; e
+   *  2. uma GUARDA POR ITEM no laço pula qualquer admissão que chegue com esse farol, ainda que a
+   *     consulta mude no futuro ou um carimbo de declínio chegue por corrida.
+   * (O `deriveFarolGlobal` do `recomputeFarolGlobal` preserva o farol manual, mas isso protege só o
+   * `farol_global`, NÃO o `clicksign_status`; por isso a guarda por item é o que de fato blinda a
+   * regra do diretor.) Admissão PAUSADA também fica de fora (`naoPausada`), igual ao tick.
+   *
+   * Roda NO WORKER (concorrência 1, sob o limiter de requisição), enfileirada pelo
+   * ClicksignReconciliacaoScheduler. Inerte sem token. §A.6: log é contagem, nunca PII.
+   */
+  async reconciliarFechados(): Promise<{
+    varridas: number;
+    reconciliados: number;
+    falhas: number;
+  }> {
+    if (!this.api.estaAtivo()) return { varridas: 0, reconciliados: 0, falhas: 0 };
+
+    const alvo = await this.db
+      .select({
+        id: admissoes.id,
+        envelopeId: admissoes.clicksignEnvelopeId,
+        farol: admissoes.farolGlobal,
+      })
+      .from(admissoes)
+      .where(
+        and(
+          inArray(admissoes.clicksignStatus, ["CANCELADO", "EXPIRADO"]),
+          isNotNull(admissoes.clicksignEnvelopeId),
+          // Camada 1: declínio fora do alvo. Nunca vira ASSINADO por reconciliação (decisão do diretor).
+          notInArray(admissoes.farolGlobal, ["DECLINOU", "RESCISAO"]),
+          naoPausada(),
+        ),
+      );
+
+    let reconciliados = 0;
+    let falhas = 0;
+    for (const a of alvo) {
+      if (!a.envelopeId) continue;
+      // Camada 2 (defesa em profundidade): mesmo que a consulta mude, um declínio NUNCA é arquivado
+      // nem vira ASSINADO aqui. Guarda simétrica à `naoPausada` do alvo.
+      if (a.farol === "DECLINOU" || a.farol === "RESCISAO") continue;
+      try {
+        const st = await this.api.consultarStatus(a.envelopeId);
+        if (st?.status === "closed") {
+          const arquivado = await this.arquivarAssinado(a.id, a.envelopeId);
+          if (arquivado) reconciliados += 1;
+        }
+      } catch (err) {
+        falhas += 1;
+        // §A.6: só o id da admissão, nunca nome, e-mail ou id de envelope.
+        this.logger.warn(
+          `Reconciliação: falha ao reconferir a admissão ${a.id}: ${
+            err instanceof Error ? err.message : "erro"
+          }`,
+        );
+      }
+    }
+
+    if (reconciliados > 0 || falhas > 0) {
+      this.logger.log(
+        `Reconciliação Clicksign: ${alvo.length} terminal(is) reconferido(s), ` +
+          `${reconciliados} assinado(s) recuperado(s), ${falhas} falha(s).`,
+      );
+    }
+    return { varridas: alvo.length, reconciliados, falhas };
   }
 
   /**

@@ -7,6 +7,7 @@ import { ClicksignApiService } from "./clicksign-api.service";
 import { ClicksignController } from "./clicksign.controller";
 import { ClicksignGestaoService } from "./clicksign-gestao.service";
 import { ClicksignQueueModule } from "./clicksign-queue.module";
+import { ClicksignReconciliacaoScheduler } from "./clicksign-reconciliacao.scheduler";
 import { ClicksignSchedulerService } from "./clicksign-scheduler.service";
 import { ClicksignSyncService } from "./clicksign-sync.service";
 
@@ -27,6 +28,7 @@ import { ClicksignSyncService } from "./clicksign-sync.service";
     ClicksignApiService,
     ClicksignSyncService,
     ClicksignSchedulerService,
+    ClicksignReconciliacaoScheduler,
     ClicksignGestaoService,
     InternalTokenGuard,
   ],

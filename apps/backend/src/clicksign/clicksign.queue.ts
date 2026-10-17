@@ -31,9 +31,17 @@ export const CLICKSIGN_QUEUE = "clicksign-sync";
 /** Prefixo de namespace isolado no Redis (§A.1 — namespace próprio do EA). */
 export const CLICKSIGN_BULL_PREFIX = "ea:bull";
 
-/** Dois tipos de job: criar 1 envelope e varrer os envelopes aguardando assinatura. */
+/**
+ * Três tipos de job: criar 1 envelope, varrer os envelopes aguardando assinatura e RECONCILIAR os
+ * terminais (`reconciliar-fechados`). Este último re-confere na Clicksign os envelopes que o tick
+ * normal NÃO varre (CANCELADO/EXPIRADO) e captura os que fecharam (foram assinados) sem o EA ver,
+ * que é o buraco do cancelamento best-effort do §A.5: o EA marca CANCELADO, mas o provedor não
+ * cancela um `running`, e se os signatários assinam mesmo assim o envelope fecha lá e some da
+ * varredura daqui.
+ */
 export const JOB_CRIAR_ENVELOPE = "criar-envelope";
 export const JOB_POLL_TICK = "poll-tick";
+export const JOB_RECONCILIAR = "reconciliar-fechados";
 
 /**
  * Dados do job `criar-envelope`. `stagingPathKit` é o caminho do kit já materializado na staging
